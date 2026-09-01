@@ -25,7 +25,7 @@ import {
   type TorRpcRoutePort,
 } from "./tor/index.js";
 import {
-  generateFundingQrPng,
+  generateFundingQrCardPng,
   OnboardingUiServer,
   openVisibleBrowser,
 } from "./ui/index.js";
@@ -239,7 +239,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       BigInt(snapshot.requiredFundingWei) - BigInt(snapshot.publicBalanceWei);
     const qrPngBase64 =
       snapshot.address && remaining > 0n
-        ? (await generateFundingQrPng(snapshot.address, remaining.toString())).toString(
+        ? (await generateFundingQrCardPng(snapshot.address, remaining.toString())).toString(
             "base64",
           )
         : undefined;

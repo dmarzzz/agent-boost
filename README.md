@@ -109,7 +109,9 @@ Tell Hermes:
 Hermes calls `onboarding_start`. Agent Boost creates or resumes one durable
 Sepolia setup and opens the funding page. The page shows an EIP-681 QR code for
 the exact remaining amount, the full address, public funding progress, and
-private-balance progress.
+private-balance progress. When Hermes needs to carry the QR into the
+conversation, Agent Boost returns it in a branded dark-sidecar card while
+preserving a conventional high-contrast scan field.
 
 Ask the event operator to scan the QR and send the amount shown—normally `0.2`
 Sepolia ETH. Partial funding is supported: the QR automatically updates to the

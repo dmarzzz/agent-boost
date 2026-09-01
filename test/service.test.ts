@@ -54,6 +54,9 @@ test("local runtime returns a QR fallback when the wallet awaits funding", async
     assert.equal(started.record.phase, "awaiting_funding");
     assert.equal(started.uiOpened, false);
     assert.ok(started.qrPngBase64 && started.qrPngBase64.length > 100);
+    const agentCard = Buffer.from(started.qrPngBase64, "base64");
+    assert.equal(agentCard.readUInt32BE(16), 720);
+    assert.equal(agentCard.readUInt32BE(20), 800);
     const caps = await runtime.capabilities();
     assert.equal((caps.readiness as { wallet_ready: boolean }).wallet_ready, false);
     const status = await readLocalStatus(config);

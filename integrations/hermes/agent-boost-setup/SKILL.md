@@ -1,7 +1,7 @@
 ---
 name: agent-boost-setup
 description: Guide local Sepolia wallet setup and funding.
-version: 0.1.0
+version: 0.1.1
 platforms: [macos, linux]
 metadata:
   hermes:
@@ -36,19 +36,41 @@ guidance instead of trying to bootstrap through an unavailable tool.
    `setupId` and `revision` exactly. Treat `data.ui_opened` only as a fact about
    a browser on the Agent Boost host, never as evidence the participant can see
    a page.
-4. When funding remains, immediately present the QR image returned by the tool
-   in the current reply, regardless of `ui_opened`; do not ask whether the
-   participant wants it. When the tool result contains a `MEDIA:` tag, copy that
-   exact tag onto a standalone line so the messaging gateway attaches the image.
+4. When funding remains, immediately present the QR image returned by the tool,
+   regardless of `ui_opened`; do not ask whether the participant wants it.
    Never mention or offer a loopback URL, `localhost`, or `127.0.0.1` over
-   Matrix or from a headless/remote host. In the same reply, always show the
-   server-provided `data.funding.network`, `remaining_amount_eth`,
-   `remaining_amount_wei`, `address`, and `funding_uri` as a copyable fallback.
-   If the image is absent or upload fails, say the QR attachment was unavailable
-   and still send that complete text fallback.
-5. Ask the event operator to send only the exact remaining Sepolia ETH returned
-   in `data.funding`. State plainly that Sepolia ETH has no real or redeemable
-   value. Do not ask for a seed, key, password, or wallet approval.
+   Matrix or from a headless/remote host.
+
+   On the reference Matrix flow, produce three separate events in this order:
+
+   1. Use `send_message` with `action: send` and `target: matrix` to send a
+      concise funding instruction containing only the server-provided
+      `data.funding.network`, `remaining_amount_eth`, and
+      `remaining_amount_wei`, plus the valueless-testnet warning. The Matrix
+      home channel is the participant conversation for this flow. Do not put
+      the address or funding URI in this instruction.
+   2. Use `send_message` again with `action: send`, `target: matrix`, and the
+      exact server-provided `data.funding.address` as the entire `message`.
+      No label, prefix, suffix, punctuation, Markdown, backticks, or code fence.
+      An address must always be a message of its own so a mobile user can copy
+      the whole bubble.
+   3. When the tool result contains a `MEDIA:` tag, use `send_message` a third
+      time with `action: send`, `target: matrix`, and that exact tag as the
+      entire `message`. The gateway sends the QR as its own image event.
+
+   After successful sends, do not emit a redundant final prose message; proceed
+   directly to status monitoring. Never repeat the address in the instruction,
+   phase updates, or another prose message. When the image is absent or its
+   upload fails, use `send_message` to send the exact server-provided
+   `funding_uri` as another standalone message. If `send_message` itself is
+   unavailable, preserve the priority of an address-only visible response and
+   put the exact `MEDIA:` tag on a new line; do not fold the instruction,
+   address, and URI back into one message.
+5. The instruction event in step 4 must ask the event operator to send only the
+   exact remaining Sepolia ETH returned in `data.funding` and state plainly
+   that Sepolia ETH has no real or redeemable value. Do not append this prose
+   to the address-only response. Do not ask for a seed, key, password, or
+   wallet approval.
 6. Long-poll `onboarding_status` with the exact `setup_id`, the latest
    `since_revision`, and `wait_ms: 90000`. After every response, retain the
    newest revision for the next call. Continue through funding and automatic

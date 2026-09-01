@@ -4,6 +4,7 @@ import { afterEach, describe, it } from "node:test";
 
 import {
   buildSepoliaFundingUri,
+  generateFundingQrCardPng,
   generateFundingQrDataUrl,
   generateFundingQrPng,
   OnboardingUiServer,
@@ -83,12 +84,17 @@ describe("funding QR", () => {
   });
 
   it("provides data URL and PNG forms for browser and MCP fallbacks", async () => {
-    const [dataUrl, png] = await Promise.all([
+    const [dataUrl, png, card] = await Promise.all([
       generateFundingQrDataUrl(ADDRESS, FUNDING_WEI),
       generateFundingQrPng(ADDRESS, FUNDING_WEI),
+      generateFundingQrCardPng(ADDRESS, FUNDING_WEI),
     ]);
     assert.match(dataUrl, /^data:image\/png;base64,/);
     assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.deepEqual([...card.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.equal(card.readUInt32BE(16), 720);
+    assert.equal(card.readUInt32BE(20), 800);
+    assert.ok(card.length > png.length);
   });
 });
 

@@ -23,12 +23,14 @@
     "dev": "tsx src/cli.ts",
     "install:kohaku": "node scripts/install-kohaku.mjs",
     "install:local": "node scripts/install.mjs",
+    "release:gate": "node scripts/release-gate.mjs",
     "test": "node --import tsx --test --test-concurrency=1 --test-reporter=spec test/**/*.test.ts",
     "test:serial": "node --import tsx --test --test-concurrency=1 --test-reporter=spec test/**/*.test.ts",
     "prepack": "npm run check && npm test && npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "pngjs": "5.0.0",
     "qrcode": "1.5.4",
     "tor-js": "0.4.0",
     "yaml": "2.9.0",

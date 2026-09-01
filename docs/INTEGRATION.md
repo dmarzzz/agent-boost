@@ -81,11 +81,17 @@ use, balance checks, and idempotency are enforced in Agent Boost.
 - `data.setup`: the full public setup record;
 - `data.public`: the public UI-safe projection;
 - `data.ui_opened`: whether a graphical browser was opened;
-- an MCP PNG image when an address is ready and a headless fallback is needed.
+- a branded dark-mode MCP PNG card when an address is ready and a headless
+  fallback is needed. Its QR scan field remains muted, high-contrast, and
+  uninterrupted with conventional dark-on-light polarity.
 
 On graphical macOS or Linux, the page opens at a loopback URL. On headless
 Linux, Hermes should display the returned image. The page is read-only; the only
 human action is sending Sepolia ETH from a separate wallet.
+
+In the reference Matrix conversation, Hermes sends the funding instruction,
+bare address, and QR as separate events. The address event contains no label or
+formatting so a mobile user can copy the complete message directly.
 
 `onboarding_status` accepts the exact `setup_id`, optional
 `since_revision`, and optional `wait_ms` up to 90 seconds. Revisions advance

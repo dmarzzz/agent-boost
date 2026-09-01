@@ -1,5 +1,6 @@
 export {
   buildSepoliaFundingUri,
+  generateFundingQrCardPng,
   generateFundingQrDataUrl,
   generateFundingQrPng,
   OnboardingUiServer,
