@@ -288,7 +288,6 @@ async function withTimeout<T>(
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-    timer.unref();
   });
   try {
     return await Promise.race([operation, timeout]);
@@ -306,7 +305,6 @@ async function withRequestDeadline<T>(
   let onAbort: (() => void) | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => reject(new Error("Tor RPC request timed out")), timeoutMs);
-    timer.unref();
     if (signal) {
       onAbort = () => reject(new Error("Tor RPC request aborted"));
       if (signal.aborted) onAbort();
