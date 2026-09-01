@@ -1,0 +1,24 @@
+# local state and secrets
+.env
+.env.*
+*.key
+*.pem
+*.secret
+*.token
+secrets/
+state/
+wallets/
+
+# build output
+dist/
+build/
+target/
+node_modules/
+__pycache__/
+*.py[cod]
+
+# editor and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

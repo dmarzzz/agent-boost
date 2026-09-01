@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-boost:schema:wallet-capability:v1",
+  "title": "Agent Boost wallet capability profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "capability",
+    "authority",
+    "scopes",
+    "guarantees",
+    "disclosures"
+  ],
+  "properties": {
+    "schema": {"const": "org.agentboost.wallet-capability"},
+    "schema_version": {"type": "string", "pattern": "^1\\.[0-9]+$"},
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": {"const": "org.agentboost.wallet"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "operator_only"],
+      "properties": {
+        "agent": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "capability.read",
+              "egress.fetch.read",
+              "context.read",
+              "payment.plan",
+              "payment.prepare",
+              "receive.create",
+              "request.read"
+            ]
+          }
+        },
+        "operator_only": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "wallet.unlock",
+              "payment.approve",
+              "payment.reject",
+              "wallet.sign",
+              "transaction.broadcast",
+              "key.export"
+            ]
+          }
+        }
+      }
+    },
+    "scopes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["chain_id", "account_id_format", "asset_type_format", "features"],
+        "properties": {
+          "chain_id": {"type": "string", "description": "CAIP-2 chain identifier"},
+          "account_id_format": {"const": "caip-10"},
+          "asset_type_format": {"const": "caip-19"},
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "version"],
+              "properties": {
+                "id": {"type": "string"},
+                "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+                "constraints": {"type": "object"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "guarantees": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rpc_route", "route_fallback", "snapshot", "approval"],
+      "properties": {
+        "rpc_route": {"const": "private-required"},
+        "route_fallback": {"const": "none"},
+        "snapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_age_seconds", "consistency", "execution_revalidation"],
+          "properties": {
+            "max_age_seconds": {"type": "integer", "minimum": 1},
+            "consistency": {"enum": ["single-block", "documented-multicall"]},
+            "execution_revalidation": {"const": "required"}
+          }
+        },
+        "approval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "binds"],
+          "properties": {
+            "mode": {"const": "out-of-band-exact-intent"},
+            "binds": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "chain_id",
+                  "from_account_id",
+                  "to_account_id",
+                  "asset_type",
+                  "amount_atomic",
+                  "calldata_summary",
+                  "fee_ceiling"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "disclosures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_can_observe", "never_returned"],
+      "properties": {
+        "agent_can_observe": {"type": "array", "items": {"type": "string"}},
+        "never_returned": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

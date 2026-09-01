@@ -1,0 +1,89 @@
+{
+  "schema": "org.agentboost.wallet-capability",
+  "schema_version": "1.0",
+  "capability": {
+    "id": "org.agentboost.wallet",
+    "version": "0.1.0",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "authority": {
+    "agent": [
+      "capability.read",
+      "egress.fetch.read",
+      "context.read",
+      "payment.plan",
+      "payment.prepare",
+      "receive.create",
+      "request.read"
+    ],
+    "operator_only": [
+      "wallet.unlock",
+      "payment.approve",
+      "payment.reject",
+      "wallet.sign",
+      "transaction.broadcast",
+      "key.export"
+    ]
+  },
+  "scopes": [
+    {
+      "chain_id": "eip155:11155111",
+      "account_id_format": "caip-10",
+      "asset_type_format": "caip-19",
+      "features": [
+        {"id": "wallet.context", "version": "1.0"},
+        {"id": "wallet.payment.plan", "version": "1.0"},
+        {"id": "wallet.payment.prepare", "version": "1.0"},
+        {"id": "wallet.receive.fresh", "version": "1.0"},
+        {
+          "id": "wallet.receive.stealth",
+          "version": "1.0",
+          "constraints": {"standard": "ERC-5564", "scheme_ids": ["1"]}
+        },
+        {
+          "id": "egress.fetch",
+          "version": "1.0",
+          "constraints": {"methods": ["GET", "HEAD"], "clearnet_fallback": false}
+        }
+      ]
+    }
+  ],
+  "guarantees": {
+    "rpc_route": "private-required",
+    "route_fallback": "none",
+    "snapshot": {
+      "max_age_seconds": 30,
+      "consistency": "single-block",
+      "execution_revalidation": "required"
+    },
+    "approval": {
+      "mode": "out-of-band-exact-intent",
+      "binds": [
+        "chain_id",
+        "from_account_id",
+        "to_account_id",
+        "asset_type",
+        "amount_atomic",
+        "calldata_summary",
+        "fee_ceiling"
+      ]
+    }
+  },
+  "disclosures": {
+    "agent_can_observe": [
+      "public addresses",
+      "balances",
+      "reservations",
+      "fees",
+      "policy decisions",
+      "request status"
+    ],
+    "never_returned": [
+      "seed",
+      "private key",
+      "unlock material",
+      "approval credential",
+      "raw signed transaction"
+    ]
+  }
+}

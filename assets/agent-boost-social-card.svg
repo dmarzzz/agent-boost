@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Boost — Dark mode for your agent</title>
+  <desc id="desc">A social share card with a luminous local agent core connected to a dark privacy sidecar and a protected external signal.</desc>
+  <rect width="1600" height="900" fill="#060608"/>
+  <circle cx="1320" cy="180" r="310" fill="#0d0c12"/>
+  <circle cx="1390" cy="710" r="390" fill="#0b0a0f"/>
+  <text x="110" y="155" fill="#c9ff57" font-family="Inter, ui-sans-serif, system-ui" font-size="28" font-weight="700" letter-spacing="6">AGENT BOOST</text>
+  <text x="110" y="290" fill="#f4f1ea" font-family="Inter, ui-sans-serif, system-ui" font-size="96" font-weight="750">Dark mode</text>
+  <text x="110" y="400" fill="#f4f1ea" font-family="Inter, ui-sans-serif, system-ui" font-size="96" font-weight="750">for your agent.</text>
+  <text x="118" y="482" fill="#9894a5" font-family="Inter, ui-sans-serif, system-ui" font-size="31">A local privacy sidecar for wallet + egress.</text>
+
+  <rect x="112" y="640" width="180" height="180" rx="35" fill="#f4f1ea"/>
+  <rect x="162" y="690" width="80" height="80" rx="15" fill="#7659ff"/>
+  <rect x="365" y="640" width="180" height="180" rx="35" fill="#111116" stroke="#373440" stroke-width="3"/>
+  <path d="M402 730 C430 684, 470 684, 508 730 C470 776, 430 776, 402 730Z" fill="none" stroke="#7659ff" stroke-width="8"/>
+  <circle cx="455" cy="730" r="12" fill="#c9ff57"/>
+  <line x1="292" y1="730" x2="365" y2="730" stroke="#c9ff57" stroke-width="7"/>
+  <line x1="545" y1="730" x2="1450" y2="730" stroke="#7659ff" stroke-width="7"/>
+  <circle cx="1470" cy="730" r="22" fill="#c9ff57"/>
+  <text x="625" y="795" fill="#716d80" font-family="Inter, ui-sans-serif, system-ui" font-size="23">intent in · protected action out</text>
+</svg>

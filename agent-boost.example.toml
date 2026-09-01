@@ -1,0 +1,36 @@
+# Public example only. Never put credentials or wallet unlock material here.
+version = 1
+mode = "dark"
+network = "sepolia"
+
+[state]
+directory = "~/.local/share/agent-boost"
+
+[listen]
+proxy = "127.0.0.1:9181"
+rpc = "127.0.0.1:9182"
+control_socket = "~/.local/share/agent-boost/agent-boost.sock"
+
+[wallet]
+adapter = "kohaku"
+binary = "kohaku"
+data_directory = "~/.local/share/agent-boost/kohaku"
+require_approval = true
+approval_ttl_seconds = 300
+
+[egress]
+adapter = "shade-tree"
+proxy_url = "http://127.0.0.1:8888"
+fail_closed = true
+
+[rpc]
+upstream_env = "AGENT_BOOST_RPC_UPSTREAM"
+route = "egress"
+reject_direct = true
+require_https = true
+
+[receipts]
+directory = "~/.local/share/agent-boost/receipts"
+log_destinations = "origin"
+log_headers = false
+log_payloads = false
