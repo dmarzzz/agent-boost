@@ -11,7 +11,11 @@ import {
 } from "./kohaku/index.js";
 import { runStdioMcp } from "./mcp.js";
 import { SepoliaRpcClient } from "./rpc/index.js";
-import { createLocalRuntime, type LocalAgentBoostRuntime } from "./service.js";
+import {
+  createLocalRuntime,
+  readLocalStatus,
+  type LocalAgentBoostRuntime,
+} from "./service.js";
 
 const VERSION = "0.1.0";
 
@@ -190,7 +194,7 @@ async function main(): Promise<void> {
       await doctor();
       return;
     case "status":
-      await withRuntime(async (runtime) => print(await runtime.status()));
+      print(await readLocalStatus(loadConfig()));
       return;
     case "onboard":
       await withRuntime(async (runtime) => {

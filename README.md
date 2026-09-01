@@ -39,9 +39,9 @@ Supported hosts:
 - macOS on Intel;
 - Ubuntu 24.04 on ARM64.
 
-The complete clean-install flow has been exercised on macOS Apple silicon.
-Host detection, paths, and installer behavior are covered for Intel macOS and
-Ubuntu ARM64, but those two targets still need clean-machine execution evidence
+The complete clean-install flow has been exercised on macOS Apple silicon and
+Ubuntu 24.04 ARM64. Host detection, paths, and installer behavior are covered
+for Intel macOS, but that target still needs clean-machine execution evidence
 before the event release is tagged.
 
 Prerequisites are Git, Node.js 22 or newer, npm, and a working Hermes install.
@@ -88,7 +88,7 @@ and records local SHA-256 provenance for its lockfile, launcher, and compiled
 bundle. A managed installation is reused only when its pin and hashes still
 match.
 
-The Kohaku runtime is currently large: approximately 765 MiB after production
+The Kohaku runtime is currently large: roughly 0.8 GiB after production
 pruning, before proving artifacts. Its pinned production dependency tree also
 reports 44 known npm advisories (38 moderate and 6 high) as of this release
 candidate. That unresolved upstream risk is another reason this build is
@@ -305,6 +305,12 @@ make install-kohaku
 resistance, exact Kohaku argv, Sepolia-only RPC, MCP schemas, Hermes config
 drift, QR contents, loopback request filtering, UI state honesty, responsive
 layout contracts, and recipient-delivery confirmation.
+
+An active Hermes gateway keeps one Agent Boost MCP child open and owns the
+runtime lock. In that state, `agent-boost status` remains available because it
+is read-only, while a second `hermes mcp test agent-boost` intentionally fails
+closed. Stop or restart the gateway only when an operator specifically needs a
+standalone MCP connectivity test.
 
 ## License
 

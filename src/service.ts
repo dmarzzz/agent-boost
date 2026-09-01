@@ -287,6 +287,24 @@ export async function createLocalRuntime(
   return runtime;
 }
 
+/**
+ * Read the atomic public workflow projection without acquiring wallet
+ * authority. This remains available while the Hermes MCP process owns the
+ * runtime lock and never resumes or invokes a wallet operation.
+ */
+export async function readLocalStatus(
+  config: AgentBoostConfig,
+): Promise<Record<string, unknown>> {
+  const store = new StateStore(config.stateDir);
+  await store.initialize();
+  const state = await store.read();
+  return {
+    state_path: store.path,
+    onboarding: state.onboarding,
+    requests: Object.values(state.requests),
+  };
+}
+
 async function ensurePasswordFile(path: string): Promise<void> {
   const parent = dirname(path);
   await mkdir(parent, { recursive: true, mode: 0o700 });

@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { loadConfig } from "../src/config.js";
 import type { ChainClient, WalletAdapter } from "../src/contracts.js";
-import { createLocalRuntime } from "../src/service.js";
+import { createLocalRuntime, readLocalStatus } from "../src/service.js";
 
 class SetupWallet implements WalletAdapter {
   async ensureWallet(): Promise<void> {}
@@ -56,6 +56,11 @@ test("local runtime returns a QR fallback when the wallet awaits funding", async
     assert.ok(started.qrPngBase64 && started.qrPngBase64.length > 100);
     const caps = await runtime.capabilities();
     assert.equal((caps.readiness as { wallet_ready: boolean }).wallet_ready, false);
+    const status = await readLocalStatus(config);
+    assert.equal(
+      (status.onboarding as { setupId: string }).setupId,
+      started.record.setupId,
+    );
   } finally {
     await runtime.shutdown();
   }
