@@ -1,4 +1,5 @@
-# Public example only. Never put credentials or wallet unlock material here.
+# Documentation-only reference. The 0.1 POC reads equivalent
+# AGENT_BOOST_* environment variables; it does not parse this file.
 version = 1
 mode = "dark"
 network = "sepolia"
@@ -6,31 +7,29 @@ network = "sepolia"
 [state]
 directory = "~/.local/share/agent-boost"
 
-[listen]
-proxy = "127.0.0.1:9181"
-rpc = "127.0.0.1:9182"
-control_socket = "~/.local/share/agent-boost/agent-boost.sock"
+[ui]
+host = "127.0.0.1"
+port = 9183
+open_browser = true
 
 [wallet]
 adapter = "kohaku"
-binary = "kohaku"
+install_directory = "~/.local/share/agent-boost/dependencies/kohaku-cli"
 data_directory = "~/.local/share/agent-boost/kohaku"
-require_approval = true
-approval_ttl_seconds = 300
+name = "agent-boost"
+funding_wei = "200000000000000000"
+shield_wei = "100000000000000000"
+auto_shield = true
 
-[egress]
-adapter = "shade-tree"
-proxy_url = "http://127.0.0.1:8888"
-fail_closed = true
+[delegation]
+mode = "testnet_delegated"
+execute = true
+payment_limit_wei = "50000000000000000"
+maximum_payments = 1
+expires_after_hours = 24
+requires_exact_verbal_confirmation = true
 
 [rpc]
-upstream_env = "AGENT_BOOST_RPC_UPSTREAM"
-route = "egress"
-reject_direct = true
+network = "sepolia"
 require_https = true
-
-[receipts]
-directory = "~/.local/share/agent-boost/receipts"
-log_destinations = "origin"
-log_headers = false
-log_payloads = false
+private_egress = false

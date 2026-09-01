@@ -5,9 +5,9 @@
 *.pem
 *.secret
 *.token
-secrets/
-state/
-wallets/
+/secrets/
+/state/
+/wallets/
 
 # build output
 dist/

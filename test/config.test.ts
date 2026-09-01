@@ -1,0 +1,29 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { loadConfig } from "../src/config.js";
+
+test("loadConfig is Sepolia-only, HTTPS-only, and avoids reserved ports", () => {
+  const config = loadConfig({}, "/tmp/agent-boost-home");
+  assert.equal(config.uiPort, 9183);
+  assert.equal(config.fundingTargetWei, 200_000_000_000_000_000n);
+  assert.equal(config.paymentLimitWei, 50_000_000_000_000_000n);
+  assert.match(config.rpcUrl, /^https:/);
+  assert.equal(
+    config.kohakuBin,
+    "/tmp/agent-boost-home/.local/share/agent-boost/dependencies/kohaku-cli/bin/kohaku.mjs",
+  );
+
+  assert.throws(
+    () => loadConfig({ AGENT_BOOST_RPC_URL: "http://rpc.example" }, "/tmp/home"),
+    /must use HTTPS/,
+  );
+  assert.throws(
+    () => loadConfig({ AGENT_BOOST_UI_PORT: "9180" }, "/tmp/home"),
+    /reserved ports/,
+  );
+  assert.throws(
+    () => loadConfig({ AGENT_BOOST_UI_PORT: "9184" }, "/tmp/home"),
+    /reserved ports/,
+  );
+});

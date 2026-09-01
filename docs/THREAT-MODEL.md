@@ -1,158 +1,110 @@
 # Threat model
 
-Agent Boost is a research POC for reducing common privacy and custody failures
-at the boundary between a local agent and external systems. It is not an
-anonymity guarantee or a production wallet.
+Agent Boost is an unaudited Sepolia demonstration. Its goal is to reduce secret
+exposure in an agent tool interface and constrain one testnet payment—not to
+provide a production custody boundary or guaranteed anonymity.
 
-## Assets
+## Protected data
 
-- wallet seed, private keys, and unlock material;
-- the operator's host IP and direct network location;
-- the link between agent activity and external destinations;
-- payment intent before operator approval;
-- adapter credentials and local policy;
-- request history and receipts.
+- Kohaku seed and derived private keys;
+- local wallet password;
+- raw Tornado notes and proof material;
+- credential-bearing RPC URLs;
+- arbitrary signing authority;
+- durable request/idempotency state.
 
-## Trust assumptions
-
-The POC trusts:
-
-- the host kernel and operator identity;
-- the Agent Boost process and its local state permissions;
-- the Kohaku and Shade Tree versions selected by the operator;
-- the operator to inspect approvals and protect unlock material.
-
-The agent runtime, model output, fetched content, destinations, RPC provider,
-egress relays, and public blockchain are not trusted with wallet secrets.
-
-Public wallet addresses, balances, pending status, fee estimates, and policy
-allowances are intentionally returned to the agent so it can make decisions.
-They are not treated as custody secrets. If the agent uses remote inference,
-that model provider may observe whatever wallet context is placed in the model
-request; preventing that disclosure requires local inference or a separate
-context-redaction policy.
+Public Sepolia addresses, balances, transaction references, setup progress, and
+delegation limits are intentionally visible to Hermes. They are inputs to
+correct decision-making, not secrets.
 
 ## Security goals
 
-1. The agent cannot read wallet seed or private key through the Agent Boost
-   interface.
-2. A payment cannot be signed before approval of its exact immutable details.
-3. Dark HTTP and wallet RPC do not silently fall back to direct clearnet.
-4. Strict mode denies the agent an ambient network path around Agent Boost.
-5. Administrative control is unavailable to the agent OS identity, sandbox,
-   MCP child, and model-generated code.
-6. Receipts are useful for diagnosis without storing prompts, payloads, auth
-   headers, or secrets by default.
-7. Restart and retry do not accidentally double-broadcast a payment.
+1. Agent Boost tools never return a seed, key, password, note, proof, or raw
+   signed transaction.
+2. Wallet commands are a fixed allowlist with validated fields and no shell.
+3. Mainnet and non-Sepolia RPC endpoints are rejected.
+4. Payment terms cannot change between plan and execution.
+5. A payment requires explicit verbal confirmation and stays within a one-use,
+   expiring amount delegation.
+6. Stable client IDs prevent ordinary retries from double-executing.
+7. Uncertain side effects fail safe and do not restore payment authority.
+8. The onboarding UI is local, read-only, and exposes only the public funding
+   projection.
+9. Files and directories use private local permissions.
+10. Only one Agent Boost process can own the local wallet runtime at a time.
 
-## In scope
+## Important non-goals
 
-### Prompt injection or malicious model output
+### Same-user isolation
 
-The agent may request an unexpected destination or payment. Agent Boost applies
-schema limits, destination policy, fee bounds, and approval independently of
-the model. Tool results are bounded before returning to the agent.
+Hermes and Agent Boost normally run under the same OS account in this POC. A
+Hermes agent with unrestricted terminal and filesystem access could read the
+encrypted Kohaku wallet and the local password file, or inspect another
+same-user process. MCP omission and skill instructions do not prevent this.
 
-### Secret exfiltration through the agent interface
+Do not use this build as protection against a malicious or fully privileged
+local agent. A real-value design needs a separate service identity,
+hardware-backed signer, or cryptographic authorization unavailable to the agent.
 
-The interface has no export-seed, export-key, raw-sign, arbitrary-wallet-shell,
-or arbitrary-adapter-shell capability. Error messages and receipts are scrubbed
-before crossing the boundary.
+### Guaranteed anonymity
 
-### Direct network bypass
+Sepolia funding is public. Shielding removes the direct deposit/withdrawal link,
+but amount, timing, protocol usage, a small anonymity set, the funder, the
+recipient, RPC observation, and cross-session behavior can enable correlation.
+The recipient is public after payment.
 
-Strict mode assumes the agent runs in an operating-system sandbox that denies
-direct sockets. The compatibility wrapper alone is not a bypass defense.
+Kohaku routes supported non-RPC privacy traffic through Tor, but Ethereum RPC is
+direct HTTPS in this build. Agent Boost does not yet provide anonymous egress.
 
-### Silent route downgrade
+### Real-value safety
 
-Private-route loss returns an error. Agent Boost does not retry the request
-through a direct connector, alternate RPC URL, or host default route.
+The wallet stack has not been audited. There is no recovery UX, hardware signer,
+multi-party approval, production fee policy, chain reorganization handling, or
+formal verification. The event boundary is disposable, valueless Sepolia ETH.
 
-### Unapproved signing
+## Attacks and mitigations
 
-Payment planning, preparation, and signing are separate states. A plan is
-read-only. Preparation revalidates and reserves, but cannot sign. Approval is
-bound to a digest of network, source account, destination, asset, amount,
-calldata summary, nonce policy, and fee ceiling.
+| Attack or failure | Current mitigation | Residual risk |
+| --- | --- | --- |
+| Prompt asks for mainnet payment | Hard-coded Sepolia client and capability | Same-user shell could bypass Agent Boost entirely |
+| Prompt changes recipient after approval | Decision binds exact recipient/amount | User may verbally confirm misleading text |
+| Hermes falsely reports approval | Exact `user_confirmed` gate and bounded delegation | Agent Boost does not hear speech; confirmation is Hermes-attested, not independent authentication |
+| Tool retry duplicates payment | Stable client ID and durable request | New malicious client ID is blocked only after first request exists |
+| Shell injection through recipient/path | Address/path validation and `shell: false` | Vulnerabilities in Node or Kohaku remain |
+| Secret appears in MCP output | Explicit public projections, stable adapter errors, URL/path redaction, and no raw upstream stderr | Same-user process inspection remains possible |
+| Concurrent MCP processes race signing | Exclusive loopback runtime-ownership lock | A local denial of service can occupy the lock port |
+| QR is framed or fetched remotely | Loopback bind, host/origin checks, CSP, no-store | Other same-user local processes can connect |
+| Shield is duplicated after restart | Persist `shielding`, then poll private balance | Crash before adapter receives command can stall setup |
+| Hash is mistaken for delivery | Recipient balance-delta verification | Concurrent unrelated transfer can produce a false attribution |
+| RPC observer correlates activity | HTTPS confidentiality in transit | Provider still sees IP, methods, addresses, and timing |
+| Dependency supply-chain drift | Commit pin, lockfile install, local hashes | Initial Git/npm fetch still trusts upstream transport/registries |
 
-### Duplicate execution
+## Logging and storage
 
-Side-effecting requests have stable IDs and persistent states. After an
-ambiguous broadcast result, Agent Boost reconciles chain state before retry.
+Agent Boost stores public addresses, balances, policy, plan digests, request
+state, and public transaction/UserOperation references. It does not intentionally
+store model prompts, verbal transcripts, RPC credentials, or raw signed
+transactions.
 
-### Same-UID control-plane bypass
+Wallet state and the password file are local and required for unattended demo
+operation. Deleting them destroys recovery through Agent Boost. Back them up
+only if you understand that doing so preserves a disposable test wallet; never
+reuse them for real value.
 
-Filesystem mode bits do not isolate processes that share the operator UID. The
-strict deployment therefore separates the Agent Boost operator service from the
-agent identity and denies the agent access to the admin socket and wallet-state
-paths. Cryptographic operator authentication is an acceptable alternative only
-when its credential is never available to the agent process.
+## Release boundary
 
-## Out of scope
+The POC may be demonstrated only when:
 
-The POC does not protect against:
+- `agent-boost doctor` confirms Node, pinned Kohaku, and Sepolia RPC;
+- tests and build pass;
+- the operator funds only the QR's Sepolia address;
+- the user hears the privacy and valueless-funds limitations;
+- payment is at or below the configured maximum;
+- the exact recipient and amount receive verbal confirmation;
+- no claim of anonymity, private RPC, or production custody is made.
 
-- a compromised kernel, root user, debugger, or process with access to the
-  operator identity or authenticated control plane;
-- a global passive adversary or traffic-analysis attack across the anonymity
-  network;
-- malicious Tor exits, Grove nodes, destinations, or RPC providers observing
-  the traffic they legitimately terminate;
-- cookies, logins, API keys, browser fingerprints, prompt contents, or other
-  application-layer identifiers sent by the agent;
-- disclosure of agent-visible public wallet state to a remote model provider;
-- public-chain analysis of amounts, timing, counterparties, contract calls, or
-  the source of first funding;
-- an operator approving a malicious or misleading request;
-- denial of service, unavailable relays, unavailable RPC, or fee volatility;
-- vulnerabilities in Agent Boost, Kohaku, Shade Tree, Tor, dependencies, or
-  host cryptography;
-- post-quantum security, private inference, or confidential model execution.
-
-## Funding caveat
-
-A stealth address changes how a recipient is discovered; it does not make the
-funding transaction invisible. The POC test sponsor can observe the requested
-destination and timing, and a chain observer can see the transfer. The
-`bootstrap --testnet` command exists for usability testing only.
-
-## Logging policy
-
-By default, receipts may store:
-
-- request ID and timestamps;
-- mode, capability, adapter, and coarse destination origin;
-- approval state and terminal result;
-- public transaction hash after broadcast.
-
-They do not store:
-
-- model prompts or chain-of-thought;
-- HTTP request or response bodies;
-- authorization, cookie, or proxy-credential headers;
-- wallet seed, private keys, unlock values, or encrypted wallet blobs;
-- full URL paths or query strings.
-
-Operators can disable destination logging entirely. Debug logging must be an
-explicit, time-bounded operator action and must never enable secret logging.
-
-## POC security gates
-
-Before a downloadable release, tests must demonstrate:
-
-- loopback-only listeners and operator-only control-socket permissions;
-- distinct agent/operator authority or cryptographic operator authentication,
-  with an agent-sandbox canary proving the admin socket and state paths are
-  unreachable;
-- process environment and command-line secret scans;
-- direct-connect failure from the strict agent sandbox;
-- clearnet canaries for both HTTP and Ethereum RPC;
-- proxy-loss failure without fallback;
-- approval digest mutation rejection;
-- log and receipt redaction fixtures;
-- crash recovery without double-broadcast;
-- dependency version pinning and artifact checksums.
-
-Any failed gate keeps the affected capability disabled or the release labeled
-as a non-private engineering preview.
+The recipient and amount are resolved from the decision rather than accepted
+again. Execution reasserts Sepolia and refreshes private balance, then
+atomically consumes the one-payment/lifetime delegation before calling Kohaku.
+This is fail-safe: an adapter failure or uncertain submission does not restore
+authority for an automatic retry.

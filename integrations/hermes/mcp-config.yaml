@@ -3,15 +3,16 @@ mcp_servers:
     command: /absolute/path/to/agent-boost
     args: [mcp, --mode, dark, --contract-major, "1"]
     enabled: true
+    timeout: 180
     supports_parallel_tool_calls: false
     tools:
       include:
         - capabilities
-        - dark_fetch
+        - onboarding_start
+        - onboarding_status
         - wallet_get_context
-        - wallet_plan_payment
-        - wallet_create_receive
-        - wallet_prepare_payment
+        - wallet_plan_private_payment
+        - wallet_execute_private_payment
         - wallet_get_request
       resources: false
       prompts: false

@@ -1,91 +1,168 @@
-# Capability contract
+# Wallet capability contract
 
-Agent Boost capability documents are descriptive compatibility profiles. They
-are not bearer capabilities and grant no signing, approval, network-bypass, or
-administrative authority.
+Agent Boost exposes a wallet-first MCP contract named
+`org.agentboost.wallet/1.0`. It is Sepolia-only.
 
-## Discovery
-
-The profile is available through the native read-only `capabilities` tool and as
-the MCP resource:
+The capability document is available through the read-only `capabilities`
+tool and the resource:
 
 ```text
 agent-boost://capabilities/wallet/v1
 ```
 
-Hermes integrations use the tool because MCP resources are not automatically
-inserted into the model context. Other MCP hosts may prefer the resource for
-application-controlled discovery. Live context and plan results carry the
-manifest digest and relevant readiness so cached support cannot masquerade as
-current health.
+The document describes support and live readiness. It is not a bearer token.
+Actual authority is enforced from durable local state.
 
-The schema and example are:
+## Scope
 
-- [`wallet-capability-v1.schema.json`](../spec/wallet-capability-v1.schema.json)
-- [`wallet-capability-v1.example.json`](../spec/wallet-capability-v1.example.json)
-- [`tool-result-v1.schema.json`](../spec/tool-result-v1.schema.json)
+- Chain: `eip155:11155111`;
+- asset: `eip155:11155111/slip44:60`;
+- funding target: `0.2` ETH by default;
+- shield protocol: Tornado through the pinned Kohaku adapter;
+- private operation: unshield to the next wallet account with an exact value
+  tail call;
+- authority: one verbally confirmed, time-bounded Sepolia test payment;
+- default maximum: `0.05` ETH;
+- mainnet: unavailable;
+- private egress: unavailable.
 
-## Versioning
+The accurate privacy claim is “privacy-improving shielded Sepolia test
+payment.” The capability document explicitly sets
+`guarantees_anonymity: false`, `rpc_egress_private: false`, and
+`funding_source_private: false`.
 
-- The resource URI major version controls breaking document changes.
-- `schema_version` controls the profile's JSON shape.
-- `capability.version` controls Agent Boost wallet semantics.
-- MCP protocol negotiation remains independent.
-- A minor version may add optional fields and features.
-- A breaking change uses `/v2` and requires explicit integration configuration;
-  an active client is never silently upgraded across majors.
+## Identifiers and amounts
 
-## Identifier rules
+- Chain IDs use CAIP-2.
+- Account IDs use `eip155:11155111:0x…`.
+- Native ETH uses CAIP-19 `eip155:11155111/slip44:60`.
+- Authority-bearing amounts are canonical base-10 wei strings matching
+  `^(0|[1-9][0-9]*)$`.
+- Human ETH formatting is display-only and never enters the intent digest.
+- Decision IDs begin `wd_`; request IDs begin `req_`; setup IDs begin
+  `setup_`.
 
-- Networks use CAIP-2, such as `eip155:11155111`.
-- Accounts use CAIP-10, such as `eip155:11155111:0x…`.
-- Assets use CAIP-19, such as `eip155:11155111/slip44:60` or an ERC-20 asset.
-- Symbols and friendly names are display metadata only.
-- Authority-bearing monetary quantities are canonical, non-negative atomic-unit
-  integer strings paired with a CAIP-19 asset identifier, never JSON numbers.
-- Human-formatted decimal amounts are display metadata only and are excluded
-  from intent digests and approval equality checks.
-- ERC-5564 stealth receive targets include their scheme metadata.
+## Result envelope
 
-## Authority rules
+Every expected result appears in both MCP `structuredContent` and a JSON text
+content block:
 
-The agent may read capabilities/context, plan a payment, prepare a review
-request, create an idempotent receive target, fetch read-only content through
-dark egress, and inspect request status.
+```json
+{
+  "schema": "org.agentboost.tool-result",
+  "schema_version": "1.0",
+  "manifest_digest": "sha256:…",
+  "outcome": "ready",
+  "code": "CAPABILITIES",
+  "retry": {
+    "mode": "never",
+    "safe_with_same_arguments": false
+  },
+  "data": {}
+}
+```
 
-The agent cannot unlock, approve, reject, sign, broadcast, export keys, obtain
-raw signed transactions, or reach the operator control socket. Tool annotations,
-Hermes trust prompts, skills, and capability text are not enforcement.
+Known outcomes are `ready`, `blocked`, `awaiting_funding`, `executing`,
+`submitted`, `confirmed`, `failed`, and `indeterminate`. Retry advice is
+part of the contract. An unresolved side effect must never be replaced with a
+new client request ID.
 
-## Result rules
+## Tools
 
-Expected wallet and routing states return a successful structured result with a
-stable outcome/code/retry envelope. This keeps insufficient funds, policy
-denials, route failure, stale decisions, operator waits, and reconciliation
-available for agent branching without mislabeling them as protocol failure.
+### `capabilities`
 
-Malformed calls, unknown tools, and unexpected internal faults use MCP errors.
-Every result is bounded, redacted, and represented in both structured content
-and serialized text for client compatibility.
+No input. Returns the static contract and dynamic readiness. It grants no new
+authority.
 
-## Payment handoff
+### `onboarding_start`
 
-`wallet_plan_payment` canonicalizes exact terms, including `amount_atomic` and a
-fee-ceiling object containing `asset_type` plus `amount_atomic`, and returns an
-opaque decision ID. Atomic-unit strings match `^(0|[1-9][0-9]*)$`; leading
-zeros, signs, decimal points, grouping, and exponent notation are invalid.
-`wallet_prepare_payment` accepts the decision ID and a stable client request ID,
-not a second copy of the payment terms. Preparation revalidates and atomically
-reserves; it never signs.
+No input. Creates or resumes a disposable wallet setup. It may create encrypted
+wallet state, derive a fresh public address, open the local funding page,
+download proving material, watch Sepolia funding, and automatically submit the
+configured shield transaction.
 
-A plan/decision ID:
+Repeated calls resume the durable setup. They do not replace the Kohaku seed.
 
-- expires quickly;
-- creates no reservation;
-- binds an exact digest;
-- cannot be mutated;
-- cannot approve, sign, or broadcast;
-- becomes invalid when relevant state changes.
+### `onboarding_status`
 
-The operator approves the immutable request digest through the separate control
-plane. Signing revalidates state and rejects any term or fee-ceiling mutation.
+```json
+{
+  "setup_id": "setup_…",
+  "since_revision": 4,
+  "wait_ms": 90000
+}
+```
+
+Returns the latest durable state or waits for a greater revision. Only
+`private_ready` with `privateBalanceWei >= shieldAmountWei` means setup is
+complete.
+
+### `wallet_get_context`
+
+No input. Refreshes and returns:
+
+- funding address and CAIP account ID;
+- current funding-address ETH;
+- Kohaku's current aggregate public-wallet ETH;
+- current private-payment spendable ETH;
+- setup phase;
+- delegation amount, use, and expiry;
+- observation timestamp and revision.
+
+It returns no seed, key, mnemonic, password, note, proof, raw signed
+transaction, RPC URL, or arbitrary adapter output.
+
+### `wallet_plan_private_payment`
+
+```json
+{
+  "recipient": "0x2222222222222222222222222222222222222222",
+  "amount_atomic": "20000000000000000"
+}
+```
+
+The tool refreshes private spendable balance and checks setup readiness,
+delegation enabled/expiry, one-payment lifetime use, per-payment and lifetime
+limits, and private balance. It returns a five-minute immutable decision with a
+SHA-256 digest over chain, recipient, asset, amount, and operation.
+
+Plans do not sign, submit, or reserve funds.
+
+### `wallet_execute_private_payment`
+
+```json
+{
+  "decision_id": "wd_…",
+  "client_request_id": "hermes:wd_…",
+  "user_confirmed": true
+}
+```
+
+The recipient and amount are resolved from the decision rather than accepted
+again. Execution atomically consumes the one-payment/lifetime delegation before
+calling Kohaku. This is fail-safe: an adapter failure or uncertain submission
+does not restore authority for an automatic retry.
+
+### `wallet_get_request`
+
+```json
+{"request_id": "req_…"}
+```
+
+Returns one durable, redacted request in `executing`, `submitted`,
+`confirmed`, `failed`, or `indeterminate` state.
+
+## Model-visible authority
+
+The agent may read wallet state, create plans, and—with exact verbal
+confirmation—cause one bounded Sepolia signature and broadcast. It cannot use
+the Agent Boost interface to export keys, sign arbitrary calldata, change
+chain, change protocol, change the fixed withdrawal behavior, bypass policy, or
+access mainnet.
+
+`user_confirmed` is Hermes's attestation about the conversation. Agent Boost
+does not independently hear or authenticate the user's speech, so this is a
+bounded demo control rather than a separate approval factor.
+
+MCP is not an OS sandbox. Same-user filesystem and shell access are outside this
+tool contract; see the threat model.

@@ -1,0 +1,42 @@
+{
+  "name": "agent-boost",
+  "version": "0.1.0",
+  "description": "Dark mode for your agent: a local wallet-first privacy sidecar.",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "agent-boost": "dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "integrations/",
+    "agent-boost.example.toml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx src/cli.ts",
+    "install:kohaku": "node scripts/install-kohaku.mjs",
+    "install:local": "node scripts/install.mjs",
+    "test": "node --import tsx --test --test-concurrency=1 --test-reporter=spec test/**/*.test.ts",
+    "test:serial": "node --import tsx --test --test-concurrency=1 --test-reporter=spec test/**/*.test.ts",
+    "prepack": "npm run check && npm test && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "qrcode": "1.5.4",
+    "yaml": "2.9.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "@types/qrcode": "1.5.6",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3"
+  }
+}

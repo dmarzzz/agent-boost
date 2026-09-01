@@ -1,144 +1,137 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:agent-boost:schema:wallet-capability:v1",
-  "title": "Agent Boost wallet capability profile v1",
+  "title": "Agent Boost wallet capability v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema",
-    "schema_version",
-    "capability",
+    "contract",
+    "chain_id",
+    "network_name",
+    "asset_type",
+    "funding_target_atomic",
+    "privacy_protocol",
+    "private_payment_operation",
     "authority",
-    "scopes",
-    "guarantees",
-    "disclosures"
+    "privacy",
+    "adapters",
+    "readiness"
   ],
   "properties": {
-    "schema": {"const": "org.agentboost.wallet-capability"},
-    "schema_version": {"type": "string", "pattern": "^1\\.[0-9]+$"},
-    "capability": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "version", "digest"],
-      "properties": {
-        "id": {"const": "org.agentboost.wallet"},
-        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
-        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
-      }
+    "contract": {"const": "org.agentboost.wallet/1.0"},
+    "chain_id": {"const": "eip155:11155111"},
+    "network_name": {"const": "Sepolia"},
+    "asset_type": {"const": "eip155:11155111/slip44:60"},
+    "funding_target_atomic": {"$ref": "#/$defs/atomic"},
+    "privacy_protocol": {"const": "tornado"},
+    "private_payment_operation": {"const": "unshield_next_tail_call"},
+    "manifest_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
     },
     "authority": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["agent", "operator_only"],
+      "required": [
+        "mode",
+        "can_cause_signing",
+        "mainnet_available",
+        "per_payment_limit_atomic",
+        "lifetime_limit_atomic",
+        "max_payments",
+        "requires_exact_verbal_confirmation"
+      ],
       "properties": {
-        "agent": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "enum": [
-              "capability.read",
-              "egress.fetch.read",
-              "context.read",
-              "payment.plan",
-              "payment.prepare",
-              "receive.create",
-              "request.read"
-            ]
-          }
-        },
-        "operator_only": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "enum": [
-              "wallet.unlock",
-              "payment.approve",
-              "payment.reject",
-              "wallet.sign",
-              "transaction.broadcast",
-              "key.export"
-            ]
-          }
-        }
+        "mode": {"const": "testnet_delegated"},
+        "can_cause_signing": {"const": true},
+        "mainnet_available": {"const": false},
+        "per_payment_limit_atomic": {"$ref": "#/$defs/atomic"},
+        "lifetime_limit_atomic": {"$ref": "#/$defs/atomic"},
+        "max_payments": {"const": 1},
+        "requires_exact_verbal_confirmation": {"const": true}
       }
     },
-    "scopes": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["chain_id", "account_id_format", "asset_type_format", "features"],
-        "properties": {
-          "chain_id": {"type": "string", "description": "CAIP-2 chain identifier"},
-          "account_id_format": {"const": "caip-10"},
-          "asset_type_format": {"const": "caip-19"},
-          "features": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["id", "version"],
-              "properties": {
-                "id": {"type": "string"},
-                "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
-                "constraints": {"type": "object"}
-              }
-            }
-          }
-        }
-      }
-    },
-    "guarantees": {
+    "privacy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["rpc_route", "route_fallback", "snapshot", "approval"],
+      "required": [
+        "claim",
+        "hides_direct_deposit_withdrawal_link",
+        "guarantees_anonymity",
+        "rpc_egress_private",
+        "funding_source_private",
+        "limitations"
+      ],
       "properties": {
-        "rpc_route": {"const": "private-required"},
-        "route_fallback": {"const": "none"},
-        "snapshot": {
+        "claim": {"const": "privacy-improving shielded Sepolia test payment"},
+        "hides_direct_deposit_withdrawal_link": {"type": "boolean"},
+        "guarantees_anonymity": {"const": false},
+        "rpc_egress_private": {"const": false},
+        "funding_source_private": {"const": false},
+        "limitations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "adapters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wallet", "egress"],
+      "properties": {
+        "wallet": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["max_age_seconds", "consistency", "execution_revalidation"],
+          "required": ["name", "compatible_commit"],
           "properties": {
-            "max_age_seconds": {"type": "integer", "minimum": 1},
-            "consistency": {"enum": ["single-block", "documented-multicall"]},
-            "execution_revalidation": {"const": "required"}
+            "name": {"const": "kohaku"},
+            "compatible_commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
           }
         },
-        "approval": {
+        "egress": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["mode", "binds"],
+          "required": ["name", "available", "stage"],
           "properties": {
-            "mode": {"const": "out-of-band-exact-intent"},
-            "binds": {
-              "type": "array",
-              "uniqueItems": true,
-              "items": {
-                "enum": [
-                  "chain_id",
-                  "from_account_id",
-                  "to_account_id",
-                  "asset_type",
-                  "amount_atomic",
-                  "calldata_summary",
-                  "fee_ceiling"
-                ]
-              }
-            }
+            "name": {"const": "shade-tree"},
+            "available": {"const": false},
+            "stage": {"const": "next"}
           }
         }
       }
     },
-    "disclosures": {
+    "readiness": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["agent_can_observe", "never_returned"],
+      "required": ["phase", "wallet_ready", "address_ready", "egress_ready"],
       "properties": {
-        "agent_can_observe": {"type": "array", "items": {"type": "string"}},
-        "never_returned": {"type": "array", "items": {"type": "string"}}
+        "phase": {
+          "enum": [
+            "not_started",
+            "creating_wallet",
+            "preparing_privacy",
+            "awaiting_funding",
+            "funding_pending",
+            "funded_public",
+            "shielding",
+            "private_ready",
+            "failed"
+          ]
+        },
+        "wallet_ready": {"type": "boolean"},
+        "address_ready": {"type": "boolean"},
+        "egress_ready": {"const": false}
       }
+    }
+  },
+  "$defs": {
+    "atomic": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
     }
   }
 }

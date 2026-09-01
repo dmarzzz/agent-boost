@@ -1,190 +1,134 @@
 # Architecture
 
-Agent Boost is designed as a local control plane between an untrusted agent
-runtime and two privacy adapters. It owns policy, approval, lifecycle, and
-redacted receipts. It delegates wallet cryptography to Kohaku and proof-gated
-Tor egress to Shade Tree.
+Agent Boost is a local, wallet-first sidecar between Hermes and Kohaku. It owns
+the agent-facing contract, durable workflow state, delegated-spend policy,
+onboarding UI, and redacted results. Kohaku owns wallet derivation, encrypted
+seed storage, Tornado proving, signing, and broadcast.
 
-## Design rules
+## Components
 
-1. Keep secrets and signing authority outside the agent process while exposing
-   the public wallet state an agent needs to make decisions.
-2. Give the agent intent-level capabilities instead of adapter shells.
-3. Bind data-plane listeners to loopback and isolate the operator control plane
-   from the agent with a separate OS identity/sandbox boundary or cryptographic
-   operator authentication.
-4. Route wallet RPC through the same private egress boundary as dark HTTP.
-5. Fail dark requests closed; never retry on clearnet.
-6. Keep adapter implementations replaceable behind a stable tool contract.
-7. Record enough metadata to debug a request without storing its secret inputs
-   or body content.
+| Component | Responsibility |
+| --- | --- |
+| Hermes | Conversation, exact readback, verbal confirmation, MCP orchestration |
+| Agent Boost MCP server | Schemas, policy, state, idempotency, UI lifecycle |
+| Onboarding UI | Read-only loopback QR, address, funding and shield progress |
+| Kohaku adapter | Wallet operations through fixed, non-shell argv |
+| Sepolia RPC client | HTTPS chain assertion and live public balance reads |
+| State store | Atomic durable setup, plan, request, and delegation records |
 
-## Process boundaries
+The first release contains no proxy, RPC forwarder, general private egress, or
+operator approval dashboard.
 
-| Process | Trust | Responsibilities |
-| --- | --- | --- |
-| Agent runtime | Untrusted for secrets | Chooses tools and supplies bounded intents |
-| Agent-facing MCP process | Untrusted for operator authority | Validates schemas and forwards bounded intents |
-| Agent Boost sidecar | Trusted local control plane | Policy, plans, reservations, request state, approvals, receipts, routing |
-| Kohaku adapter | Trusted wallet boundary | Encrypted key state, receive derivation, signing |
-| Shade Tree adapter | Trusted transport boundary | Proof-gated Tor transport and egress health |
-| Operator CLI | Trusted human control | Unlock, inspect, approve, reject, stop |
+## Local surfaces
 
-The host kernel and operator identity are trusted in the POC. The agent identity
-is not trusted with operator files or sockets. A process with access to the
-operator's memory, wallet state, or authenticated control socket is outside the
-security model.
+- MCP: stdio only;
+- onboarding page: `127.0.0.1:9183` by default;
+- runtime ownership lock: exclusive `127.0.0.1:9184` bind;
+- state: `~/.local/share/agent-boost` by default.
 
-## Local interfaces
+The UI server rejects non-loopback Host headers, cross-site browser requests,
+methods other than GET/HEAD, and framing. It uses no remote assets and returns
+only an explicit public snapshot.
 
-### Agent-facing
-
-- MCP over stdio is the strict interface. It exposes bounded tools and no
-  administrative actions.
-- `127.0.0.1:9181` is an HTTP CONNECT proxy for compatibility mode.
-- `127.0.0.1:9182` is an Ethereum JSON-RPC forwarder. The wallet adapter may
-  reach an upstream RPC provider only through this listener.
-
-### Operator-facing
-
-Administrative commands use
-`~/.local/share/agent-boost/agent-boost.sock`, created inside the operator
-boundary. Unlock material is accepted interactively and is neither passed in
-arguments nor written to receipts.
-
-File mode `0600` is not a boundary when Hermes and Agent Boost share a UID. The
-release gate requires a distinct Agent Boost service identity with the socket
-and state paths hidden from the agent sandbox, or cryptographic operator
-authentication that the agent cannot obtain.
-
-There is no administrative TCP API in the POC.
-
-## Request state machine
+## Onboarding state machine
 
 ```text
-payment intent
-  → planned (read-only, no reservation)
-  → prepared (fresh validation + atomic reservation)
-  → awaiting_operator
-  → approved
-  → revalidating
-  → executing
+not_started
+  → creating_wallet
+  → preparing_privacy
+  → awaiting_funding
+  → funding_pending
+  → funded_public
+  → shielding
+  → private_ready
+
+any active phase → failed
+```
+
+The wallet and fresh funding address are created before the QR appears.
+Proving-artifact preparation continues while the user funds. The watcher polls
+the exact address until the configured target arrives, persists `shielding`
+before invoking Kohaku, and waits for the private spendable balance rather than
+assuming a returned hash means readiness.
+
+On restart:
+
+- wallet creation and privacy preparation resume;
+- funding states resume address polling;
+- `shielding` resumes private-balance polling without automatically sending a
+  duplicate shield.
+
+This favors avoiding duplicate side effects. A crash after persisting
+`shielding` but before Kohaku receives the command may require operator
+diagnosis rather than an automatic retry.
+
+## Payment flow
+
+```text
+wallet_get_context
+  → live funding-address + aggregate public + private spendable balances
+  → wallet_plan_private_payment(recipient, amount)
+  → verbal confirmation of immutable plan
+  → wallet_execute_private_payment(decision_id, stable client ID)
+  → Kohaku unshield --next + exact value tail call
   → submitted
+  → recipient balance delta verified
   → confirmed
-
-awaiting_operator → rejected | expired
-revalidating      → failed_before_submit
-submitted         → reconciling → confirmed | indeterminate
 ```
 
-Read-only operations such as `capabilities`, `wallet_get_context`, and
-`wallet_plan_payment` create no reservation. A plan ID is a short-lived
-reference to immutable terms, not signing authority. `wallet_prepare_payment`
-revalidates and reserves atomically. Request IDs are durable and execution is
-idempotent: after a restart, Agent Boost reconciles a possibly broadcast
-transaction before allowing any replacement.
+The plan checks balance and policy but creates no side effect. Immediately
+before signing, execution asserts Sepolia again, refreshes the spendable
+private balance, and rechecks the kill switch, delegation chain, expiry,
+per-payment limit, lifetime limit, and one-payment rule. It then writes an
+`executing` request and consumes the allowance before invoking Kohaku. This
+prevents a crash or error from making a possibly submitted payment look safely
+repeatable.
 
-## Dark fetch flow
+Kohaku's Tornado path withdraws the configured `0.1` ETH note to the next
+wallet-controlled EIP-7702 account. The recipient payment is an exact tail call;
+the paymaster fee and remaining change are separate from the recipient amount.
 
-```text
-agent
-  → MCP dark_fetch or loopback proxy
-  → request validation and destination policy
-  → Shade Tree loopback proxy
-  → Tor circuit / Grove egress
-  → destination
-  → redacted receipt + response
-```
+## Live balance semantics
 
-Strict mode places the agent in an external network sandbox so the Agent Boost
-tool is its only network capability. Compatibility mode cannot provide that
-property by environment injection alone.
+The initial funding address and Kohaku wallet total are different concepts after
+shielding or unshielding. Agent Boost reports both:
 
-## Wallet flow
+- `funding_address_eth_atomic`: live balance at the address shown in the QR;
+- `public_wallet_total_atomic`: aggregate ETH across Kohaku public accounts;
+- `private_payment_spendable_atomic`: spendable Tornado ETH.
 
-```text
-agent
-  → wallet_get_context (general reasoning)
-  → address + total / reserved / spendable balances + policy + route health
-  → wallet_plan_payment(exact terms)
-  → proxied chain reads
-  → principal + fee balances + checks / blockers + decision ID
-  → wallet_prepare_payment(decision ID, stable client request ID)
-  → fresh balance / fee / nonce / policy / route validation
-  → atomic principal / fee-ceiling / policy reservation
-  → exact operator approval for signing
-  → Kohaku adapter
-  → Agent Boost JSON-RPC forwarder
-  → Shade Tree
-  → HTTPS upstream RPC / Sepolia
-```
+Payment planning refreshes the private value again, so Hermes cannot authorize
+from a remembered or merely total balance.
 
-The Kohaku subprocess receives a loopback RPC URL. Direct outbound RPC and
-plaintext upstream RPC are rejected by the POC sandbox, network policy, and RPC
-forwarder. The HTTPS requirement keeps a Grove node from reading or modifying
-JSON-RPC payloads. `doctor` runs a canary through the complete path before
-wallet network operations are enabled. The decision ID binds the exact intent
-and observation, but execution always revalidates fresh state before signing.
+## Filesystem and subprocess behavior
 
-## Adapter contract
+- directories are created or corrected to `0700`;
+- state, wallet, secret, and provenance files are corrected to `0600`;
+- state writes flush a unique temporary file, atomically rename it, and flush
+  the containing directory;
+- the password is generated locally and passed to Kohaku by file path;
+- Kohaku invocations use argv arrays with `shell: false`;
+- the RPC URL is supplied through the child environment rather than argv;
+- a process-shared loopback lock prevents concurrent wallet runtimes;
+- output and execution time are bounded;
+- operations are serialized by data directory and wallet name.
 
-Adapters are supervised child processes with a versioned, structured protocol.
-The POC contract requires:
-
-- a startup capability handshake;
-- health and readiness states;
-- request and response size limits;
-- deadlines and cancellation;
-- structured error codes with no secret values;
-- clean shutdown and forced termination;
-- exact supported network and feature reporting.
-
-An adapter cannot weaken the sidecar policy. For example, the wallet adapter
-cannot bypass approval, and the egress adapter cannot authorize a clearnet
-fallback.
-
-## Receipt shape
-
-```json
-{
-  "request_id": "req_01J…",
-  "created_at": "2026-09-05T14:02:00Z",
-  "mode": "dark",
-  "capability": "wallet_prepare_payment",
-  "destination": "ethereum:sepolia",
-  "adapter": "kohaku",
-  "approval": "approved",
-  "result": "broadcast",
-  "transaction_hash": "0x…"
-}
-```
-
-Receipts omit prompts, HTTP bodies, response bodies, authentication headers,
-wallet secrets, unlock material, and full destination paths by default.
+The Kohaku installation is built from a fixed commit in a staging directory,
+verified, hashed, and atomically renamed into place. An unmanaged target is
+never overwritten.
 
 ## Failure behavior
 
-| Failure | Required behavior |
+| Failure | Behavior |
 | --- | --- |
-| Shade Tree not ready | Reject dark request before connection |
-| Egress lost mid-request | Fail; do not replay on clearnet |
-| RPC route canary fails | Disable wallet network operations |
-| Kohaku locked | Return `OPERATOR_ACTION_REQUIRED` without accepting unlock data from the agent |
-| Approval rejected or expired | Produce no signature |
-| Sidecar restarts after ambiguous broadcast | Hold reservation and reconcile by request ID; do not build a replacement |
-| Receipt store unavailable | Reject new side effects |
-| Agent can reach operator socket/state | Fail `doctor --strict`; do not enable wallet actions |
-
-## Configuration and state
-
-The public [example configuration](../agent-boost.example.toml) contains paths
-and policy only. Adapter credentials, RPC credentials, and wallet unlock
-material stay in protected local state or interactive input.
-
-Expected permissions:
-
-```text
-~/.config/agent-boost/             0700
-~/.config/agent-boost/config.toml  0600
-~/.local/share/agent-boost/        0700
-```
+| RPC is not HTTPS or not Sepolia | Fail before wallet setup |
+| Funding is partial | Keep waiting and update QR to the remainder |
+| Funding or private balance times out | Durable retryable failure |
+| Kohaku command fails | Redacted failure; no shell fallback |
+| Plan expired or delegation used | Reject before adapter call |
+| A second Agent Boost process starts | Fail closed on the runtime ownership lock |
+| User did not confirm | Reject before durable request |
+| Submission cannot be proven delivered | Keep `submitted`/unresolved |
+| UI cannot open | Return QR through MCP when possible |
+| UI port unavailable | Continue with MCP QR/address fallback |
+| Private egress unavailable | Report it; never claim it exists |

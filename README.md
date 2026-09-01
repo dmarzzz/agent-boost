@@ -4,377 +4,309 @@
 
 **Dark mode for your agent.**
 
-Agent Boost is the design for a local privacy sidecar for AI agents. The POC is
-scoped to keep wallet keys out of the agent process, route selected network and
-Ethereum RPC traffic through proof-gated Tor egress, and place operator policy
-between an agent's intent and an external side effect.
+Agent Boost is a local, wallet-first privacy sidecar for AI agents. This proof
+of concept gives a Hermes agent the public wallet facts it needs to reason—its
+Sepolia address, live balances, setup state, and remaining allowance—while
+keeping seed phrases, private keys, wallet passwords, and raw privacy notes out
+of MCP results and the model conversation.
 
-The first proof of concept is designed around two adapters behind one local
-interface:
+The current build demonstrates one complete path:
 
-- [Kohaku CLI](https://github.com/kassandraoftroy/kohaku-cli) for fresh and
-  stealth wallet operations;
-- [Shade Tree Grove](https://github.com/dmarzzz/shade-tree-node) for
-  proof-gated Tor egress.
+1. Hermes asks Agent Boost to create a disposable Sepolia wallet.
+2. Agent Boost opens a local funding page with an exact QR code and address.
+3. An event operator sends approximately `0.2` valueless Sepolia ETH.
+4. Agent Boost automatically shields `0.1` Sepolia ETH through Kohaku.
+5. The user asks Hermes to send one shielded test payment.
+6. Hermes reads the live balance, plans the exact transfer, reads the terms
+   back, and waits for verbal confirmation.
+7. Agent Boost signs and submits within a Sepolia-only, one-payment delegation.
 
-Agent frameworks integrate with Agent Boost instead of learning each privacy
-system independently. Wallet and egress implementations can change behind the
-same local interface without changing how the agent reasons or acts.
-
-> [!IMPORTANT]
-> **Pre-release interface specification.** This repository currently defines
-> the intended POC interface and acceptance contract. It does not yet contain a
-> working release, and the commands below are the interface we are building—not
-> a claim that this checkout already implements them.
+No terminal is needed after the one-time installation. On a graphical local
+machine, the funding page opens in the browser. On a headless host, Agent Boost
+returns the QR image through MCP so Hermes can present it in chat.
 
 > [!WARNING]
-> **Research software.** The POC is testnet-only, unaudited, and intended for
-> disposable credentials and funds. Do not use it for mainnet assets or traffic
-> whose disclosure could cause harm.
+> Agent Boost and Kohaku are unaudited research software. This release is
+> Sepolia-only and intended for disposable test funds. Sepolia ETH has no
+> monetary or redeemable value. Never send mainnet assets, real value, or a
+> wallet you care about.
 
-## What the POC does
+## Install
 
-Agent Boost gives a local agent four bounded capabilities:
+Supported hosts:
 
-| Capability | Agent sees | Agent never sees |
-| --- | --- | --- |
-| Private fetch | Redacted response and receipt | Egress credentials |
-| Understand its wallet | Public addresses, balances, reservations, fees, and limits | Seed, private key, or unlock material |
-| Receive funds | Fresh address or stealth receive identifier | Derivation secrets |
-| Prepare payment | Reviewable request ID and final status | Signing authority |
+- macOS on Apple silicon;
+- macOS on Intel;
+- Ubuntu 24.04 on ARM64.
 
-The wallet address and balance are intentionally available to the agent. They
-are inputs to decision-making, not signing secrets: an agent cannot decide
-whether to spend $10 without knowing what it owns, what is already reserved,
-what the transaction will cost, and what policy permits. The operator still
-owns the sensitive control plane. Unlocking a wallet and approving a signature
-happen outside the model context and outside model-generated code.
+The complete clean-install flow has been exercised on macOS Apple silicon.
+Host detection, paths, and installer behavior are covered for Intel macOS and
+Ubuntu ARM64, but those two targets still need clean-machine execution evidence
+before the event release is tagged.
 
-## Planned release UX
-
-The first event build targets macOS on Apple silicon, Sepolia, and disposable
-funds. Its planned prerequisites are Node.js 22 or newer, Tor, a pinned Kohaku
-CLI build, an operator-supplied Shade Tree v4 access profile, an HTTPS Sepolia
-RPC endpoint, and a sandbox that can deny the agent ambient network and
-operator-state access. Shade Tree does not currently publish a public v4 access
-profile; enrollment data comes from the Grove operator and must remain outside
-the repository and agent context.
-
-Once implemented, the release UX will be one small lifecycle:
+Prerequisites are Git, Node.js 22 or newer, npm, and a working Hermes install.
+The installer builds the repository, installs Agent Boost under `~/.local`,
+fetches and verifies the pinned Kohaku commit, and configures the active Hermes
+profile without replacing a conflicting MCP entry.
 
 ```console
 git clone https://github.com/dmarzzz/agent-boost.git
 cd agent-boost
 make install
+```
 
-agent-boost init --network sepolia
+The default executables and state paths are:
+
+```text
+~/.local/bin/agent-boost
+~/.local/share/agent-boost/dependencies/kohaku-cli/
+~/.local/share/agent-boost/state.json
+~/.local/share/agent-boost/kohaku/
+~/.local/share/agent-boost/secrets/kohaku-password
+```
+
+If the installer says `~/.local/bin` is not on `PATH`, add it before continuing.
+Then verify the host:
+
+```console
 agent-boost doctor
-agent-boost up
-agent-boost run --mode dark -- your-local-agent
 ```
 
-`init` will create a local config and encrypted state directory. `doctor` will
-verify the adapter binaries, process isolation, private egress, and the Ethereum
-RPC route before any agent starts. `up` will start the sidecar on loopback and
-an operator control Unix socket. `run` will give one child process the
-compatibility environment described below.
-
-To stop it:
+If Hermes was not available during installation, configure it later with:
 
 ```console
-agent-boost down
+agent-boost install-hermes
 ```
 
-No secret belongs in the repository, command history, process arguments, model
-prompt, or agent-visible environment.
+Restart Hermes once. In an already-running Hermes conversation, the no-restart
+alternative is `/reload-skills` followed by `/reload-mcp` locally, or
+`!reload-skills` followed by `!reload-mcp` over Matrix.
 
-## Integration modes
+The installer pins Kohaku to commit
+[`fcf9defa4d5ff7f63222f1b3bbe2d30e631ceffd`](https://github.com/kassandraoftroy/kohaku-cli/commit/fcf9defa4d5ff7f63222f1b3bbe2d30e631ceffd)
+and records local SHA-256 provenance for its lockfile, launcher, and compiled
+bundle. A managed installation is reused only when its pin and hashes still
+match.
 
-### Strict mode: MCP tools
+The Kohaku runtime is currently large: approximately 765 MiB after production
+pruning, before proving artifacts. Its pinned production dependency tree also
+reports 44 known npm advisories (38 moderate and 6 high) as of this release
+candidate. That unresolved upstream risk is another reason this build is
+strictly disposable-testnet software.
 
-This is the recommended integration. The agent has no ambient network and gets
-only the Agent Boost tools it needs. A typical MCP configuration will look like:
+## Run the demo
 
-```json
-{
-  "mcpServers": {
-    "agent-boost": {
-      "command": "agent-boost",
-      "args": ["mcp", "--mode", "dark"]
-    }
-  }
-}
-```
+### 1. Set up the wallet
 
-The POC contract defines seven intent-level tools:
+Tell Hermes:
 
-- `capabilities` — report the contract version, live readiness, supported
-  networks/features, guarantees, and explicit authority exclusions;
-- `dark_fetch` — make a GET or HEAD request through the private route;
-- `wallet_get_context` — return a coherent public wallet snapshot for general
-  reasoning: addresses, balances, reservations, fees, and spend policy;
-- `wallet_plan_payment` — evaluate exact payment terms and return explicit
-  checks, blockers, and a short-lived decision ID;
-- `wallet_create_receive` — create an idempotent fresh or stealth testnet
-  receive identifier from an ordered set of acceptable kinds;
-- `wallet_prepare_payment` — atomically revalidate a decision and create a
-  reservation plus operator-review request;
-- `wallet_get_request` — read durable, redacted request state.
+> Set up Agent Boost.
 
-The capability profile is also mirrored as the MCP resource
-`agent-boost://capabilities/wallet/v1`. The resource is descriptive, never an
-authority token. Operational tool results carry its digest and live readiness
-so an agent does not need to remember to load the resource before acting.
+Hermes calls `onboarding_start`. Agent Boost creates or resumes one durable
+Sepolia setup and opens the funding page. The page shows an EIP-681 QR code for
+the exact remaining amount, the full address, public funding progress, and
+private-balance progress.
 
-For a real fail-closed guarantee, the agent must run in a sandbox or container
-that denies direct network access. MCP constrains what the agent can ask Agent
-Boost to do; the sandbox constrains what it can bypass.
+Ask the event operator to scan the QR and send the amount shown—normally `0.2`
+Sepolia ETH. Partial funding is supported: the QR automatically updates to the
+remaining amount. Do not send ETH on mainnet or another network.
 
-### Compatibility mode: process wrapper
-
-Existing agents can start without source changes:
-
-```console
-agent-boost run --mode dark -- your-local-agent --its --usual --flags
-```
-
-The wrapper injects `HTTP_PROXY`, `HTTPS_PROXY`, and an
-`AGENT_BOOST_RPC_URL` pointing to Agent Boost's loopback endpoints. This is a
-best-effort compatibility path because applications can ignore proxy variables
-or open sockets directly. Run the child in a network-restricted sandbox before
-calling this mode fail-closed.
-
-See [Integration](docs/INTEGRATION.md) for lifecycle, MCP, compatibility, and
-operator approval examples, and the [Capability contract](docs/CAPABILITY-CONTRACT.md)
-for versioning, identifiers, authority, and result semantics.
-
-## Wallet flow
-
-For general wallet-dependent reasoning, the agent can read a coherent snapshot:
+Hermes long-polls durable setup state without flooding the conversation:
 
 ```text
-wallet_get_context(chain_id="eip155:11155111")
-
-→ account_id: eip155:11155111:0x…
-→ balances: USDC total 25.00, spendable 18.00, reserved 7.00
-→ fee asset: ETH, spendable 0.0098
-→ policy remaining: 15.00 USDC
-→ snapshot freshness and dark-route health
+creating_wallet
+  → preparing_privacy
+  → awaiting_funding
+  → funding_pending
+  → funded_public
+  → shielding
+  → private_ready
 ```
 
-For a payment, the agent asks Agent Boost to evaluate the exact operation. The
-agent does not join primitive reads or calculate feasibility from a total
-balance alone:
+When `private_ready` appears, at least `0.1` Sepolia ETH is spendable through
+the configured private-payment path.
 
-```text
-wallet_plan_payment(
-  chain_id="eip155:11155111",
-  to_account_id="eip155:11155111:0x…",
-  asset_type="eip155:11155111/erc20:0x…",
-  amount_atomic="10000000",
-  fee_ceiling={
-    asset_type: "eip155:11155111/slip44:60",
-    amount_atomic: "30000000000000"
-  }
-)
+### 2. Send one test payment
 
-→ address: 0x…
-→ balances: USDC total 25.00, spendable 18.00, reserved 7.00
-→ estimated network fee: 0.00002 ETH
-→ policy remaining: 15.00 USDC
-→ checks: principal pass, fee asset pass, policy pass, dark route pass
-→ decision: allow
-→ decision_id: wd_01J…
-```
+Tell Hermes, for example:
 
-The read-only plan requires no operator approval and uses the private RPC route.
-It binds the exact chain, account, destination, asset, amount, and fee ceiling
-to an opaque, expiring decision ID. The ID is provenance, not authority. The
-agent can then prepare an operator request without copying the payment terms a
-second time:
+> Send 0.02 Sepolia ETH privately to
+> 0x2222222222222222222222222222222222222222.
 
-```text
-# Agent tool call returns req_01J...
-wallet_prepare_payment(
-  decision_id="wd_01J…",
-  client_request_id="hermes-message-847-payment-1"
-)
-```
+Hermes first reads current wallet context and creates a short-lived plan. It
+must read back the recipient, exact ETH and wei amount, Sepolia network,
+remaining delegation, expiry, and privacy limitations. Nothing is sent until
+the user verbally confirms those exact terms.
 
-```console
-# Operator control plane
-agent-boost requests
-agent-boost inspect req_01J...
-agent-boost approve req_01J...
-```
+Agent Boost does not listen to the conversation itself. Hermes reports the
+user's confirmation with `user_confirmed: true`; this is a conversational demo
+control, not independent authentication or an out-of-band approval channel.
 
-Preparation revalidates and atomically reserves principal, fee ceiling, and
-policy allowance, then returns `awaiting_operator`. Plans never reserve funds.
-Agent Boost asks the Kohaku adapter to sign only after approval, broadcasts over
-the loopback RPC forwarder, and returns a redacted receipt. Immediately before
-signing, Agent Boost refreshes balances, fees, nonce, reservations, policy, and
-route health so stale state cannot authorize an unaffordable transaction.
+After confirmation, Hermes executes the immutable plan with a stable request
+ID. The default policy permits:
 
-Kohaku CLI currently routes privacy-related non-RPC HTTP over Tor but documents
-Ethereum RPC separately. The POC therefore treats the RPC forwarder as a hard
-security boundary: wallet RPC must go to Agent Boost on loopback, and Agent
-Boost must send the upstream request through Shade Tree to an HTTPS upstream.
-Plaintext upstream RPC is rejected because a Grove node would otherwise be able
-to read or modify the JSON-RPC payload. A direct-RPC canary is part of `doctor`
-and the end-to-end tests.
+- Sepolia only (`eip155:11155111`);
+- native test ETH only;
+- at most `0.05` ETH;
+- one payment for the lifetime of the setup;
+- execution within 24 hours of setup;
+- no mainnet path.
 
-## First funding
+Agent Boost asks Kohaku to unshield the `0.1` ETH note to a fresh
+wallet-controlled account and append the exact recipient transfer as a tail
+call. Kohaku waits for UserOperation inclusion. Agent Boost additionally checks
+that the recipient's public balance increased by at least the requested amount
+before reporting `confirmed`; otherwise the durable result remains `submitted`
+or unresolved rather than guessing.
 
-A private wallet starts empty. A stealth receive identifier can reduce durable
-address reuse, but it does not hide the funder's identity, the amount, or timing
-on a public chain.
+## What Hermes can see
 
-The POC makes that limitation visible:
+The agent needs state to make decisions, so address and balance visibility is
+intentional.
 
-```console
-agent-boost wallet bootstrap --testnet
-```
+| Hermes can read | Not returned through Agent Boost tools |
+| --- | --- |
+| Sepolia address and chain ID | Seed phrase and private keys |
+| Live funding-address balance | Kohaku wallet password |
+| Live aggregate public-wallet ETH | Raw Tornado notes and proofs |
+| Live private-payment spendable ETH | Raw signed transactions |
+| Delegation limits, expiry, and use | RPC URL and local filesystem paths |
+| Plan, request, and confirmation state | Arbitrary Kohaku command execution |
 
-The command creates a one-time Sepolia destination and requests disposable test
-funds over the private egress route. It is a demo bootstrap, not an anonymous
-mainnet funding claim. The sponsor and chain observer can still correlate the
-transfer.
+The MCP surface contains seven native tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `capabilities` | Contract, live readiness, policy, and privacy limits |
+| `onboarding_start` | Create or resume setup and open/present funding UI |
+| `onboarding_status` | Long-poll durable setup progress by revision |
+| `wallet_get_context` | Refresh address, balances, and delegation state |
+| `wallet_plan_private_payment` | Validate one exact recipient and wei amount |
+| `wallet_execute_private_payment` | Execute a confirmed, unexpired plan |
+| `wallet_get_request` | Read durable redacted request state |
+
+All monetary authority values use canonical integer strings in wei. Plans are
+read-only, expire after five minutes, and bind recipient plus amount in a
+SHA-256 intent digest. Execution revalidates setup, private balance, the
+Sepolia chain ID, configured execution limit, one-payment rule, lifetime
+allowance, expiry, and idempotency before invoking Kohaku.
 
 ## Architecture
 
-![Agent Boost local privacy sidecar architecture](assets/agent-boost-architecture.svg)
+```mermaid
+flowchart LR
+    U[User] <-->|conversation and verbal approval| H[Hermes]
+    H <-->|MCP over stdio| A[Agent Boost sidecar]
+    A -->|loopback-only funding page| UI[QR onboarding UI]
+    A -->|bounded non-shell argv| K[Kohaku CLI]
+    K -->|shield / unshield on Sepolia| E[(Ethereum Sepolia)]
+    O[Event operator] -->|scan QR and fund| E
+    A -->|address, balances, policy, status| H
+```
 
-Agent Boost exposes only local surfaces:
+Agent Boost starts as the Hermes MCP child process and resumes its durable local
+state after restarts. The onboarding web server binds only to `127.0.0.1`
+(default port `9183`), accepts only loopback hosts and same-origin requests, and
+serves a read-only UI with a restrictive Content Security Policy. Port `9180`
+is deliberately reserved so this POC cannot collide with an older local
+service. A separate exclusive loopback bind on port `9184` is a crash-safe
+process ownership lock; a second Agent Boost process fails closed instead of
+sharing the wallet.
 
-| Surface | Default | Purpose |
-| --- | --- | --- |
-| Agent tools | MCP over stdio | Strict intent-level integration |
-| HTTP proxy | `127.0.0.1:9181` | Compatibility egress path |
-| Ethereum JSON-RPC | `127.0.0.1:9182` | Forced wallet RPC path |
-| Operator control | Unix socket; separate authority required | Unlock, inspect, approve, stop |
+Local state writes are flushed and atomically renamed. Agent Boost directories
+are hardened to `0700` and state, password, wallet, and provenance files to
+`0600`. Kohaku commands run without a shell, are serialized per wallet, pass
+the RPC endpoint through the child environment rather than argv, and never
+return raw upstream stderr through MCP.
 
-The sidecar never exposes an administrative TCP listener. Both TCP endpoints
-bind to loopback. Wallet signing, policy, receipts, and adapter lifecycle stay
-inside the operator boundary. A `0600` socket is not sufficient if the agent and
-sidecar share an OS identity; the POC must run them under separate identities
-with sandbox path denial, or require cryptographic operator authentication.
+See [Integration](docs/INTEGRATION.md),
+[Capability contract](docs/CAPABILITY-CONTRACT.md),
+[Architecture](docs/ARCHITECTURE.md), and
+[Threat model](docs/THREAT-MODEL.md) for the exact boundaries.
 
-Read the full [Architecture](docs/ARCHITECTURE.md),
-[Threat model](docs/THREAT-MODEL.md), and
-[Capability contract](docs/CAPABILITY-CONTRACT.md).
+## Privacy claims and limits
+
+The accurate claim for this POC is:
+
+> A privacy-improving, shielded Sepolia test payment.
+
+It is not a guarantee of anonymity.
+
+- Initial funding is public. The funder, destination, amount, and timing are
+  visible on Sepolia.
+- Shielding and later unshielding break the direct deposit/withdrawal link, but
+  timing, amounts, a small testnet anonymity set, and protocol activity may
+  still correlate them.
+- Ethereum RPC is HTTPS but not privately routed in this wallet-first build.
+  The RPC provider can observe requests and network metadata.
+- Kohaku uses Tor for supported non-RPC privacy-protocol traffic, but Agent
+  Boost has not yet added general private egress.
+- A fresh or stealth address alone does not hide its funding transaction.
+- The disposable wallet has no recovery or export UX in Agent Boost.
+- Recipient-balance-delta confirmation proves delivery of at least the amount;
+  it is not cryptographic attribution when unrelated concurrent transfers are
+  possible.
+
+The next module is anonymous egress. It is intentionally not claimed or exposed
+by this release.
+
+## Local security boundary
+
+Agent Boost keeps secrets out of tool results, prompts, command arguments, and
+normal logs. That is useful, but it is not an operating-system custody boundary
+when Hermes and Agent Boost run as the same user. A locally privileged agent
+with unrestricted shell and filesystem access could read both the encrypted
+Kohaku wallet and its local password file. The Hermes skills tell the agent not
+to do this; instructions are not enforcement.
+
+For this POC, the practical safety boundary is disposable Sepolia-only funds,
+a maximum one-time payment, no mainnet configuration, and explicit verbal
+confirmation. A future real-value release would require a separate service
+identity or hardware/cryptographic signer that the agent process cannot access.
+The confirmation boolean is supplied by Hermes, so a compromised Hermes has
+the same authority as a falsely confirmed conversation within these limits.
 
 ## Configuration
 
-The checked-in [example configuration](agent-boost.example.toml) contains no
-credentials. Runtime secrets are loaded from protected local files or an
-interactive prompt.
+The POC is deliberately small and uses environment variables rather than a
+secret-bearing repository config.
 
-```toml
-mode = "dark"
-network = "sepolia"
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `AGENT_BOOST_RPC_URL` | Public HTTPS Sepolia RPC | Sepolia JSON-RPC endpoint; HTTPS required |
+| `AGENT_BOOST_UI_PORT` | `9183` | Loopback funding page port; `9180` and lock port `9184` forbidden |
+| `AGENT_BOOST_FUNDING_WEI` | `200000000000000000` | Requested initial funding |
+| `AGENT_BOOST_SHIELD_WEI` | `100000000000000000` | Tornado shield/note amount |
+| `AGENT_BOOST_PAYMENT_LIMIT_WEI` | `50000000000000000` | One-payment maximum |
+| `AGENT_BOOST_OPEN_UI` | `true` | Attempt to open a graphical browser |
+| `AGENT_BOOST_EXECUTE` | `true` | Enable bounded testnet execution |
+| `AGENT_BOOST_STATE_DIR` | `~/.local/share/agent-boost` | Durable state root |
 
-[wallet]
-adapter = "kohaku"
-require_approval = true
+The RPC URL is never returned through the MCP interface. Do not put credentialed
+URLs in the repository or paste them into a model conversation.
 
-[egress]
-adapter = "shade-tree"
-fail_closed = true
+## Development
 
-[rpc]
-listen = "127.0.0.1:9182"
-upstream_env = "AGENT_BOOST_RPC_UPSTREAM"
-route = "egress"
-require_https = true
+```console
+npm ci
+npm run check
+npm test
+npm run build
+node dist/cli.js doctor
 ```
 
-## Failure contract
+Focused dependency repair:
 
-Dark mode has no silent downgrade:
-
-- if Shade Tree is unhealthy, dark requests fail;
-- if proxied RPC cannot be proven, wallet network operations fail;
-- if wallet state cannot be refreshed to a specific block, Agent Boost returns
-  an indeterminate decision and never produces `can_afford: true`;
-- if Kohaku is locked, wallet operations pause for the operator;
-- if approval expires or is rejected, no signature is produced;
-- if receipt storage is unavailable, side-effecting requests fail before
-  execution;
-- compatibility mode is never labeled fail-closed without external network
-  isolation.
-
-## Acceptance contract
-
-The first public POC is ready only when automated tests prove all of these:
-
-1. A clean machine can install and pass `agent-boost doctor` from documented
-   prerequisites.
-2. Strict mode can fetch through Shade Tree while the agent has no direct
-   network path.
-3. Killing private egress fails the request without a clearnet retry.
-4. A disposable Sepolia wallet can receive funds without revealing seed or
-   private key to the agent.
-5. `wallet_get_context` gives the agent public addresses, total/spendable/
-   reserved balances, fee assets, policy allowances, and freshness without
-   exposing signing material.
-6. `wallet_plan_payment` checks principal, fee asset, policy, feature support,
-   route health, and freshness for exact terms, returning asset-specific
-   blockers or an intent-bound decision ID.
-7. Every Kohaku RPC request reaches only the loopback forwarder and exits via
-   the configured private route.
-8. Preparing a payment atomically revalidates and reserves but cannot sign or
-   broadcast until the operator approves the exact network, asset, amount,
-   destination, and fee bound.
-9. Receipts omit secrets, prompt contents, response bodies, and wallet unlock
-   material by default.
-10. Restarting the sidecar preserves encrypted wallet state and resolves pending
-   requests without double-broadcasting.
-11. The agent runtime cannot open the operator socket or wallet-state path even
-    when it has terminal or code-execution tools.
-12. Every agent-facing tool has versioned input and output schemas, and all
-    checked-in examples validate against them.
-
-## Intended repository layout
-
-```text
-agent-boost/
-├── cmd/                 # agent-boost CLI and sidecar entry points
-├── core/                # policy, approvals, lifecycle, and receipts
-├── adapters/
-│   ├── kohaku/          # wallet process adapter
-│   └── shade-tree/      # egress process adapter
-├── mcp/                 # strict agent-facing tool server
-├── spec/                # versioned capability and result schemas
-├── integrations/hermes/ # optional workflow skill and config example
-├── config/              # schema, defaults, and migrations
-├── tests/e2e/           # leak, failure, restart, and approval tests
-├── docs/                # public technical documentation
-└── assets/              # public diagrams and media
+```console
+make install-kohaku
 ```
 
-The adapter boundary is process-based. Agent Boost owns policy and orchestration
-but does not absorb wallet cryptography or anonymity-network implementation.
-Adapters can change without changing the agent-facing tool contract.
-
-## Security scope
-
-The POC is designed to reduce key exposure, direct destination-IP linkage, and
-accidental unapproved signing. It does not protect against a compromised host,
-global traffic analysis, application-layer identity such as logins and cookies,
-wallet funding correlation, malicious destinations, chain analysis, or defects
-in Kohaku, Shade Tree, Tor, upstream RPC providers, or Agent Boost itself.
-
-Report security issues privately to the maintainers rather than opening a
-public issue with exploit details. A dedicated disclosure channel will be added
-before the first downloadable release.
-
-## Media
-
-[Share card (PNG)](assets/agent-boost-social-card.png) ·
-[Share card (SVG)](assets/agent-boost-social-card.svg) ·
-[Architecture (SVG)](assets/agent-boost-architecture.svg)
+`npm test` covers policy and idempotency, state permissions, command injection
+resistance, exact Kohaku argv, Sepolia-only RPC, MCP schemas, Hermes config
+drift, QR contents, loopback request filtering, UI state honesty, responsive
+layout contracts, and recipient-delivery confirmation.
 
 ## License
 
-No license has been selected yet. Do not assume reuse rights until a `LICENSE`
-file is present; choosing one is a release blocker.
+No license has been granted yet. Treat this repository as all rights reserved
+until a license file is added.
