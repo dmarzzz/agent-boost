@@ -198,6 +198,113 @@ test("restart marks an interrupted payment indeterminate without restoring autho
   assert.ok(plan.blockers.includes("DELEGATION_ALREADY_USED"));
 });
 
+test("an adapter error after authority handoff remains indeterminate", async () => {
+  const store = await readyStore();
+  const wallet = new PaymentWallet();
+  wallet.executePrivatePayment = async () => {
+    wallet.calls += 1;
+    throw new Error("transport disappeared after possible broadcast");
+  };
+  const controller = new PaymentController({
+    store,
+    wallet,
+    clock: { now: () => new Date(1_000) },
+  });
+  const plan = await controller.plan({
+    recipient: "0x2222222222222222222222222222222222222222",
+    amountWei: "20000000000000000",
+  });
+  const request = await controller.execute({
+    decisionId: plan.decisionId,
+    clientRequestId: "adapter-error-payment",
+    userConfirmed: true,
+  });
+  assert.equal(request.phase, "indeterminate");
+  assert.equal(request.error?.code, "PRIVATE_PAYMENT_UNRESOLVED");
+});
+
+test("stop refuses new execution and drains an active payment", async () => {
+  const store = await readyStore();
+  const wallet = new PaymentWallet();
+  let release!: () => void;
+  let started!: () => void;
+  const didStart = new Promise<void>((resolve) => { started = resolve; });
+  const canFinish = new Promise<void>((resolve) => { release = resolve; });
+  wallet.executePrivatePayment = async () => {
+    wallet.calls += 1;
+    started();
+    await canFinish;
+    return { transactionHash: `0x${"ef".repeat(32)}`, confirmed: true };
+  };
+  const controller = new PaymentController({
+    store,
+    wallet,
+    clock: { now: () => new Date(1_000) },
+  });
+  const plan = await controller.plan({
+    recipient: "0x2222222222222222222222222222222222222222",
+    amountWei: "20000000000000000",
+  });
+  const execution = controller.execute({
+    decisionId: plan.decisionId,
+    clientRequestId: "drained-active-payment",
+    userConfirmed: true,
+  });
+  await didStart;
+  let stopped = false;
+  const stopping = controller.stop().then(() => { stopped = true; });
+  await Promise.resolve();
+  assert.equal(stopped, false);
+  release();
+  await Promise.all([execution, stopping]);
+  assert.equal(stopped, true);
+  await assert.rejects(
+    controller.execute({
+      decisionId: plan.decisionId,
+      clientRequestId: "another-payment-after-stop",
+      userConfirmed: true,
+    }),
+    /PAYMENT_RUNTIME_STOPPING/,
+  );
+});
+
+test("stop wins while execution is waiting on its initial state read", async () => {
+  const store = await readyStore();
+  const wallet = new PaymentWallet();
+  const controller = new PaymentController({
+    store,
+    wallet,
+    clock: { now: () => new Date(1_000) },
+  });
+  const plan = await controller.plan({
+    recipient: "0x2222222222222222222222222222222222222222",
+    amountWei: "20000000000000000",
+  });
+
+  const originalRead = store.read.bind(store);
+  let releaseRead!: () => void;
+  let signalReadStarted!: () => void;
+  const readStarted = new Promise<void>((resolve) => { signalReadStarted = resolve; });
+  const continueRead = new Promise<void>((resolve) => { releaseRead = resolve; });
+  store.read = async () => {
+    signalReadStarted();
+    await continueRead;
+    return originalRead();
+  };
+
+  const execution = controller.execute({
+    decisionId: plan.decisionId,
+    clientRequestId: "stopped-during-state-read",
+    userConfirmed: true,
+  });
+  await readStarted;
+  await controller.stop();
+  releaseRead();
+
+  await assert.rejects(execution, /PAYMENT_RUNTIME_STOPPING/);
+  assert.equal(wallet.calls, 0);
+});
+
 test("execution rechecks Sepolia, delegation expiry, and the live private balance", async () => {
   let nowMs = 1_000;
   const scenarios = [

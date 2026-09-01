@@ -19,6 +19,12 @@ import { SepoliaRpcClient } from "./rpc/index.js";
 import { StateStore } from "./state/store.js";
 import { RuntimeLock } from "./state/runtime-lock.js";
 import {
+  TorRpcProxy,
+  TorRpcRoute,
+  type TorRpcProxyPort,
+  type TorRpcRoutePort,
+} from "./tor/index.js";
+import {
   generateFundingQrPng,
   OnboardingUiServer,
   openVisibleBrowser,
@@ -27,6 +33,8 @@ import {
 export interface RuntimeDependencies {
   wallet?: WalletAdapter;
   chain?: ChainClient;
+  rpcRoute?: TorRpcRoutePort;
+  rpcProxy?: TorRpcProxyPort;
   openBrowser?: (url: string) => Promise<boolean>;
 }
 
@@ -34,6 +42,8 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   readonly #config: AgentBoostConfig;
   readonly #store: StateStore;
   readonly #runtimeLock = new RuntimeLock();
+  readonly #rpcRoute: TorRpcRoutePort | undefined;
+  readonly #rpcProxy: TorRpcProxyPort | undefined;
   readonly #wallet: WalletAdapter;
   readonly #chain: ChainClient;
   readonly #onboarding: OnboardingController;
@@ -44,17 +54,42 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   constructor(config: AgentBoostConfig, dependencies: RuntimeDependencies = {}) {
     this.#config = config;
     this.#store = new StateStore(config.stateDir);
+    const needsRpcRoute =
+      dependencies.rpcRoute !== undefined ||
+      dependencies.wallet === undefined ||
+      dependencies.chain === undefined;
+    this.#rpcRoute = needsRpcRoute
+      ? dependencies.rpcRoute ??
+        new TorRpcRoute({
+          rpcUrl: config.rpcUrl,
+          dataDir: config.torDataDir,
+          bootstrapTimeoutMs: config.torBootstrapTimeoutMs,
+        })
+      : undefined;
+    this.#rpcProxy = dependencies.wallet === undefined
+      ? dependencies.rpcProxy ??
+        new TorRpcProxy({
+          upstreamUrl: config.rpcUrl,
+          fetch: requiredRpcRoute(this.#rpcRoute).fetchRpc,
+          port: config.torRpcPort,
+        })
+      : dependencies.rpcProxy;
     this.#wallet =
       dependencies.wallet ??
       new KohakuWalletAdapter({
         dataDir: config.kohakuDataDir,
         walletName: config.kohakuWalletName,
         passwordFile: config.kohakuPasswordFile,
-        rpcUrl: config.rpcUrl,
+        rpcUrl: requiredRpcProxy(this.#rpcProxy).url,
         executable: config.kohakuBin,
         tornadoWithdrawalWei: config.shieldAmountWei,
       });
-    this.#chain = dependencies.chain ?? new SepoliaRpcClient(config.rpcUrl);
+    this.#chain =
+      dependencies.chain ??
+      new SepoliaRpcClient({
+        rpcUrl: config.rpcUrl,
+        fetch: requiredRpcRoute(this.#rpcRoute).fetchRpc,
+      });
     this.#onboarding = new OnboardingController({
       store: this.#store,
       wallet: this.#wallet,
@@ -69,7 +104,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       executionLimitWei: config.paymentLimitWei,
     });
     this.#ui = new OnboardingUiServer({
-      getSnapshot: () => this.#onboarding.getPublicSnapshot(),
+      getSnapshot: () => this.#getPublicSnapshot(),
       host: config.uiHost,
       port: config.uiPort,
     });
@@ -81,16 +116,29 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     try {
       await ensurePasswordFile(this.#config.kohakuPasswordFile);
       await this.#store.initialize();
+      if (this.#rpcRoute) {
+        await this.#rpcRoute.ready();
+        await this.#chain.assertSepolia();
+      }
+      await this.#rpcProxy?.start();
       await this.#payments.recoverInterruptedRequests();
       await this.#onboarding.resume();
     } catch (error) {
+      await this.#rpcProxy?.stop().catch(() => undefined);
+      await this.#rpcRoute?.close().catch(() => undefined);
       await this.#runtimeLock.release();
       throw error;
     }
   }
 
   async shutdown(): Promise<void> {
-    await Promise.allSettled([this.#onboarding.stop(), this.#ui.stop()]);
+    await Promise.allSettled([
+      this.#onboarding.stop(),
+      this.#payments.stop(),
+      this.#ui.stop(),
+    ]);
+    await this.#rpcProxy?.stop().catch(() => undefined);
+    await this.#rpcRoute?.close().catch(() => undefined);
     await this.#runtimeLock.release();
   }
 
@@ -98,7 +146,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     const state = await this.#store.read();
     const setup = state.onboarding;
     return {
-      contract: "org.agentboost.wallet/1.0",
+      contract: "org.agentboost.wallet/1.1",
       chain_id: "eip155:11155111",
       network_name: "Sepolia",
       asset_type: "eip155:11155111/slip44:60",
@@ -118,11 +166,21 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         claim: "privacy-improving shielded Sepolia test payment",
         hides_direct_deposit_withdrawal_link: true,
         guarantees_anonymity: false,
-        rpc_egress_private: false,
+        rpc_egress: {
+          mode: "tor",
+          scope: "ethereum_json_rpc",
+          covers: ["agent_boost", "kohaku"],
+          dns_resolution: "tor_exit",
+          direct_fallback: false,
+          hides_origin_ip_from_rpc_provider: true,
+          hides_rpc_activity_from_provider: false,
+        },
+        general_agent_egress_private: false,
         funding_source_private: false,
         limitations: [
           "funding source and amount remain public",
-          "Ethereum RPC metadata remains visible until private egress is added",
+          "the RPC provider still sees methods, addresses, payloads, and timing",
+          "Hermes and other agent traffic are not routed through Tor",
           "timing and the Sepolia anonymity set can enable correlation",
           "the wallet is disposable and has no recovery UX",
         ],
@@ -132,13 +190,20 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
           name: "kohaku",
           compatible_commit: KohakuWalletAdapter.compatibleCommit,
         },
-        egress: { name: "shade-tree", available: false, stage: "next" },
+        rpc_egress: {
+          name: "tor-js",
+          available: true,
+          scope: "ethereum_json_rpc",
+          direct_fallback: false,
+        },
+        general_egress: { name: "shade-tree", available: false, stage: "next" },
       },
       readiness: {
         phase: setup?.phase ?? "not_started",
         wallet_ready: setup?.phase === "private_ready",
         address_ready: setup?.address !== undefined,
-        egress_ready: false,
+        rpc_egress: this.#rpcRoute?.status ?? "ready",
+        general_egress_ready: false,
       },
     };
   }
@@ -169,7 +234,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       });
       record = state.onboarding as OnboardingRecord;
     }
-    const snapshot = await this.#onboarding.getPublicSnapshot();
+    const snapshot = await this.#getPublicSnapshot();
     const remaining =
       BigInt(snapshot.requiredFundingWei) - BigInt(snapshot.publicBalanceWei);
     const qrPngBase64 =
@@ -241,7 +306,13 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       },
       delegation: record.delegation,
       freshness: { observed_at: record.updatedAt, revision: record.revision },
-      egress_privacy: false,
+      rpc_route: {
+        mode: "tor",
+        scope: "ethereum_json_rpc",
+        status: this.#rpcRoute?.status ?? "ready",
+        direct_fallback: false,
+      },
+      general_egress_privacy: false,
     };
   }
 
@@ -270,12 +341,40 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       state_path: this.#store.path,
       onboarding: state.onboarding,
       requests: Object.values(state.requests),
+      rpc_route: {
+        mode: "tor",
+        scope: "ethereum_json_rpc",
+        status: this.#rpcRoute?.status ?? "ready",
+        direct_fallback: false,
+      },
+    };
+  }
+
+  async #getPublicSnapshot(): Promise<PublicOnboardingSnapshot> {
+    return {
+      ...(await this.#onboarding.getPublicSnapshot()),
+      rpcRoute: {
+        mode: "tor",
+        scope: "ethereum_json_rpc",
+        status: this.#rpcRoute?.status ?? "ready",
+        directFallback: false,
+      },
     };
   }
 }
 
 function fundingAddressBalanceFallback(record: OnboardingRecord): bigint {
   return BigInt(record.publicBalanceWei);
+}
+
+function requiredRpcRoute(route: TorRpcRoutePort | undefined): TorRpcRoutePort {
+  if (!route) throw new Error("Tor RPC route is required");
+  return route;
+}
+
+function requiredRpcProxy(proxy: TorRpcProxyPort | undefined): TorRpcProxyPort {
+  if (!proxy) throw new Error("Tor RPC proxy is required");
+  return proxy;
 }
 
 export async function createLocalRuntime(

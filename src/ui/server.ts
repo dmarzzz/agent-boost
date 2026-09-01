@@ -156,6 +156,14 @@ async function publicSnapshot(
       expiresAt: snapshot.delegation.expiresAt,
       enabled: snapshot.delegation.enabled,
     },
+    ...(snapshot.rpcRoute === undefined ? {} : {
+      rpcRoute: {
+        mode: "tor" as const,
+        scope: "ethereum_json_rpc" as const,
+        status: snapshot.rpcRoute.status,
+        directFallback: false as const,
+      },
+    }),
     ...(snapshot.error === undefined ? {} : {
       error: {
         code: snapshot.error.code,

@@ -32,6 +32,8 @@ correct decision-making, not secrets.
    projection.
 9. Files and directories use private local permissions.
 10. Only one Agent Boost process can own the local wallet runtime at a time.
+11. All Agent Boost and Kohaku Ethereum JSON-RPC uses the fixed Tor route with
+    remote hostname resolution and no direct fallback.
 
 ## Important non-goals
 
@@ -53,8 +55,10 @@ but amount, timing, protocol usage, a small anonymity set, the funder, the
 recipient, RPC observation, and cross-session behavior can enable correlation.
 The recipient is public after payment.
 
-Kohaku routes supported non-RPC privacy traffic through Tor, but Ethereum RPC is
-direct HTTPS in this build. Agent Boost does not yet provide anonymous egress.
+Agent Boost routes its own and Kohaku's Ethereum JSON-RPC through embedded Tor.
+Kohaku separately routes supported non-RPC privacy traffic through its own Tor
+client. This is not anonymous general egress: Hermes, Matrix/model traffic, the
+funding transaction, on-chain actions, and other process traffic are uncovered.
 
 ### Real-value safety
 
@@ -76,7 +80,9 @@ formal verification. The event boundary is disposable, valueless Sepolia ETH.
 | QR is framed or fetched remotely | Loopback bind, host/origin checks, CSP, no-store | Other same-user local processes can connect |
 | Shield is duplicated after restart | Persist `shielding`, then poll private balance | Crash before adapter receives command can stall setup |
 | Hash is mistaken for delivery | Recipient balance-delta verification | Concurrent unrelated transfer can produce a false attribution |
-| RPC observer correlates activity | HTTPS confidentiality in transit | Provider still sees IP, methods, addresses, and timing |
+| RPC observer correlates activity | HTTPS through Tor, remote DNS, fixed-origin fail-closed relay | Provider no longer sees the machine IP, but still sees exit IP, methods, addresses, payloads, and timing |
+| Local process abuses RPC relay | Loopback bind, random 256-bit path, exact Host/path, required-method allowlist, size/concurrency limits, post-call traffic-log redaction | Same-UID process/env inspection is not a custody boundary |
+| Tor becomes unavailable | No global-fetch/direct retry; route becomes failed | Operations stop; an ambiguous broadcast remains unresolved |
 | Dependency supply-chain drift | Commit pin, lockfile install, local hashes | Initial Git/npm fetch still trusts upstream transport/registries |
 
 ## Logging and storage
@@ -95,13 +101,15 @@ reuse them for real value.
 
 The POC may be demonstrated only when:
 
-- `agent-boost doctor` confirms Node, pinned Kohaku, and Sepolia RPC;
+- `agent-boost doctor` confirms Node, pinned Kohaku, a Tor-observed exit, and
+  Sepolia RPC through Tor;
 - tests and build pass;
 - the operator funds only the QR's Sepolia address;
 - the user hears the privacy and valueless-funds limitations;
 - payment is at or below the configured maximum;
 - the exact recipient and amount receive verbal confirmation;
-- no claim of anonymity, private RPC, or production custody is made.
+- no claim of guaranteed anonymity, general private egress, or production
+  custody is made.
 
 The recipient and amount are resolved from the decision rather than accepted
 again. Execution reasserts Sepolia and refreshes private balance, then

@@ -13,17 +13,20 @@ seed storage, Tornado proving, signing, and broadcast.
 | Agent Boost MCP server | Schemas, policy, state, idempotency, UI lifecycle |
 | Onboarding UI | Read-only loopback QR, address, funding and shield progress |
 | Kohaku adapter | Wallet operations through fixed, non-shell argv |
-| Sepolia RPC client | HTTPS chain assertion and live public balance reads |
+| Tor RPC route | Embedded Arti client, fixed HTTPS origin, remote DNS, no direct fallback |
+| Loopback RPC relay | Random-path JSON-RPC bridge from Kohaku to the Tor route |
+| Sepolia RPC client | Tor-routed chain assertion and live public balance reads |
 | State store | Atomic durable setup, plan, request, and delegation records |
 
-The first release contains no proxy, RPC forwarder, general private egress, or
-operator approval dashboard.
+The first release contains no general agent egress or operator approval
+dashboard. Its proxy is narrowly limited to the configured Sepolia RPC origin.
 
 ## Local surfaces
 
 - MCP: stdio only;
 - onboarding page: `127.0.0.1:9183` by default;
 - runtime ownership lock: exclusive `127.0.0.1:9184` bind;
+- authenticated fixed-origin RPC relay: `127.0.0.1:9185` by default;
 - state: `~/.local/share/agent-boost` by default.
 
 The UI server rejects non-loopback Host headers, cross-site browser requests,
@@ -109,6 +112,12 @@ from a remembered or merely total balance.
 - the password is generated locally and passed to Kohaku by file path;
 - Kohaku invocations use argv arrays with `shell: false`;
 - the RPC URL is supplied through the child environment rather than argv;
+- Kohaku receives only the random authenticated loopback relay URL, never the
+  upstream provider URL;
+- inherited proxy variables and `KOHAKU_WITHOUT_TOR` are removed;
+- a child-process fetch guard permits loopback only and blocks Kohaku's built-in
+  public RPC fallback candidates;
+- the random relay token is redacted from Kohaku's traffic log after each call;
 - a process-shared loopback lock prevents concurrent wallet runtimes;
 - output and execution time are bounded;
 - operations are serialized by data directory and wallet name.
@@ -121,7 +130,8 @@ never overwritten.
 
 | Failure | Behavior |
 | --- | --- |
-| RPC is not HTTPS or not Sepolia | Fail before wallet setup |
+| RPC is not hostname-based HTTPS or not Sepolia | Fail before wallet setup |
+| Tor bootstrap, RPC, or relay fails | Fail closed; never retry directly |
 | Funding is partial | Keep waiting and update QR to the remainder |
 | Funding or private balance times out | Durable retryable failure |
 | Kohaku command fails | Redacted failure; no shell fallback |
@@ -131,4 +141,4 @@ never overwritten.
 | Submission cannot be proven delivered | Keep `submitted`/unresolved |
 | UI cannot open | Return QR through MCP when possible |
 | UI port unavailable | Continue with MCP QR/address fallback |
-| Private egress unavailable | Report it; never claim it exists |
+| General egress unavailable | Report it; never claim the RPC route covers it |

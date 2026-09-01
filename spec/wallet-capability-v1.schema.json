@@ -18,7 +18,7 @@
     "readiness"
   ],
   "properties": {
-    "contract": {"const": "org.agentboost.wallet/1.0"},
+    "contract": {"const": "org.agentboost.wallet/1.1"},
     "chain_id": {"const": "eip155:11155111"},
     "network_name": {"const": "Sepolia"},
     "asset_type": {"const": "eip155:11155111/slip44:60"},
@@ -58,7 +58,8 @@
         "claim",
         "hides_direct_deposit_withdrawal_link",
         "guarantees_anonymity",
-        "rpc_egress_private",
+        "rpc_egress",
+        "general_agent_egress_private",
         "funding_source_private",
         "limitations"
       ],
@@ -66,7 +67,31 @@
         "claim": {"const": "privacy-improving shielded Sepolia test payment"},
         "hides_direct_deposit_withdrawal_link": {"type": "boolean"},
         "guarantees_anonymity": {"const": false},
-        "rpc_egress_private": {"const": false},
+        "rpc_egress": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "scope",
+            "covers",
+            "dns_resolution",
+            "direct_fallback",
+            "hides_origin_ip_from_rpc_provider",
+            "hides_rpc_activity_from_provider"
+          ],
+          "properties": {
+            "mode": {"const": "tor"},
+            "scope": {"const": "ethereum_json_rpc"},
+            "covers": {
+              "const": ["agent_boost", "kohaku"]
+            },
+            "dns_resolution": {"const": "tor_exit"},
+            "direct_fallback": {"const": false},
+            "hides_origin_ip_from_rpc_provider": {"const": true},
+            "hides_rpc_activity_from_provider": {"const": false}
+          }
+        },
+        "general_agent_egress_private": {"const": false},
         "funding_source_private": {"const": false},
         "limitations": {
           "type": "array",
@@ -78,7 +103,7 @@
     "adapters": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["wallet", "egress"],
+      "required": ["wallet", "rpc_egress", "general_egress"],
       "properties": {
         "wallet": {
           "type": "object",
@@ -92,7 +117,18 @@
             }
           }
         },
-        "egress": {
+        "rpc_egress": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "available", "scope", "direct_fallback"],
+          "properties": {
+            "name": {"const": "tor-js"},
+            "available": {"const": true},
+            "scope": {"const": "ethereum_json_rpc"},
+            "direct_fallback": {"const": false}
+          }
+        },
+        "general_egress": {
           "type": "object",
           "additionalProperties": false,
           "required": ["name", "available", "stage"],
@@ -107,7 +143,7 @@
     "readiness": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["phase", "wallet_ready", "address_ready", "egress_ready"],
+      "required": ["phase", "wallet_ready", "address_ready", "rpc_egress", "general_egress_ready"],
       "properties": {
         "phase": {
           "enum": [
@@ -124,7 +160,8 @@
         },
         "wallet_ready": {"type": "boolean"},
         "address_ready": {"type": "boolean"},
-        "egress_ready": {"const": false}
+        "rpc_egress": {"enum": ["starting", "ready", "failed", "closed"]},
+        "general_egress_ready": {"const": false}
       }
     }
   },

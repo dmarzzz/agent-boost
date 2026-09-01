@@ -32,4 +32,11 @@ requires_exact_verbal_confirmation = true
 [rpc]
 network = "sepolia"
 require_https = true
-private_egress = false
+route = "tor"
+scope = "ethereum_json_rpc"
+loopback_port = 9185
+direct_fallback = false
+
+[general_egress]
+private = false
+next = "shade-tree"

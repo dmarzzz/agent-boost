@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -70,6 +70,28 @@ function command(invocation: CommandInvocation): string {
 }
 
 describe("KohakuWalletAdapter", () => {
+  it("accepts only HTTPS or the authenticated Agent Boost loopback RPC relay", () => {
+    const base = {
+      dataDir: "/tmp/agent-boost-kohaku",
+      walletName: "agent-boost",
+      passwordFile: "/tmp/agent-boost-password",
+    };
+    assert.doesNotThrow(() => new KohakuWalletAdapter({
+      ...base,
+      rpcUrl: `http://127.0.0.1:9185/rpc/${"a".repeat(43)}`,
+    }));
+    for (const rpcUrl of [
+      `http://localhost:9185/rpc/${"a".repeat(43)}`,
+      `http://127.0.0.1:9185/rpc/${"a".repeat(42)}`,
+      "http://rpc.example.invalid",
+    ]) {
+      assert.throws(
+        () => new KohakuWalletAdapter({ ...base, rpcUrl }),
+        /HTTPS or an authenticated Agent Boost loopback relay/,
+      );
+    }
+  });
+
   it("creates a Sepolia wallet idempotently and passes only the password path", async () => {
     let exists = false;
     const runner = new FakeRunner(async (invocation) => {
@@ -112,6 +134,42 @@ describe("KohakuWalletAdapter", () => {
       create.env?.RPC_URL,
       "https://sepolia.example.invalid/rpc-token",
     );
+    assert.equal(create.env?.AGENT_BOOST_ALLOWED_RPC_URL, create.env?.RPC_URL);
+    assert.match(create.env?.NODE_OPTIONS ?? "", /network-guard\.mjs/);
+  });
+
+  it("redacts the live relay token from Kohaku's persistent traffic log", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-boost-kohaku-log-"));
+    const dataDir = join(root, "kohaku");
+    const passwordFile = join(root, "secrets", "password");
+    const token = "a".repeat(43);
+    await mkdir(join(root, "secrets"), { recursive: true });
+    await writeFile(passwordFile, "password", { mode: 0o600 });
+    const runner = new FakeRunner(async (invocation) => {
+      if (command(invocation) === "list-wallets") {
+        return { exitCode: 0, stdout: '{"wallets":{}}', stderr: "" };
+      }
+      await mkdir(join(dataDir, "agent-boost"), { recursive: true });
+      await writeFile(
+        join(dataDir, "agent-boost", "network-traffic.ndjson"),
+        `${JSON.stringify({ url: `http://127.0.0.1:9185/rpc/${token}` })}\n`,
+      );
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+    const adapter = new KohakuWalletAdapter({
+      dataDir,
+      walletName: "agent-boost",
+      passwordFile,
+      rpcUrl: `http://127.0.0.1:9185/rpc/${token}`,
+      runner,
+    });
+    await adapter.ensureWallet();
+    const log = await readFile(
+      join(dataDir, "agent-boost", "network-traffic.ndjson"),
+      "utf8",
+    );
+    assert.doesNotMatch(log, new RegExp(token, "u"));
+    assert.match(log, /<redacted>/);
   });
 
   it("hardens wallet directories to 0700 and files to 0600", async () => {
@@ -349,5 +407,87 @@ describe("SpawnCommandRunner", () => {
 
     assert.equal(result.exitCode, 0);
     assert.deepEqual(JSON.parse(result.stdout), [literal]);
+  });
+
+  it("scrubs inherited proxy and Kohaku Tor-disable environment variables", async () => {
+    const runner = new SpawnCommandRunner({ defaultTimeoutMs: 5_000 });
+    const previous = {
+      KOHAKU_WITHOUT_TOR: process.env.KOHAKU_WITHOUT_TOR,
+      HTTPS_PROXY: process.env.HTTPS_PROXY,
+      https_proxy: process.env.https_proxy,
+      NODE_OPTIONS: process.env.NODE_OPTIONS,
+      AGENT_BOOST_RPC_URL: process.env.AGENT_BOOST_RPC_URL,
+    };
+    process.env.KOHAKU_WITHOUT_TOR = "1";
+    process.env.HTTPS_PROXY = "http://direct-fallback.invalid";
+    process.env.https_proxy = "http://lowercase-fallback.invalid";
+    process.env.NODE_OPTIONS = "--use-env-proxy";
+    process.env.AGENT_BOOST_RPC_URL = "https://credential.invalid/secret";
+    try {
+      const result = await runner.run({
+        executable: process.execPath,
+        args: [
+          "-e",
+          "process.stdout.write(JSON.stringify({disabled:process.env.KOHAKU_WITHOUT_TOR,proxy:process.env.HTTPS_PROXY,lower:process.env.https_proxy,nodeOptions:process.env.NODE_OPTIONS,upstream:process.env.AGENT_BOOST_RPC_URL,rpc:process.env.RPC_URL}))",
+        ],
+        env: { RPC_URL: `http://127.0.0.1:9185/rpc/${"a".repeat(43)}` },
+      });
+      assert.deepEqual(JSON.parse(result.stdout), {
+        rpc: `http://127.0.0.1:9185/rpc/${"a".repeat(43)}`,
+      });
+    } finally {
+      if (previous.KOHAKU_WITHOUT_TOR === undefined) delete process.env.KOHAKU_WITHOUT_TOR;
+      else process.env.KOHAKU_WITHOUT_TOR = previous.KOHAKU_WITHOUT_TOR;
+      if (previous.HTTPS_PROXY === undefined) delete process.env.HTTPS_PROXY;
+      else process.env.HTTPS_PROXY = previous.HTTPS_PROXY;
+      if (previous.https_proxy === undefined) delete process.env.https_proxy;
+      else process.env.https_proxy = previous.https_proxy;
+      if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = previous.NODE_OPTIONS;
+      if (previous.AGENT_BOOST_RPC_URL === undefined) delete process.env.AGENT_BOOST_RPC_URL;
+      else process.env.AGENT_BOOST_RPC_URL = previous.AGENT_BOOST_RPC_URL;
+    }
+  });
+
+  it("loads the Kohaku guard and blocks a public fallback fetch", async () => {
+    const runner = new SpawnCommandRunner({ defaultTimeoutMs: 5_000 });
+    const allowed = `http://127.0.0.1:9185/rpc/${"a".repeat(43)}`;
+    const guard = new URL("../src/kohaku/network-guard.mjs", import.meta.url).href;
+    const result = await runner.run({
+      executable: process.execPath,
+      args: [
+        "-e",
+        "fetch('https://ethereum-sepolia-rpc.publicnode.com').then(()=>process.exit(2)).catch((error)=>process.stdout.write(error.message))",
+      ],
+      env: {
+        AGENT_BOOST_ALLOWED_RPC_URL: allowed,
+        NODE_OPTIONS: `--import=${guard}`,
+      },
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, "Agent Boost blocked a direct Kohaku network fetch");
+  });
+
+  it("lets Kohaku install its Tor wrapper while its captured clearnet fetch stays guarded", async () => {
+    const runner = new SpawnCommandRunner({ defaultTimeoutMs: 5_000 });
+    const allowed = `http://127.0.0.1:9185/rpc/${"a".repeat(43)}`;
+    const guard = new URL("../src/kohaku/network-guard.mjs", import.meta.url).href;
+    const script = [
+      "const clearnetFetch = globalThis.fetch;",
+      "globalThis.fetch = async (input, init) => clearnetFetch(input, init);",
+      "fetch('https://ethereum-sepolia-rpc.publicnode.com')",
+      "  .then(() => process.exit(2))",
+      "  .catch((error) => process.stdout.write(error.message));",
+    ].join("\n");
+    const result = await runner.run({
+      executable: process.execPath,
+      args: ["-e", script],
+      env: {
+        AGENT_BOOST_ALLOWED_RPC_URL: allowed,
+        NODE_OPTIONS: `--import=${guard}`,
+      },
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, "Agent Boost blocked a direct Kohaku network fetch");
   });
 });

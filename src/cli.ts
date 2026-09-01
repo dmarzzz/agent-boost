@@ -16,6 +16,7 @@ import {
   readLocalStatus,
   type LocalAgentBoostRuntime,
 } from "./service.js";
+import { TorRpcProxy, TorRpcRoute } from "./tor/index.js";
 
 const VERSION = "0.1.0";
 
@@ -43,6 +44,18 @@ function flagValue(args: readonly string[], name: string): string | undefined {
 
 function print(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function exitAfterFlush(code: number): Promise<never> {
+  await Promise.all([
+    new Promise<void>((resolve) => process.stdout.write("", () => resolve())),
+    new Promise<void>((resolve) => process.stderr.write("", () => resolve())),
+  ]);
+  process.exit(code);
+}
+
+function currentExitCode(): number {
+  return typeof process.exitCode === "number" ? process.exitCode : 0;
 }
 
 async function withRuntime(
@@ -130,19 +143,43 @@ async function doctor(): Promise<void> {
     detail: kohaku.detail,
   });
 
+  const rpcRoute = new TorRpcRoute({
+    rpcUrl: config.rpcUrl,
+    dataDir: config.torDataDir,
+    bootstrapTimeoutMs: config.torBootstrapTimeoutMs,
+  });
+  const rpcProxy = new TorRpcProxy({
+    upstreamUrl: config.rpcUrl,
+    fetch: rpcRoute.fetchRpc,
+    port: config.torRpcPort,
+  });
   try {
-    await new SepoliaRpcClient(config.rpcUrl).assertSepolia();
+    await rpcRoute.ready();
+    await rpcRoute.verifyTor();
     checks.push({
-      name: "sepolia_rpc",
+      name: "tor",
       status: "pass",
-      detail: "HTTPS RPC returned Sepolia chain ID 11155111",
+      detail: "Tor bootstrapped and the verification service observed a Tor exit",
+    });
+    await rpcProxy.start();
+    await new SepoliaRpcClient({
+      rpcUrl: config.rpcUrl,
+      fetch: async (_input, init) => globalThis.fetch(rpcProxy.url, init),
+    }).assertSepolia();
+    checks.push({
+      name: "sepolia_rpc_over_tor",
+      status: "pass",
+      detail: "Authenticated loopback relay returned Sepolia chain ID 11155111 through Tor",
     });
   } catch (error) {
     checks.push({
-      name: "sepolia_rpc",
+      name: "tor_rpc_route",
       status: "fail",
-      detail: error instanceof Error ? error.message : "Sepolia RPC check failed",
+      detail: error instanceof Error ? error.message : "Tor RPC route check failed",
     });
+  } finally {
+    await rpcProxy.stop();
+    await rpcRoute.close();
   }
 
   try {
@@ -164,9 +201,9 @@ async function doctor(): Promise<void> {
   }
 
   checks.push({
-    name: "egress_privacy",
+    name: "general_egress_privacy",
     status: "warn",
-    detail: "Shade Tree is not enabled in the wallet-first build; RPC metadata is visible",
+    detail: "Shade Tree is not enabled; Hermes and non-RPC agent traffic are not Tor-routed",
   });
 
   const passed = checks.every((check) => check.status !== "fail");
@@ -192,7 +229,7 @@ async function main(): Promise<void> {
       return;
     case "doctor":
       await doctor();
-      return;
+      return exitAfterFlush(currentExitCode());
     case "status":
       print(await readLocalStatus(loadConfig()));
       return;
@@ -217,7 +254,7 @@ async function main(): Promise<void> {
         }
         if (record.phase === "failed") process.exitCode = 1;
       });
-      return;
+      return exitAfterFlush(currentExitCode());
     case "mcp": {
       const mode = flagValue(args, "--mode") ?? "dark";
       const contractMajor = flagValue(args, "--contract-major") ?? "1";
@@ -225,7 +262,7 @@ async function main(): Promise<void> {
         throw new Error("The POC supports only --mode dark --contract-major 1");
       }
       await withRuntime((runtime) => runStdioMcp(runtime));
-      return;
+      return exitAfterFlush(currentExitCode());
     }
     default:
       throw new Error(`Unknown command: ${command}\n\n${usage()}`);
@@ -234,6 +271,5 @@ async function main(): Promise<void> {
 
 main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`agent-boost: ${message}\n`);
-  process.exitCode = 1;
+  process.stderr.write(`agent-boost: ${message}\n`, () => process.exit(1));
 });

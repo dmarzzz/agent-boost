@@ -6,6 +6,8 @@ import { loadConfig } from "../src/config.js";
 test("loadConfig is Sepolia-only, HTTPS-only, and avoids reserved ports", () => {
   const config = loadConfig({}, "/tmp/agent-boost-home");
   assert.equal(config.uiPort, 9183);
+  assert.equal(config.torRpcPort, 9185);
+  assert.equal(config.torDataDir, "/tmp/agent-boost-home/.local/share/agent-boost/tor");
   assert.equal(config.fundingTargetWei, 200_000_000_000_000_000n);
   assert.equal(config.paymentLimitWei, 50_000_000_000_000_000n);
   assert.match(config.rpcUrl, /^https:/);
@@ -25,5 +27,13 @@ test("loadConfig is Sepolia-only, HTTPS-only, and avoids reserved ports", () => 
   assert.throws(
     () => loadConfig({ AGENT_BOOST_UI_PORT: "9184" }, "/tmp/home"),
     /reserved ports/,
+  );
+  assert.throws(
+    () => loadConfig({ AGENT_BOOST_UI_PORT: "9185" }, "/tmp/home"),
+    /reserved ports/,
+  );
+  assert.throws(
+    () => loadConfig({ AGENT_BOOST_TOR_RPC_PORT: "9183" }, "/tmp/home"),
+    /UI port/,
   );
 });

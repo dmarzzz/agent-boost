@@ -74,6 +74,10 @@ export const INDEX_HTML = `<!doctype html>
             <div><span class="fact-label">Received</span><strong id="public-balance">0 ETH</strong></div>
             <div><span class="fact-label">Private</span><strong id="private-balance">0 ETH</strong></div>
           </div>
+          <div class="route-row" id="rpc-route" data-status="starting" role="status" aria-live="polite" aria-atomic="true">
+            <span class="route-dot" aria-hidden="true"></span>
+            <span><span class="fact-label">RPC route</span><strong id="rpc-route-label">Checking Tor…</strong></span>
+          </div>
           <p class="testnet-warning"><span aria-hidden="true">◇</span> Sepolia ETH has no monetary value. Do not send mainnet assets.</p>
         </div>
       </section>
@@ -208,6 +212,12 @@ h1 { max-width: 630px; margin: 0; font-family: "Arial Narrow", "Roboto Condensed
 button:focus-visible { outline: 3px solid var(--volt); outline-offset: 3px; }
 .balance-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .balance-row strong { font: 600 14px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.route-row { display: flex; align-items: center; gap: 10px; color: var(--muted); }
+.route-row .fact-label { margin-bottom: 3px; }
+.route-row strong { color: var(--bone); font: 600 13px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.route-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--amber); box-shadow: 0 0 14px rgba(255,184,77,.28); }
+.route-row[data-status="ready"] .route-dot { background: var(--volt); box-shadow: 0 0 14px rgba(201,255,87,.34); }
+.route-row[data-status="failed"] strong, .route-row[data-status="closed"] strong { color: var(--amber); }
 .testnet-warning { margin: 0; padding: 12px 14px; border: 1px solid rgba(255,184,77,.2); border-radius: 10px; color: var(--amber); background: rgba(255,184,77,.04); font-size: 12px; line-height: 1.45; }
 .connection-status { position: fixed; right: 18px; bottom: 14px; margin: 0; color: #716a78; font: 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .connection-status[data-offline="true"] { color: var(--amber); }
@@ -256,6 +266,8 @@ const elements = {
   copyStatus: document.querySelector('#copy-status'),
   publicBalance: document.querySelector('#public-balance'),
   privateBalance: document.querySelector('#private-balance'),
+  rpcRoute: document.querySelector('#rpc-route'),
+  rpcRouteLabel: document.querySelector('#rpc-route-label'),
   errorPanel: document.querySelector('#error-panel'),
   errorMessage: document.querySelector('#error-message'),
   returnNote: document.querySelector('#return-note'),
@@ -271,7 +283,7 @@ const viewByPhase = {
   funding_pending: ['Funding detected', 'Waiting for the Sepolia network to confirm your test ETH.', 2, 2],
   funded_public: ['Funding confirmed', 'Your test ETH arrived. Agent Boost is about to prepare a private balance.', 2, 2],
   shielding: ['Preparing your private balance', 'Agent Boost is shielding part of your Sepolia test balance. Keep this window open.', 3, 3],
-  private_ready: ['Your agent is ready', 'The private test balance is ready. Return to Hermes and ask it to send a private payment.', 4, 4],
+  private_ready: ['Your agent is ready', 'Your private test balance and Tor-routed Sepolia RPC are ready. Return to Hermes.', 4, 4],
   failed: ['Setup needs attention', 'Agent Boost could not finish setup automatically.', 0, 0],
 };
 
@@ -295,7 +307,7 @@ function remainingFunding(snapshot) {
   }
 }
 
-function setProgress(phase) {
+function setProgress(phase, fullyReady) {
   if (phase === 'failed') {
     for (const step of elements.steps) {
       delete step.dataset.status;
@@ -308,7 +320,7 @@ function setProgress(phase) {
     wallet: phase === 'creating_wallet' || phase === 'not_started' ? 'active' : 'done',
     funding: ['awaiting_funding', 'preparing_privacy'].includes(phase) ? 'active' : ['funding_pending', 'funded_public', 'shielding', 'private_ready'].includes(phase) ? 'done' : '',
     shielding: phase === 'shielding' ? 'active' : phase === 'private_ready' ? 'done' : '',
-    ready: phase === 'private_ready' ? 'ready' : '',
+    ready: fullyReady ? 'ready' : phase === 'private_ready' ? 'active' : '',
   };
   for (const step of elements.steps) {
     const status = statuses[step.dataset.step] || '';
@@ -331,11 +343,17 @@ function setProgress(phase) {
 }
 
 function render(snapshot) {
-  const view = viewByPhase[snapshot.phase] || viewByPhase.failed;
+  const routeStatus = snapshot.rpcRoute && snapshot.rpcRoute.status
+    ? snapshot.rpcRoute.status
+    : 'starting';
+  const fullyReady = snapshot.phase === 'private_ready' && routeStatus === 'ready';
+  const view = snapshot.phase === 'private_ready' && !fullyReady
+    ? ['Tor route unavailable', 'Your private test balance is ready, but direct RPC access is disabled. Return to Hermes.', 3, 3]
+    : viewByPhase[snapshot.phase] || viewByPhase.failed;
   elements.title.textContent = view[0];
   elements.description.textContent = view[1];
   elements.aperture.dataset.progress = String(view[2]);
-  setProgress(snapshot.phase);
+  setProgress(snapshot.phase, fullyReady);
 
   const hasAddress = typeof snapshot.address === 'string' && snapshot.address.length > 0;
   document.body.dataset.hasAddress = String(hasAddress);
@@ -358,7 +376,14 @@ function render(snapshot) {
   elements.publicBalance.textContent = formatEth(snapshot.publicBalanceWei);
   elements.privateBalance.textContent = formatEth(snapshot.privateBalanceWei);
 
-  const showReady = snapshot.phase === 'private_ready';
+  elements.rpcRoute.dataset.status = routeStatus;
+  elements.rpcRouteLabel.textContent = routeStatus === 'ready'
+    ? 'Tor ready'
+    : routeStatus === 'failed' || routeStatus === 'closed'
+      ? 'Tor unavailable — direct access disabled'
+      : 'Checking Tor…';
+
+  const showReady = fullyReady;
   const showQr = hasAddress && typeof snapshot.qrDataUrl === 'string' && !showReady;
   elements.qrStage.hidden = !showQr;
   elements.qr.hidden = !showQr;
@@ -376,6 +401,8 @@ function render(snapshot) {
   elements.returnNote.dataset.ready = String(showReady);
   elements.returnNote.textContent = showReady
     ? 'Setup complete. You can close this window and return to Hermes.'
+    : snapshot.phase === 'private_ready'
+      ? 'Setup is paused. Return to Hermes and check the Tor RPC route.'
     : 'Keep this window open. Setup continues automatically.';
 }
 

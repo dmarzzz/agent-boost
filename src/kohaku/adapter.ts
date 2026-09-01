@@ -1,5 +1,6 @@
-import { chmod, lstat, mkdir, readdir } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   DEFAULT_SHIELD_WEI,
@@ -17,6 +18,9 @@ const ETH_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 const WALLET_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const FROM_SELECTOR_RE = /^(?:[0-9]+|s[0-9]+|0x[0-9a-fA-F]{40})$/;
+const NETWORK_GUARD_PATH = fileURLToPath(
+  new URL("./network-guard.mjs", import.meta.url),
+);
 
 export interface KohakuWalletAdapterOptions {
   dataDir: string;
@@ -55,6 +59,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
   readonly #walletName: string;
   readonly #passwordFile: string;
   readonly #rpcUrl: string;
+  readonly #rpcRelayToken: string | undefined;
   readonly #executable: string;
   readonly #runner: CommandRunner;
   readonly #shieldFrom: string;
@@ -75,7 +80,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
     ) {
       throw new Error(`Kohaku wallet name is reserved: ${options.walletName}`);
     }
-    const rpcUrl = parseHttpsUrl(options.rpcUrl);
+    const rpcUrl = parseRpcUrl(options.rpcUrl);
     const shieldFrom = options.shieldFrom ?? "0";
     if (!FROM_SELECTOR_RE.test(shieldFrom)) {
       throw new Error("Kohaku shield source must be an account index or address");
@@ -89,6 +94,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
     this.#walletName = options.walletName;
     this.#passwordFile = resolve(options.passwordFile);
     this.#rpcUrl = rpcUrl;
+    this.#rpcRelayToken = relayToken(rpcUrl);
     this.#executable = options.executable ?? "kohaku";
     this.#runner = options.runner ?? new SpawnCommandRunner();
     this.#shieldFrom = shieldFrom;
@@ -294,13 +300,29 @@ export class KohakuWalletAdapter implements WalletAdapter {
     const invocation: CommandInvocation = {
       executable: this.#executable,
       args,
-      ...(includeRpc ? { env: { RPC_URL: this.#rpcUrl } } : {}),
+      ...(includeRpc
+        ? {
+            env: {
+              RPC_URL: this.#rpcUrl,
+              AGENT_BOOST_ALLOWED_RPC_URL: this.#rpcUrl,
+              NODE_OPTIONS: `--import=${pathToFileURL(NETWORK_GUARD_PATH).href}`,
+            },
+          }
+        : {}),
     };
     let result: CommandResult;
     try {
       result = await this.#runner.run(invocation);
     } finally {
-      await hardenTree(this.#dataDir);
+      try {
+        await redactRelayTokenFromTrafficLog(
+          this.#dataDir,
+          this.#walletName,
+          this.#rpcRelayToken,
+        );
+      } finally {
+        await hardenTree(this.#dataDir);
+      }
     }
     if (result.exitCode !== 0) {
       throw new Error(
@@ -363,17 +385,63 @@ async function ensureSecureDirectory(path: string, label: string): Promise<void>
   await chmod(path, 0o700);
 }
 
-function parseHttpsUrl(raw: string): string {
+function parseRpcUrl(raw: string): string {
   let parsed: URL;
   try {
     parsed = new URL(raw);
   } catch {
-    throw new Error("Kohaku RPC URL must be a valid HTTPS URL");
+    throw new Error("Kohaku RPC URL must be a valid URL");
   }
-  if (parsed.protocol !== "https:") {
-    throw new Error("Kohaku RPC URL must use HTTPS");
+  if (parsed.protocol === "https:") return parsed.toString();
+  const isPrivateLoopbackRelay =
+    parsed.protocol === "http:" &&
+    parsed.hostname === "127.0.0.1" &&
+    parsed.port !== "" &&
+    /^\/rpc\/[A-Za-z0-9_-]{43}$/u.test(parsed.pathname) &&
+    parsed.username === "" &&
+    parsed.password === "" &&
+    parsed.search === "" &&
+    parsed.hash === "";
+  if (!isPrivateLoopbackRelay) {
+    throw new Error(
+      "Kohaku RPC URL must use HTTPS or an authenticated Agent Boost loopback relay",
+    );
   }
   return parsed.toString();
+}
+
+function relayToken(rpcUrl: string): string | undefined {
+  const parsed = new URL(rpcUrl);
+  if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
+    return undefined;
+  }
+  return parsed.pathname.split("/").at(-1);
+}
+
+async function redactRelayTokenFromTrafficLog(
+  dataDir: string,
+  walletName: string,
+  token: string | undefined,
+): Promise<void> {
+  if (!token) return;
+  const path = resolve(dataDir, walletName, "network-traffic.ndjson");
+  let metadata;
+  try {
+    metadata = await lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+    throw new Error("Kohaku network traffic log must be a regular file");
+  }
+  const contents = await readFile(path, "utf8");
+  if (!contents.includes(token)) return;
+  await writeFile(path, contents.replaceAll(token, "<redacted>"), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await chmod(path, 0o600);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -8,12 +8,14 @@ Agent Boost is a local, wallet-first privacy sidecar for AI agents. This proof
 of concept gives a Hermes agent the public wallet facts it needs to reason—its
 Sepolia address, live balances, setup state, and remaining allowance—while
 keeping seed phrases, private keys, wallet passwords, and raw privacy notes out
-of MCP results and the model conversation.
+of MCP results and the model conversation. Its Sepolia JSON-RPC path is routed
+through embedded Tor for both Agent Boost and Kohaku, with no direct fallback.
 
 The current build demonstrates one complete path:
 
 1. Hermes asks Agent Boost to create a disposable Sepolia wallet.
-2. Agent Boost opens a local funding page with an exact QR code and address.
+2. Agent Boost bootstraps Tor, verifies Sepolia through it, and opens a local
+   funding page with an exact QR code and address.
 3. An event operator sends approximately `0.2` valueless Sepolia ETH.
 4. Agent Boost automatically shields `0.1` Sepolia ETH through Kohaku.
 5. The user asks Hermes to send one shielded test payment.
@@ -26,7 +28,7 @@ machine, the funding page opens in the browser. On a headless host, Agent Boost
 returns the QR image through MCP so Hermes can present it in chat.
 
 > [!WARNING]
-> Agent Boost and Kohaku are unaudited research software. This release is
+> Agent Boost, Kohaku, and the embedded `tor-js` client are unaudited research software. This release is
 > Sepolia-only and intended for disposable test funds. Sepolia ETH has no
 > monetary or redeemable value. Never send mainnet assets, real value, or a
 > wallet you care about.
@@ -45,6 +47,7 @@ for Intel macOS, but that target still needs clean-machine execution evidence
 before the event release is tagged.
 
 Prerequisites are Git, Node.js 22 or newer, npm, and a working Hermes install.
+No system Tor installation is required; the POC embeds Arti through `tor-js`.
 The installer builds the repository, installs Agent Boost under `~/.local`,
 fetches and verifies the pinned Kohaku commit, and configures the active Hermes
 profile without replacing a conflicting MCP entry.
@@ -62,6 +65,7 @@ The default executables and state paths are:
 ~/.local/share/agent-boost/dependencies/kohaku-cli/
 ~/.local/share/agent-boost/state.json
 ~/.local/share/agent-boost/kohaku/
+~/.local/share/agent-boost/tor/
 ~/.local/share/agent-boost/secrets/kohaku-password
 ```
 
@@ -124,7 +128,8 @@ creating_wallet
 ```
 
 When `private_ready` appears, at least `0.1` Sepolia ETH is spendable through
-the configured private-payment path.
+the configured private-payment path. Hermes also rechecks that
+`readiness.rpc_egress` is `ready` before declaring setup complete.
 
 ### 2. Send one test payment
 
@@ -135,8 +140,10 @@ Tell Hermes, for example:
 
 Hermes first reads current wallet context and creates a short-lived plan. It
 must read back the recipient, exact ETH and wei amount, Sepolia network,
-remaining delegation, expiry, and privacy limitations. Nothing is sent until
-the user verbally confirms those exact terms.
+remaining delegation, expiry, and privacy limitations. It must say that Tor
+hides this machine's origin IP from the RPC provider, while the provider still
+sees RPC requests, wallet addresses, payloads, and timing. Nothing is sent
+until the user verbally confirms those exact terms.
 
 Agent Boost does not listen to the conversation itself. Hermes reports the
 user's confirmation with `user_confirmed: true`; this is a conversational demo
@@ -198,8 +205,11 @@ flowchart LR
     U[User] <-->|conversation and verbal approval| H[Hermes]
     H <-->|MCP over stdio| A[Agent Boost sidecar]
     A -->|loopback-only funding page| UI[QR onboarding UI]
-    A -->|bounded non-shell argv| K[Kohaku CLI]
-    K -->|shield / unshield on Sepolia| E[(Ethereum Sepolia)]
+    A -->|bounded argv + random loopback RPC URL| K[Kohaku CLI]
+    A -->|fixed-origin JSON-RPC| T[Embedded Tor / Arti]
+    K -->|JSON-RPC via authenticated relay| T
+    K -->|supported protocol HTTP via its Tor client| E[(Sepolia + protocol services)]
+    T -->|HTTPS JSON-RPC through Tor| E
     O[Event operator] -->|scan QR and fund| E
     A -->|address, balances, policy, status| H
 ```
@@ -211,13 +221,20 @@ serves a read-only UI with a restrictive Content Security Policy. Port `9180`
 is deliberately reserved so this POC cannot collide with an older local
 service. A separate exclusive loopback bind on port `9184` is a crash-safe
 process ownership lock; a second Agent Boost process fails closed instead of
-sharing the wallet.
+sharing the wallet. A fixed-destination JSON-RPC relay binds to `127.0.0.1:9185`
+with a random 256-bit path token. It accepts JSON-RPC POST only, forwards only
+to the configured HTTPS Sepolia origin through Tor, and has no direct retry.
 
 Local state writes are flushed and atomically renamed. Agent Boost directories
 are hardened to `0700` and state, password, wallet, and provenance files to
 `0600`. Kohaku commands run without a shell, are serialized per wallet, pass
-the RPC endpoint through the child environment rather than argv, and never
-return raw upstream stderr through MCP.
+only the authenticated loopback relay through the child environment rather
+than the upstream RPC URL or argv, and never return raw upstream stderr through
+MCP. Inherited proxy variables and Kohaku's Tor-disable switch are scrubbed.
+A child-process network guard rejects Kohaku's built-in public RPC fallbacks;
+only loopback fetches are allowed, including Kohaku's own Tor-backed Pimlico
+relay. Kohaku's traffic log is scrubbed of the live Agent Boost relay token
+after every invocation.
 
 See [Integration](docs/INTEGRATION.md),
 [Capability contract](docs/CAPABILITY-CONTRACT.md),
@@ -237,18 +254,21 @@ It is not a guarantee of anonymity.
 - Shielding and later unshielding break the direct deposit/withdrawal link, but
   timing, amounts, a small testnet anonymity set, and protocol activity may
   still correlate them.
-- Ethereum RPC is HTTPS but not privately routed in this wallet-first build.
-  The RPC provider can observe requests and network metadata.
-- Kohaku uses Tor for supported non-RPC privacy-protocol traffic, but Agent
-  Boost has not yet added general private egress.
+- Agent Boost and Kohaku route Ethereum JSON-RPC over Tor with remote hostname
+  resolution and no direct fallback. This hides the machine's origin IP from
+  the RPC provider, but the provider still sees RPC methods, wallet addresses,
+  payloads, and timing.
+- Kohaku separately uses Tor for supported privacy-protocol HTTP traffic.
+  Hermes, model-provider, Matrix, browser, and other general agent traffic are
+  not covered by Agent Boost's RPC route.
 - A fresh or stealth address alone does not hide its funding transaction.
 - The disposable wallet has no recovery or export UX in Agent Boost.
 - Recipient-balance-delta confirmation proves delivery of at least the amount;
   it is not cryptographic attribution when unrelated concurrent transfers are
   possible.
 
-The next module is anonymous egress. It is intentionally not claimed or exposed
-by this release.
+The next module is Shade Tree cover for broader agent egress. It is not claimed
+or exposed by this release.
 
 ## Local security boundary
 
@@ -273,8 +293,11 @@ secret-bearing repository config.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `AGENT_BOOST_RPC_URL` | Public HTTPS Sepolia RPC | Sepolia JSON-RPC endpoint; HTTPS required |
-| `AGENT_BOOST_UI_PORT` | `9183` | Loopback funding page port; `9180` and lock port `9184` forbidden |
+| `AGENT_BOOST_RPC_URL` | Public HTTPS Sepolia RPC | Fixed Tor-routed endpoint; hostname and HTTPS required |
+| `AGENT_BOOST_UI_PORT` | `9183` | Loopback funding page port; `9180`, `9184`, and `9185` forbidden |
+| `AGENT_BOOST_TOR_RPC_PORT` | `9185` | Authenticated fixed-origin loopback relay for Kohaku |
+| `AGENT_BOOST_TOR_DATA_DIR` | `$AGENT_BOOST_STATE_DIR/tor` | Private embedded-Tor cache namespace |
+| `AGENT_BOOST_TOR_BOOTSTRAP_TIMEOUT_MS` | `120000` | Fail-closed Tor startup deadline |
 | `AGENT_BOOST_FUNDING_WEI` | `200000000000000000` | Requested initial funding |
 | `AGENT_BOOST_SHIELD_WEI` | `100000000000000000` | Tornado shield/note amount |
 | `AGENT_BOOST_PAYMENT_LIMIT_WEI` | `50000000000000000` | One-payment maximum |
@@ -282,7 +305,7 @@ secret-bearing repository config.
 | `AGENT_BOOST_EXECUTE` | `true` | Enable bounded testnet execution |
 | `AGENT_BOOST_STATE_DIR` | `~/.local/share/agent-boost` | Durable state root |
 
-The RPC URL is never returned through the MCP interface. Do not put credentialed
+The upstream RPC URL is never returned through MCP or given to Kohaku. Do not put credentialed
 URLs in the repository or paste them into a model conversation.
 
 ## Development

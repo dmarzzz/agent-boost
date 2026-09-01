@@ -10,6 +10,9 @@ import { AGENT_BOOST_RUNTIME_LOCK_PORT } from "./state/runtime-lock.js";
 
 export interface AgentBoostConfig {
   stateDir: string;
+  torDataDir: string;
+  torBootstrapTimeoutMs: number;
+  torRpcPort: number;
   kohakuDataDir: string;
   kohakuInstallDir: string;
   kohakuPasswordFile: string;
@@ -87,15 +90,41 @@ export function loadConfig(
   if (
     uiPort > 65_535 ||
     uiPort === 9180 ||
-    uiPort === AGENT_BOOST_RUNTIME_LOCK_PORT
+    uiPort === AGENT_BOOST_RUNTIME_LOCK_PORT ||
+    uiPort === 9185
   ) {
     throw new Error(
-      "AGENT_BOOST_UI_PORT must be between 1 and 65535 and cannot use reserved ports 9180 or 9184",
+      "AGENT_BOOST_UI_PORT must be between 1 and 65535 and cannot use reserved ports 9180, 9184, or 9185",
+    );
+  }
+
+  const torRpcPort = positiveIntegerEnv(
+    env.AGENT_BOOST_TOR_RPC_PORT,
+    9185,
+    "AGENT_BOOST_TOR_RPC_PORT",
+  );
+  if (
+    torRpcPort > 65_535 ||
+    torRpcPort === 9180 ||
+    torRpcPort === AGENT_BOOST_RUNTIME_LOCK_PORT ||
+    torRpcPort === uiPort
+  ) {
+    throw new Error(
+      "AGENT_BOOST_TOR_RPC_PORT must be an available port other than 9180, 9184, or the UI port",
     );
   }
 
   return {
     stateDir,
+    torDataDir: resolve(
+      env.AGENT_BOOST_TOR_DATA_DIR ?? `${stateDir}/tor`,
+    ),
+    torBootstrapTimeoutMs: positiveIntegerEnv(
+      env.AGENT_BOOST_TOR_BOOTSTRAP_TIMEOUT_MS,
+      120_000,
+      "AGENT_BOOST_TOR_BOOTSTRAP_TIMEOUT_MS",
+    ),
+    torRpcPort,
     kohakuDataDir: resolve(
       env.AGENT_BOOST_KOHAKU_DATA_DIR ?? `${stateDir}/kohaku`,
     ),

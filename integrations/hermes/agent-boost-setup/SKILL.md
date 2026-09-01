@@ -28,7 +28,8 @@ guidance instead of trying to bootstrap through an unavailable tool.
    `!reload-skills` and then `!reload-mcp` over Matrix, or restart Hermes once.
    Do not edit config, invoke a shell, or ask the user to open a terminal.
 2. Confirm that the capability reports Sepolia (`eip155:11155111`),
-   `testnet_delegated` authority, and `mainnet_available: false`. Then call
+   `testnet_delegated` authority, `mainnet_available: false`, and a ready Tor
+   RPC route with `direct_fallback: false`. Then call
    `onboarding_start` with no arguments. Repeated calls resume the same durable
    setup; they never create or replace another wallet.
 3. Read `data.setup`, `data.public`, and `data.ui_opened` from the structured
@@ -48,7 +49,8 @@ guidance instead of trying to bootstrap through an unavailable tool.
    newest revision for the next call. Continue through funding and automatic
    shielding, but narrate only meaningful phase changes.
 7. Setup is complete only when the phase is `private_ready` and
-   `privateBalanceWei` is at least `shieldAmountWei`. `funding_pending`,
+   `privateBalanceWei` is at least `shieldAmountWei`, with the Tor RPC route
+   still ready in a fresh `capabilities` result. `funding_pending`,
    `funded_public`, and `shielding` are intermediate states.
 
 ## Safety
@@ -64,5 +66,6 @@ guidance instead of trying to bootstrap through an unavailable tool.
 ## Verification
 
 Before saying setup is ready, `onboarding_status` must report `private_ready`
-with `privateBalanceWei >= shieldAmountWei`. A visible public balance, a
-submitted shield transaction, or an open funding page is not successful setup.
+with `privateBalanceWei >= shieldAmountWei`, and a fresh `capabilities` call
+must report `readiness.rpc_egress: ready`. A visible public balance, a submitted
+shield transaction, or an open funding page is not successful setup.

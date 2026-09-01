@@ -37,6 +37,12 @@ function snapshot(phase: OnboardingPhase = "awaiting_funding"): PublicOnboarding
       expiresAt: "2026-09-02T00:00:00.000Z",
       enabled: phase === "private_ready",
     },
+    rpcRoute: {
+      mode: "tor",
+      scope: "ethereum_json_rpc",
+      status: "ready",
+      directFallback: false,
+    },
   };
 }
 
@@ -144,6 +150,12 @@ describe("onboarding UI server", () => {
     const body = await response.json() as Record<string, unknown>;
     assert.equal(body.phase, "awaiting_funding");
     assert.equal(body.address, ADDRESS);
+    assert.deepEqual(body.rpcRoute, {
+      mode: "tor",
+      scope: "ethereum_json_rpc",
+      status: "ready",
+      directFallback: false,
+    });
     assert.match(String(body.qrDataUrl), /^data:image\/png;base64,/);
     assert.equal(body.privateKey, undefined);
     assert.doesNotMatch(JSON.stringify(body), /must-never-leave-the-process/);
@@ -186,6 +198,8 @@ describe("onboarding UI server", () => {
     assert.match(script, /setAttribute\('aria-current', 'step'\)/);
     assert.match(script, /Still needed on Sepolia/);
     assert.match(script, /Wallet address copied\./);
+    assert.match(script, /Tor unavailable — direct access disabled/);
+    assert.match(html, /id="rpc-route-label">Checking Tor…/);
   });
 
   it("supports every onboarding phase without adding privileged actions", async () => {

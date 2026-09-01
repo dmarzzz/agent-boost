@@ -44,11 +44,26 @@ export class SpawnCommandRunner implements CommandRunner {
 
   run(invocation: CommandInvocation): Promise<CommandResult> {
     return new Promise((resolve, reject) => {
+      const childEnvironment = { ...process.env };
+      // Do not allow the parent shell to silently disable Kohaku's Tor path or
+      // introduce an unrelated proxy/direct fallback into this security boundary.
+      delete childEnvironment.KOHAKU_WITHOUT_TOR;
+      delete childEnvironment.HTTP_PROXY;
+      delete childEnvironment.HTTPS_PROXY;
+      delete childEnvironment.ALL_PROXY;
+      delete childEnvironment.NO_PROXY;
+      delete childEnvironment.NODE_USE_ENV_PROXY;
+      delete childEnvironment.http_proxy;
+      delete childEnvironment.https_proxy;
+      delete childEnvironment.all_proxy;
+      delete childEnvironment.no_proxy;
+      delete childEnvironment.node_use_env_proxy;
+      delete childEnvironment.NODE_OPTIONS;
+      delete childEnvironment.AGENT_BOOST_RPC_URL;
+      if (invocation.env) Object.assign(childEnvironment, invocation.env);
       const child = spawn(invocation.executable, [...invocation.args], {
         cwd: invocation.cwd,
-        env: invocation.env
-          ? { ...process.env, ...invocation.env }
-          : process.env,
+        env: childEnvironment,
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       });

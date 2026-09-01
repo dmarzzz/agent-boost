@@ -1,5 +1,5 @@
 {
-  "contract": "org.agentboost.wallet/1.0",
+  "contract": "org.agentboost.wallet/1.1",
   "chain_id": "eip155:11155111",
   "network_name": "Sepolia",
   "asset_type": "eip155:11155111/slip44:60",
@@ -19,11 +19,21 @@
     "claim": "privacy-improving shielded Sepolia test payment",
     "hides_direct_deposit_withdrawal_link": true,
     "guarantees_anonymity": false,
-    "rpc_egress_private": false,
+    "rpc_egress": {
+      "mode": "tor",
+      "scope": "ethereum_json_rpc",
+      "covers": ["agent_boost", "kohaku"],
+      "dns_resolution": "tor_exit",
+      "direct_fallback": false,
+      "hides_origin_ip_from_rpc_provider": true,
+      "hides_rpc_activity_from_provider": false
+    },
+    "general_agent_egress_private": false,
     "funding_source_private": false,
     "limitations": [
       "funding source and amount remain public",
-      "Ethereum RPC metadata remains visible until private egress is added",
+      "the RPC provider still sees methods, addresses, payloads, and timing",
+      "Hermes and other agent traffic are not routed through Tor",
       "timing and the Sepolia anonymity set can enable correlation",
       "the wallet is disposable and has no recovery UX"
     ]
@@ -33,7 +43,13 @@
       "name": "kohaku",
       "compatible_commit": "fcf9defa4d5ff7f63222f1b3bbe2d30e631ceffd"
     },
-    "egress": {
+    "rpc_egress": {
+      "name": "tor-js",
+      "available": true,
+      "scope": "ethereum_json_rpc",
+      "direct_fallback": false
+    },
+    "general_egress": {
       "name": "shade-tree",
       "available": false,
       "stage": "next"
@@ -43,6 +59,7 @@
     "phase": "awaiting_funding",
     "wallet_ready": false,
     "address_ready": true,
-    "egress_ready": false
+    "rpc_egress": "ready",
+    "general_egress_ready": false
   }
 }

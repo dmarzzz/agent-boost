@@ -64,7 +64,8 @@ sequence:
 
 1. read capabilities and live wallet context;
 2. plan an exact recipient and wei amount;
-3. read back the exact terms and privacy limitations;
+3. read back the exact terms and privacy limitations, including the scoped Tor
+   RPC route and uncovered general traffic;
 4. obtain an unambiguous verbal confirmation;
 5. execute with `user_confirmed: true` and
    `client_request_id: hermes:<decision_id>`;
@@ -125,13 +126,17 @@ Hermes launches Agent Boost as an MCP child. Each launch:
 
 - opens the durable state with private permissions;
 - acquires the exclusive loopback runtime-ownership lock;
+- bootstraps embedded Tor and verifies the Sepolia chain through it;
+- starts the authenticated fixed-origin loopback RPC relay for Kohaku;
 - resumes an unfinished funding or shield workflow;
 - starts the loopback UI only when onboarding requests it;
 - serializes Kohaku calls for the wallet;
 - shuts down the watcher and UI when MCP closes.
 
-There is no background daemon, administrative TCP API, proxy, or egress module
-in this build.
+There is no background daemon, administrative TCP API, or general egress
+module. The only proxy is the loopback JSON-RPC relay: it has a random path,
+accepts POST only, and can reach only the configured HTTPS Sepolia RPC through
+Tor.
 
 ## Troubleshooting
 
@@ -142,6 +147,6 @@ agent-boost install-hermes
 make install-kohaku
 ```
 
-`doctor` verifies Node, the pinned Kohaku provenance and executable, the
-Sepolia chain ID over HTTPS, and Hermes availability. It warns—rather than
-pretending—that private RPC egress is not implemented.
+`doctor` verifies Node, pinned Kohaku provenance and executable, a Tor-observed
+exit, the Sepolia chain ID through that Tor path, and Hermes availability. It
+warns that general Hermes and agent traffic is not covered.

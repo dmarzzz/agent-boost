@@ -1,7 +1,7 @@
 # Wallet capability contract
 
 Agent Boost exposes a wallet-first MCP contract named
-`org.agentboost.wallet/1.0`. It is Sepolia-only.
+`org.agentboost.wallet/1.1`. It is Sepolia-only.
 
 The capability document is available through the read-only `capabilities`
 tool and the resource:
@@ -24,12 +24,14 @@ Actual authority is enforced from durable local state.
 - authority: one verbally confirmed, time-bounded Sepolia test payment;
 - default maximum: `0.05` ETH;
 - mainnet: unavailable;
-- private egress: unavailable.
+- Ethereum JSON-RPC egress: Tor for Agent Boost and Kohaku, no direct fallback;
+- general agent egress: unavailable; Shade Tree is the next module.
 
 The accurate privacy claim is “privacy-improving shielded Sepolia test
 payment.” The capability document explicitly sets
-`guarantees_anonymity: false`, `rpc_egress_private: false`, and
-`funding_source_private: false`.
+`guarantees_anonymity: false`, `funding_source_private: false`, and a scoped
+`rpc_egress` object. That object says Tor hides the origin IP from the RPC
+provider but does not hide methods, addresses, payloads, or timing from it.
 
 ## Identifiers and amounts
 
@@ -94,8 +96,8 @@ Repeated calls resume the durable setup. They do not replace the Kohaku seed.
 ```
 
 Returns the latest durable state or waits for a greater revision. Only
-`private_ready` with `privateBalanceWei >= shieldAmountWei` means setup is
-complete.
+`private_ready` with `privateBalanceWei >= shieldAmountWei`, plus a fresh
+`readiness.rpc_egress: ready` capability result, means setup is complete.
 
 ### `wallet_get_context`
 
@@ -108,6 +110,7 @@ No input. Refreshes and returns:
 - setup phase;
 - delegation amount, use, and expiry;
 - observation timestamp and revision.
+- live Tor RPC-route status and the absence of direct fallback.
 
 It returns no seed, key, mnemonic, password, note, proof, raw signed
 transaction, RPC URL, or arbitrary adapter output.

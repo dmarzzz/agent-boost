@@ -95,6 +95,12 @@ export interface PublicOnboardingSnapshot {
   shieldAmountWei: string;
   qrDataUrl?: string;
   delegation: DelegationPolicy;
+  rpcRoute?: {
+    mode: "tor";
+    scope: "ethereum_json_rpc";
+    status: "starting" | "ready" | "failed" | "closed";
+    directFallback: false;
+  };
   error?: OnboardingRecord["error"];
 }
 

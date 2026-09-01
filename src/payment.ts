@@ -37,6 +37,7 @@ export class PaymentController {
   readonly #executeEnabled: boolean;
   readonly #executionLimitWei: bigint | undefined;
   #execution: Promise<PaymentRequest> | undefined;
+  #acceptingExecutions = true;
 
   constructor(options: {
     store: StateStore;
@@ -147,6 +148,7 @@ export class PaymentController {
     clientRequestId: string;
     userConfirmed: boolean;
   }): Promise<PaymentRequest> {
+    if (!this.#acceptingExecutions) throw new Error("PAYMENT_RUNTIME_STOPPING");
     if (!input.userConfirmed) {
       throw new Error("The user must verbally confirm the exact test payment");
     }
@@ -173,6 +175,10 @@ export class PaymentController {
       throw new Error("DECISION_EXPIRED");
     }
 
+    // stop() can run while the state read above is pending. Recheck immediately
+    // before registering the execution; there is no await between this gate and
+    // the assignment, so shutdown will either reject this work or drain it.
+    if (!this.#acceptingExecutions) throw new Error("PAYMENT_RUNTIME_STOPPING");
     this.#execution = this.#executePlan(plan, input.clientRequestId);
     try {
       return await this.#execution;
@@ -185,6 +191,11 @@ export class PaymentController {
     const request = (await this.#store.read()).requests[requestId];
     if (!request) throw new Error("REQUEST_NOT_FOUND");
     return request;
+  }
+
+  async stop(): Promise<void> {
+    this.#acceptingExecutions = false;
+    await this.#execution?.catch(() => undefined);
   }
 
   async #executePlan(
@@ -310,12 +321,12 @@ export class PaymentController {
       const updated = await this.#store.update((draft) => {
         const current = draft.requests[request.requestId];
         if (!current) return;
-        current.phase = "failed";
+        current.phase = "indeterminate";
         current.updatedAt = this.#clock.now().toISOString();
         current.error = {
-          code: "PRIVATE_PAYMENT_FAILED",
+          code: "PRIVATE_PAYMENT_UNRESOLVED",
           message:
-            "The private payment did not complete. Do not retry with a new client request ID.",
+            "The private payment may have been submitted. Do not retry with a new client request ID.",
         };
       });
       return updated.requests[request.requestId] as PaymentRequest;
