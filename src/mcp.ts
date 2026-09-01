@@ -11,6 +11,7 @@ import type {
   PaymentRequest,
   PublicOnboardingSnapshot,
 } from "./contracts.js";
+import { buildSepoliaFundingUri } from "./ui/index.js";
 
 export interface AgentBoostRuntime {
   capabilities(): Promise<Record<string, unknown>>;
@@ -129,6 +130,45 @@ function onboardingOutcome(record: OnboardingRecord): Outcome {
   return "executing";
 }
 
+function publicOnboardingState(
+  record: OnboardingRecord | PublicOnboardingSnapshot,
+): Record<string, unknown> {
+  const publicState: Record<string, unknown> = { ...record };
+  delete publicState.uiUrl;
+  delete publicState.uiOpened;
+  return publicState;
+}
+
+function formatEthWei(wei: bigint): string {
+  const whole = wei / 1_000_000_000_000_000_000n;
+  const fractional = (wei % 1_000_000_000_000_000_000n)
+    .toString()
+    .padStart(18, "0")
+    .replace(/0+$/u, "");
+  return fractional ? `${whole.toString()}.${fractional}` : whole.toString();
+}
+
+function fundingDetails(
+  record: OnboardingRecord | PublicOnboardingSnapshot,
+  qrAttached: boolean,
+): Record<string, unknown> {
+  const required = BigInt(record.requiredFundingWei);
+  const publicBalance = BigInt(record.publicBalanceWei);
+  const remaining = required > publicBalance ? required - publicBalance : 0n;
+  return {
+    chain_id: "eip155:11155111",
+    network: "Sepolia",
+    asset: "Sepolia ETH",
+    ...(record.address ? { address: record.address } : {}),
+    ...(record.address && remaining > 0n
+      ? { funding_uri: buildSepoliaFundingUri(record.address, remaining.toString()) }
+      : {}),
+    remaining_amount_wei: remaining.toString(),
+    remaining_amount_eth: formatEthWei(remaining),
+    qr_attached: qrAttached,
+  };
+}
+
 function requestOutcome(request: PaymentRequest): Outcome {
   if (request.phase === "planned") return "ready";
   return request.phase;
@@ -164,7 +204,7 @@ export async function createMcpServer(
     {
       title: "Start private-wallet onboarding",
       description:
-        "Idempotently create or resume a disposable Sepolia wallet, open the local QR funding page when possible, and begin privacy preparation. Never replaces an existing wallet.",
+        "Idempotently create or resume a disposable Sepolia wallet, return a funding QR with an exact address and amount fallback, and optionally open a host-local page. Never replaces an existing wallet.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -177,8 +217,9 @@ export async function createMcpServer(
             onboardingOutcome(started.record),
             "ONBOARDING_STARTED",
             {
-              setup: started.record,
-              public: started.snapshot,
+              setup: publicOnboardingState(started.record),
+              public: publicOnboardingState(started.snapshot),
+              funding: fundingDetails(started.snapshot, Boolean(started.qrPngBase64)),
               ui_opened: started.uiOpened,
             },
             { mode: "wait", safeWithSameArguments: true, afterMs: 2_000 },
@@ -216,7 +257,10 @@ export async function createMcpServer(
             digest,
             onboardingOutcome(record),
             "ONBOARDING_STATUS",
-            { setup: record },
+            {
+              setup: publicOnboardingState(record),
+              funding: fundingDetails(record, false),
+            },
             record.phase === "private_ready" || record.phase === "failed"
               ? { mode: "never", safeWithSameArguments: false }
               : { mode: "wait", safeWithSameArguments: true, afterMs: 2_000 },

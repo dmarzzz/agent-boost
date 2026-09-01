@@ -110,11 +110,16 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
     ["mcp-agent-boost"],
   );
   assert.match(setupSkill, /onboarding_start/u);
+  assert.match(setupSkill, /immediately present the QR image/u);
+  assert.match(setupSkill, /copy that\s+exact tag onto a standalone line/u);
+  assert.match(setupSkill, /regardless of `ui_opened`/u);
+  assert.match(setupSkill, /`remaining_amount_eth`/u);
+  assert.match(setupSkill, /`remaining_amount_wei`/u);
+  assert.match(setupSkill, /`funding_uri`/u);
   assert.match(setupSkill, /`setup_id`/u);
   assert.match(setupSkill, /`since_revision`/u);
   assert.match(setupSkill, /`wait_ms: 90000`/u);
-  assert.match(setupSkill, /If `ui_opened` is true/u);
-  assert.match(setupSkill, /If it is false, present the QR image/u);
+  assert.doesNotMatch(setupSkill, /offer (?:the )?loopback|normally 0\.2/u);
   assert.match(setupSkill, /\/reload-skills.*\/reload-mcp/su);
   assert.match(operationalSkill, /testnet_delegated/u);
   assert.match(operationalSkill, /wallet_plan_private_payment/u);

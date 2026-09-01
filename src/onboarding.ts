@@ -46,8 +46,43 @@ export class OnboardingController {
   async start(): Promise<OnboardingRecord> {
     this.#stopped = false;
     const existing = (await this.#store.read()).onboarding;
-    if (existing && existing.phase !== "failed") {
-      this.#resume(existing);
+    if (existing) {
+      if (existing.phase !== "failed") {
+        this.#resume(existing);
+        return existing;
+      }
+
+      // A retryable failure must keep the same setup and funding address. In
+      // particular, a temporary RPC failure while waiting for funding should
+      // not invalidate a QR code the participant may already be scanning.
+      if (existing.error?.retryable) {
+        if (!existing.address) {
+          await this.#transition(existing.setupId, "creating_wallet");
+          this.#workflow = this.#initialize(existing.setupId);
+          await this.#waitUntilPresentable(existing.setupId);
+          return this.getRecord();
+        }
+
+        const publicBalance = BigInt(existing.publicBalanceWei);
+        const privateBalance = BigInt(existing.privateBalanceWei);
+        if (privateBalance >= this.#config.shieldAmountWei) {
+          await this.#transition(existing.setupId, "private_ready");
+          return this.getRecord();
+        }
+        if (publicBalance < this.#config.fundingTargetWei) {
+          await this.#transition(
+            existing.setupId,
+            publicBalance === 0n ? "awaiting_funding" : "funding_pending",
+          );
+          const resumed = await this.getRecord();
+          this.#resume(resumed);
+          return resumed;
+        }
+      }
+
+      // Do not automatically retry a failure after the full public funding
+      // amount was observed: a shield transaction may be indeterminate, and
+      // submitting another one would be unsafe.
       return existing;
     }
 
@@ -85,7 +120,12 @@ export class OnboardingController {
   async resume(): Promise<void> {
     this.#stopped = false;
     const record = (await this.#store.read()).onboarding;
-    if (record) this.#resume(record);
+    if (!record) return;
+    if (record.phase === "failed" && record.error?.retryable) {
+      await this.start();
+      return;
+    }
+    this.#resume(record);
   }
 
   async getRecord(): Promise<OnboardingRecord> {

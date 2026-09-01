@@ -119,3 +119,74 @@ test("awaiting-funding polling does not emit unchanged revisions", async () => {
   assert.equal(unchanged.revision, started.revision);
   await controller.stop();
 });
+
+test("restart resumes a retryable funding failure with the same setup and address", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-boost-onboarding-retry-"));
+  const store = new StateStore(root);
+  await store.initialize();
+  const setupId = "setup_existing";
+  const address = "0x2222222222222222222222222222222222222222";
+  await store.update((draft) => {
+    draft.onboarding = {
+      version: 1,
+      setupId,
+      revision: 5,
+      phase: "failed",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(1).toISOString(),
+      address,
+      publicBalanceWei: "0",
+      privateBalanceWei: "0",
+      requiredFundingWei: "200000000000000000",
+      shieldAmountWei: "100000000000000000",
+      delegation: {
+        mode: "testnet_delegated",
+        chainId: 11_155_111,
+        perPaymentLimitWei: "50000000000000000",
+        lifetimeLimitWei: "50000000000000000",
+        spentWei: "0",
+        expiresAt: new Date(86_400_000).toISOString(),
+        enabled: true,
+      },
+      error: {
+        code: "FUNDING_OR_SHIELD_FAILED",
+        message: "Funding verification did not complete.",
+        retryable: true,
+      },
+    };
+  });
+
+  let freshAddressCalls = 0;
+  const wallet = new FakeWallet();
+  wallet.nextFreshAddress = async () => {
+    freshAddressCalls += 1;
+    return "0x3333333333333333333333333333333333333333";
+  };
+  const controller = new OnboardingController({
+    store,
+    wallet,
+    chain: {
+      async assertSepolia() {},
+      async getBalanceWei() {
+        return 0n;
+      },
+    },
+    config: loadConfig(
+      {
+        AGENT_BOOST_STATE_DIR: root,
+        AGENT_BOOST_FUNDING_POLL_MS: "50",
+        AGENT_BOOST_SETUP_TIMEOUT_MS: "1000",
+      },
+      root,
+    ),
+  });
+
+  await controller.resume();
+  const resumed = await controller.getRecord();
+  assert.equal(resumed.setupId, setupId);
+  assert.equal(resumed.address, address);
+  assert.equal(resumed.phase, "awaiting_funding");
+  assert.equal(resumed.error, undefined);
+  assert.equal(freshAddressCalls, 0);
+  await controller.stop();
+});

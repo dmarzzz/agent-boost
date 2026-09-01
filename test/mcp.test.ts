@@ -16,10 +16,12 @@ function fakeRuntime(): AgentBoostRuntime {
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
     address: "0x1111111111111111111111111111111111111111",
-    publicBalanceWei: "0",
+    publicBalanceWei: "50000000000000000",
     privateBalanceWei: "0",
     requiredFundingWei: "200000000000000000",
     shieldAmountWei: "100000000000000000",
+    uiUrl: "http://127.0.0.1:9183",
+    uiOpened: true,
     delegation: {
       mode: "testnet_delegated" as const,
       chainId: 11_155_111 as const,
@@ -35,7 +37,13 @@ function fakeRuntime(): AgentBoostRuntime {
       return { chain_id: "eip155:11155111", egress_privacy: false };
     },
     async startOnboarding() {
-      return { record: setup, snapshot: setup, uiOpened: false };
+      return {
+        record: setup,
+        snapshot: setup,
+        uiOpened: true,
+        qrPngBase64:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      };
     },
     async onboardingStatus() {
       return setup;
@@ -100,6 +108,43 @@ test("MCP exposes the seven wallet-first tools and structured onboarding", async
     (started.structuredContent as { outcome: string }).outcome,
     "awaiting_funding",
   );
+  const startPayload = started.structuredContent as {
+    data: {
+      setup: Record<string, unknown>;
+      public: Record<string, unknown>;
+      funding: Record<string, unknown>;
+      ui_opened: boolean;
+    };
+  };
+  assert.deepEqual(startPayload.data.funding, {
+    chain_id: "eip155:11155111",
+    network: "Sepolia",
+    asset: "Sepolia ETH",
+    address: "0x1111111111111111111111111111111111111111",
+    funding_uri:
+      "ethereum:0x1111111111111111111111111111111111111111@11155111?value=150000000000000000",
+    remaining_amount_wei: "150000000000000000",
+    remaining_amount_eth: "0.15",
+    qr_attached: true,
+  });
+  assert.equal(startPayload.data.ui_opened, true);
+  assert.equal(startPayload.data.setup.uiUrl, undefined);
+  assert.equal(startPayload.data.setup.uiOpened, undefined);
+  assert.equal(startPayload.data.public.uiUrl, undefined);
+  assert.equal(started.content.some((block) => block.type === "image"), true);
+  assert.doesNotMatch(JSON.stringify(started), /127\.0\.0\.1|uiUrl/u);
+
+  const status = await client.callTool({
+    name: "onboarding_status",
+    arguments: { setup_id: "setup_12345678" },
+  });
+  const statusPayload = status.structuredContent as {
+    data: { setup: Record<string, unknown>; funding: Record<string, unknown> };
+  };
+  assert.equal(statusPayload.data.setup.uiUrl, undefined);
+  assert.equal(statusPayload.data.funding.remaining_amount_eth, "0.15");
+  assert.equal(statusPayload.data.funding.qr_attached, false);
+  assert.doesNotMatch(JSON.stringify(status), /127\.0\.0\.1|uiUrl/u);
 
   await client.close();
   await server.close();

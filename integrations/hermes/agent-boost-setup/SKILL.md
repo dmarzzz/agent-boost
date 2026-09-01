@@ -32,18 +32,23 @@ guidance instead of trying to bootstrap through an unavailable tool.
    RPC route with `direct_fallback: false`. Then call
    `onboarding_start` with no arguments. Repeated calls resume the same durable
    setup; they never create or replace another wallet.
-3. Read `data.setup`, `data.public`, and `data.ui_opened` from the structured
-   result. Preserve `setupId` and `revision` exactly.
-4. If `ui_opened` is true, tell the participant the local funding page is open.
-   If it is false, present the QR image returned by the tool and offer the
-   loopback `uiUrl` when present and the participant is on the same machine. If
-   neither is available, show the public Sepolia address and exact remaining
-   amount in ETH and wei from `data.public`. Never claim the page opened when
-   it did not.
-5. Ask the event operator to send only the requested Sepolia ETH shown by the
-   page or result—normally 0.2 Sepolia ETH on a fresh setup. State plainly that
-   Sepolia ETH has no real or redeemable value. Do not ask for a seed, key,
-   password, or wallet approval.
+3. Read `data.setup` and `data.funding` from the structured result. Preserve
+   `setupId` and `revision` exactly. Treat `data.ui_opened` only as a fact about
+   a browser on the Agent Boost host, never as evidence the participant can see
+   a page.
+4. When funding remains, immediately present the QR image returned by the tool
+   in the current reply, regardless of `ui_opened`; do not ask whether the
+   participant wants it. When the tool result contains a `MEDIA:` tag, copy that
+   exact tag onto a standalone line so the messaging gateway attaches the image.
+   Never mention or offer a loopback URL, `localhost`, or `127.0.0.1` over
+   Matrix or from a headless/remote host. In the same reply, always show the
+   server-provided `data.funding.network`, `remaining_amount_eth`,
+   `remaining_amount_wei`, `address`, and `funding_uri` as a copyable fallback.
+   If the image is absent or upload fails, say the QR attachment was unavailable
+   and still send that complete text fallback.
+5. Ask the event operator to send only the exact remaining Sepolia ETH returned
+   in `data.funding`. State plainly that Sepolia ETH has no real or redeemable
+   value. Do not ask for a seed, key, password, or wallet approval.
 6. Long-poll `onboarding_status` with the exact `setup_id`, the latest
    `since_revision`, and `wait_ms: 90000`. After every response, retain the
    newest revision for the next call. Continue through funding and automatic
