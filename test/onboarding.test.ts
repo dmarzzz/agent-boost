@@ -120,6 +120,42 @@ test("awaiting-funding polling does not emit unchanged revisions", async () => {
   await controller.stop();
 });
 
+test("awaiting-funding survives transient balance-read failures", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-boost-onboarding-rpc-recovery-"));
+  const store = new StateStore(root);
+  await store.initialize();
+  let balanceReads = 0;
+  const controller = new OnboardingController({
+    store,
+    wallet: new FakeWallet(),
+    chain: {
+      async assertSepolia() {},
+      async getBalanceWei() {
+        balanceReads += 1;
+        if (balanceReads < 3) throw new Error("Sepolia RPC request failed");
+        return 0n;
+      },
+    },
+    config: loadConfig(
+      {
+        AGENT_BOOST_STATE_DIR: root,
+        AGENT_BOOST_FUNDING_POLL_MS: "5",
+        AGENT_BOOST_SETUP_TIMEOUT_MS: "1000",
+      },
+      root,
+    ),
+  });
+
+  const started = await controller.start();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  const recovered = await controller.getRecord();
+  assert.equal(recovered.setupId, started.setupId);
+  assert.equal(recovered.phase, "awaiting_funding");
+  assert.equal(recovered.error, undefined);
+  assert.ok(balanceReads >= 3);
+  await controller.stop();
+});
+
 test("restart resumes a retryable funding failure with the same setup and address", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-boost-onboarding-retry-"));
   const store = new StateStore(root);

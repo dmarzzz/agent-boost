@@ -224,7 +224,16 @@ export class OnboardingController {
         if (current.setupId !== setupId || !current.address) return;
         if (current.phase === "private_ready" || current.phase === "failed") return;
 
-        const balance = await this.#chain.getBalanceWei(current.address);
+        let balance: bigint;
+        try {
+          balance = await this.#chain.getBalanceWei(current.address);
+        } catch {
+          // The address and QR remain useful while a Tor circuit or public
+          // testnet RPC recovers. Keep polling instead of turning a transient
+          // read failure into a broken first-run experience.
+          await this.#clock.sleep(this.#config.fundingPollMs);
+          continue;
+        }
         const phase =
           balance === 0n
             ? "awaiting_funding"

@@ -84,12 +84,15 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         executable: config.kohakuBin,
         tornadoWithdrawalWei: config.shieldAmountWei,
       });
-    this.#chain =
+    const chain =
       dependencies.chain ??
       new SepoliaRpcClient({
         rpcUrl: config.rpcUrl,
         fetch: requiredRpcRoute(this.#rpcRoute).fetchRpc,
       });
+    this.#chain = this.#rpcRoute
+      ? new RecoveringTorChainClient(chain, this.#rpcRoute)
+      : chain;
     this.#onboarding = new OnboardingController({
       store: this.#store,
       wallet: this.#wallet,
@@ -117,7 +120,8 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       await ensurePasswordFile(this.#config.kohakuPasswordFile);
       await this.#store.initialize();
       if (this.#rpcRoute) {
-        await this.#rpcRoute.ready();
+        // The wrapped chain read owns Tor bootstrap as well as recovery, so a
+        // transient first bootstrap does not abort the MCP process.
         await this.#chain.assertSepolia();
       }
       await this.#rpcProxy?.start();
@@ -375,6 +379,57 @@ function requiredRpcRoute(route: TorRpcRoutePort | undefined): TorRpcRoutePort {
 function requiredRpcProxy(proxy: TorRpcProxyPort | undefined): TorRpcProxyPort {
   if (!proxy) throw new Error("Tor RPC proxy is required");
   return proxy;
+}
+
+/**
+ * Tor circuits and public testnet RPCs can both fail transiently during a
+ * cold start. Read-only chain calls are safe to retry after rebuilding the
+ * Tor route; signing and broadcast operations remain outside this wrapper.
+ */
+class RecoveringTorChainClient implements ChainClient {
+  readonly #chain: ChainClient;
+  readonly #route: TorRpcRoutePort;
+  #routeRecovery: Promise<void> | undefined;
+
+  constructor(chain: ChainClient, route: TorRpcRoutePort) {
+    this.#chain = chain;
+    this.#route = route;
+  }
+
+  assertSepolia(): Promise<void> {
+    return this.#read(() => this.#chain.assertSepolia());
+  }
+
+  getBalanceWei(address: string): Promise<bigint> {
+    return this.#read(() => this.#chain.getBalanceWei(address));
+  }
+
+  async #read<T>(operation: () => Promise<T>): Promise<T> {
+    let failure: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await this.#ensureRoute();
+        return await operation();
+      } catch (error) {
+        failure = error;
+        if (isChainMismatch(error) || attempt === 2) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+      }
+    }
+    throw failure;
+  }
+
+  async #ensureRoute(): Promise<void> {
+    if (this.#route.status === "ready") return;
+    this.#routeRecovery ??= this.#route.ready().finally(() => {
+      this.#routeRecovery = undefined;
+    });
+    await this.#routeRecovery;
+  }
+}
+
+function isChainMismatch(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("RPC chain mismatch:");
 }
 
 export async function createLocalRuntime(
