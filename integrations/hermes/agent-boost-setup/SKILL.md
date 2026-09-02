@@ -70,7 +70,7 @@ passes. On resume, skip the theater and state only the current action.
 
 ## Public capability receipt
 
-The shareable explainer is `https://agent-boost-dark-mode.vercel.app/`. It is a static,
+The shareable explainer is `https://agent-boost-phi.vercel.app/`. It is a static,
 stateless receipt. Put only coarse feature state in its URL fragment; never put
 an address, balance, amount, transaction, setup ID, timestamp, credential, or
 other identifier in the URL. Use version `1` and only these keys:
@@ -83,7 +83,7 @@ other identifier in the URL. Use version `1` and only these keys:
 Example:
 
 ```text
-https://agent-boost-dark-mode.vercel.app/#v=1&eth=ready&spend=ready&zec=off&tor=wallet&shade=off&think=off
+https://agent-boost-phi.vercel.app/#v=1&eth=ready&spend=ready&zec=off&tor=wallet&shade=off&think=off
 ```
 
 The receipt is explanatory, not authoritative. Construct its fragment only

@@ -134,7 +134,7 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.match(setupSkill, /D A R K  M O D E/u);
   assert.match(setupSkill, /tiny permission slip/u);
   assert.match(setupSkill, /DARK MODE: ONLINE/u);
-  assert.match(setupSkill, /agent-boost-dark-mode\.vercel\.app\/#v=1/u);
+  assert.match(setupSkill, /agent-boost-phi\.vercel\.app\/#v=1/u);
   assert.match(setupSkill, /never put[\s\S]*address[\s\S]*balance[\s\S]*setup ID/u);
   assert.match(setupSkill, /remote Hermes cannot open a[\s\S]*participant’s device/u);
   assert.match(setupSkill, /View your agent’s loadout/u);
