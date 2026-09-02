@@ -203,7 +203,136 @@ test("private payment confirms delivery from the recipient balance delta", async
   });
 
   assert.equal(request.phase, "confirmed");
+  assert.equal(request.confirmation?.method, "recipient_balance_delta");
   assert.equal(networkAssertions, 2);
+});
+
+test("an unresolved user operation is reconciled later without rebroadcasting", async () => {
+  const store = await readyStore();
+  const wallet = new PaymentWallet();
+  const userOperationHash = `0x${"12".repeat(32)}`;
+  wallet.executePrivatePayment = async () => {
+    wallet.calls += 1;
+    return { userOperationHash, confirmed: false };
+  };
+  let recipientBalance = 7n;
+  const chain: ChainClient = {
+    async assertSepolia() {},
+    async getBalanceWei() {
+      return recipientBalance;
+    },
+  };
+  const controller = new PaymentController({
+    store,
+    wallet,
+    chain,
+    clock: { now: () => new Date(1_000) },
+  });
+  const plan = await controller.plan({
+    recipient: "0x2222222222222222222222222222222222222222",
+    amountWei: "20000000000000000",
+  });
+  const submitted = await controller.execute({
+    decisionId: plan.decisionId,
+    clientRequestId: "user-operation-payment",
+    userConfirmed: true,
+  });
+  assert.equal(submitted.phase, "submitted");
+  assert.equal(submitted.userOperationHash, userOperationHash);
+  assert.equal(submitted.transactionHash, undefined);
+
+  recipientBalance += 20_000_000_000_000_000n;
+  const confirmed = await controller.getRequest(submitted.requestId);
+  assert.equal(confirmed.phase, "confirmed");
+  assert.equal(confirmed.confirmation?.method, "recipient_balance_delta");
+  assert.equal(wallet.calls, 1);
+});
+
+test("reconciliation uses a transaction receipt and never rebroadcasts", async () => {
+  const store = await readyStore();
+  const wallet = new PaymentWallet();
+  const transactionHash = `0x${"34".repeat(32)}`;
+  wallet.executePrivatePayment = async () => {
+    wallet.calls += 1;
+    return { transactionHash, confirmed: false };
+  };
+  let receipt: "pending" | "success" | "reverted" = "pending";
+  const chain: ChainClient = {
+    async assertSepolia() {},
+    async getBalanceWei() {
+      return 0n;
+    },
+    async getTransactionReceiptStatus() {
+      return receipt;
+    },
+  };
+  const controller = new PaymentController({
+    store,
+    wallet,
+    chain,
+    clock: { now: () => new Date(1_000) },
+  });
+  const plan = await controller.plan({
+    recipient: "0x2222222222222222222222222222222222222222",
+    amountWei: "20000000000000000",
+  });
+  const submitted = await controller.execute({
+    decisionId: plan.decisionId,
+    clientRequestId: "receipt-reconciliation-payment",
+    userConfirmed: true,
+  });
+  assert.equal(submitted.phase, "submitted");
+
+  receipt = "success";
+  const confirmed = await controller.getRequest(submitted.requestId);
+  assert.equal(confirmed.phase, "confirmed");
+  assert.equal(confirmed.confirmation?.method, "transaction_receipt");
+  assert.equal(wallet.calls, 1);
+});
+
+test("a reverted receipt becomes failed without restoring payment authority", async () => {
+  const store = await readyStore();
+  const wallet = new PaymentWallet();
+  const transactionHash = `0x${"56".repeat(32)}`;
+  wallet.executePrivatePayment = async () => {
+    wallet.calls += 1;
+    return { transactionHash, confirmed: false };
+  };
+  let receipt: "pending" | "success" | "reverted" = "pending";
+  const chain: ChainClient = {
+    async assertSepolia() {},
+    async getBalanceWei() {
+      return receipt === "reverted" ? 20_000_000_000_000_000n : 0n;
+    },
+    async getTransactionReceiptStatus() {
+      return receipt;
+    },
+  };
+  const controller = new PaymentController({
+    store,
+    wallet,
+    chain,
+    clock: { now: () => new Date(1_000) },
+  });
+  const plan = await controller.plan({
+    recipient: "0x2222222222222222222222222222222222222222",
+    amountWei: "20000000000000000",
+  });
+  const submitted = await controller.execute({
+    decisionId: plan.decisionId,
+    clientRequestId: "reverted-reconciliation-payment",
+    userConfirmed: true,
+  });
+  receipt = "reverted";
+  const failed = await controller.getRequest(submitted.requestId);
+  assert.equal(failed.phase, "failed");
+  assert.equal(failed.error?.code, "TRANSACTION_REVERTED");
+  assert.equal(wallet.calls, 1);
+  const laterPlan = await controller.plan({
+    recipient: "0x3333333333333333333333333333333333333333",
+    amountWei: "10000000000000000",
+  });
+  assert.ok(laterPlan.blockers.includes("DELEGATION_ALREADY_USED"));
 });
 
 test("restart marks an interrupted payment indeterminate without restoring authority", async () => {

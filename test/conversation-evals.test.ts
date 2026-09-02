@@ -98,7 +98,7 @@ const forbiddenVisiblePatterns = [
   /\bmcp\b/iu,
   /\bwei\b/iu,
   /\b(?:decision_id|request_id|client_request_id|user_confirmed|amount_atomic|manifest_digest|setupId)\b/iu,
-  /\b(?:wallet_get_context|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request)\b/iu,
+  /\b(?:wallet_get_context|wallet_start_new_demo|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request)\b/iu,
   /\b(?:private key|seed phrase|wallet password)\b/iu,
   /\b(?:wd_|req_|sha256:)[A-Za-z0-9._:-]*/u,
 ];
@@ -192,7 +192,7 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
   return {
     async capabilities() {
       return {
-        contract: "org.agentboost.wallet/1.2",
+        contract: "org.agentboost.wallet/1.3",
         chain_id: "eip155:11155111",
         security: {
           default: {
@@ -254,6 +254,16 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
       return scenario === "payment-indeterminate"
         ? paymentRequest("indeterminate")
         : paymentRequest("confirmed");
+    },
+    async startNewDemo() {
+      return {
+        archiveId: "archive_eval_12345678",
+        previousSetupId: awaiting.setupId,
+        previousRequestCount: 0,
+        record: awaiting,
+        snapshot: awaiting,
+        uiOpened: true,
+      };
     },
   };
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -15,9 +15,18 @@ import type {
 } from "../src/tor/index.js";
 
 class SetupWallet implements WalletAdapter {
-  async ensureWallet(): Promise<void> {}
+  activeWallet = "agent-boost";
+  readonly ensuredWallets: string[] = [];
+  selectWallet(walletName: string): void {
+    this.activeWallet = walletName;
+  }
+  async ensureWallet(): Promise<void> {
+    this.ensuredWallets.push(this.activeWallet);
+  }
   async nextFreshAddress(): Promise<string> {
-    return "0x1111111111111111111111111111111111111111";
+    return this.activeWallet === "agent-boost"
+      ? "0x1111111111111111111111111111111111111111"
+      : "0x2222222222222222222222222222222222222222";
   }
   async prewarmPrivacy(): Promise<void> {}
   async shieldWei(): Promise<Record<string, never>> {
@@ -106,6 +115,58 @@ test("local runtime returns a QR fallback when the wallet awaits funding", async
     assert.equal(
       (status.onboarding as { setupId: string }).setupId,
       started.record.setupId,
+    );
+  } finally {
+    await runtime.shutdown();
+  }
+});
+
+test("new demo confirmation archives old state and opens a fresh funding flow", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-boost-runtime-reset-"));
+  const config = {
+    ...loadConfig(
+      {
+        AGENT_BOOST_STATE_DIR: root,
+        AGENT_BOOST_FUNDING_POLL_MS: "1",
+        AGENT_BOOST_SETUP_TIMEOUT_MS: "10000",
+      },
+      root,
+    ),
+    uiPort: 0,
+  };
+  const wallet = new SetupWallet();
+  const runtime = await createLocalRuntime(config, {
+    wallet,
+    chain: {
+      async assertSepolia() {},
+      async getBalanceWei() {
+        return 0n;
+      },
+    },
+    openBrowser: async () => false,
+  });
+  try {
+    const first = await runtime.startOnboarding();
+    await assert.rejects(
+      runtime.startNewDemo({ userConfirmed: false }),
+      /must confirm archiving/,
+    );
+    const reset = await runtime.startNewDemo({ userConfirmed: true });
+    assert.equal(reset.previousSetupId, first.record.setupId);
+    assert.equal(reset.previousRequestCount, 0);
+    assert.notEqual(reset.record.setupId, first.record.setupId);
+    assert.equal(reset.record.address, "0x2222222222222222222222222222222222222222");
+    assert.ok(reset.qrPngBase64);
+    assert.notEqual(wallet.activeWallet, "agent-boost");
+    const archived = JSON.parse(
+      await readFile(join(root, "archives", reset.archiveId, "state.json"), "utf8"),
+    ) as { onboarding: { setupId: string }; wallet: { activeName: string } };
+    assert.equal(archived.onboarding.setupId, first.record.setupId);
+    assert.equal(archived.wallet.activeName, "agent-boost");
+    const status = await readLocalStatus(config);
+    assert.equal(
+      (status.onboarding as { setupId: string }).setupId,
+      reset.record.setupId,
     );
   } finally {
     await runtime.shutdown();

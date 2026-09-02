@@ -29,6 +29,12 @@ redeemable value.
   amount.
 - Accept natural requests. If the destination or amount is ambiguous, ask only
   for the missing human detail. Never invent an amount from words like “small.”
+- **First gate:** resolve missing human details before calling any Agent Boost
+  tool, including `capabilities`. If amount or destination is missing or
+  ambiguous, no tool call is allowed. Ask for only the missing value. For an
+  ambiguous amount, ask for the exact amount in Sepolia ETH, include any
+  already-supplied full destination address in the question, and do not ask the
+  user to repeat it or offer atomic-unit/wei examples.
 - Keep normal replies to a headline plus at most three short lines. Hide wei,
   raw phases, policy internals, expiry timestamps, and privacy implementation
   details unless the user asks.

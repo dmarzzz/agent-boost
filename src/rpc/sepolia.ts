@@ -1,10 +1,12 @@
 import {
   SEPOLIA_CHAIN_ID,
   type ChainClient,
+  type TransactionReceiptStatus,
 } from "../contracts.js";
 
 const ETH_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const HEX_QUANTITY_RE = /^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$/;
+const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 
 export type RpcFetch = (
   input: string | URL | Request,
@@ -56,6 +58,36 @@ export class SepoliaRpcClient implements ChainClient {
     }
     const result = await this.#request("eth_getBalance", [address, "latest"]);
     return parseHexQuantity(result, "eth_getBalance");
+  }
+
+  async getTransactionReceiptStatus(
+    transactionHash: string,
+  ): Promise<TransactionReceiptStatus> {
+    if (!TX_HASH_RE.test(transactionHash)) {
+      throw new Error("Transaction hash must be a 32-byte hex value");
+    }
+    const result = await this.#request("eth_getTransactionReceipt", [
+      transactionHash,
+    ]);
+    if (result === null) return "pending";
+    if (typeof result !== "object" || Array.isArray(result)) {
+      throw new Error("Sepolia RPC eth_getTransactionReceipt returned an invalid receipt");
+    }
+    const receipt = result as Record<string, unknown>;
+    if (
+      typeof receipt.transactionHash !== "string" ||
+      !TX_HASH_RE.test(receipt.transactionHash) ||
+      receipt.transactionHash.toLowerCase() !== transactionHash.toLowerCase()
+    ) {
+      throw new Error("Sepolia RPC eth_getTransactionReceipt returned a mismatched receipt");
+    }
+    const status = parseHexQuantity(
+      receipt.status,
+      "eth_getTransactionReceipt",
+    );
+    if (status === 1n) return "success";
+    if (status === 0n) return "reverted";
+    throw new Error("Sepolia RPC eth_getTransactionReceipt returned an invalid status");
   }
 
   async #request(method: string, params: readonly unknown[]): Promise<unknown> {

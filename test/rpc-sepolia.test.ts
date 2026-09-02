@@ -102,4 +102,42 @@ describe("SepoliaRpcClient", () => {
       return true;
     });
   });
+
+  it("classifies transaction receipts without confusing pending and reverted", async () => {
+    const transactionHash = `0x${"ab".repeat(32)}`;
+    const statuses: unknown[] = [
+      null,
+      { status: "0x1", transactionHash },
+      { status: "0x0", transactionHash },
+    ];
+    const client = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid",
+      fetch: rpcFetch((body) => ({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: statuses.shift(),
+      })),
+    });
+
+    assert.equal(await client.getTransactionReceiptStatus(transactionHash), "pending");
+    assert.equal(await client.getTransactionReceiptStatus(transactionHash), "success");
+    assert.equal(await client.getTransactionReceiptStatus(transactionHash), "reverted");
+    await assert.rejects(
+      client.getTransactionReceiptStatus("bad"),
+      /32-byte hex value/,
+    );
+
+    const mismatch = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid",
+      fetch: rpcFetch((body) => ({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: { status: "0x1", transactionHash: `0x${"cd".repeat(32)}` },
+      })),
+    });
+    await assert.rejects(
+      mismatch.getTransactionReceiptStatus(transactionHash),
+      /mismatched receipt/,
+    );
+  });
 });

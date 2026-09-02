@@ -38,6 +38,16 @@ export interface RuntimeDependencies {
   openBrowser?: (url: string) => Promise<boolean>;
 }
 
+interface NewDemoResult {
+  archiveId: string;
+  previousSetupId?: string;
+  previousRequestCount: number;
+  record: OnboardingRecord;
+  snapshot: PublicOnboardingSnapshot;
+  uiOpened: boolean;
+  qrPngBase64?: string;
+}
+
 export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   readonly #config: AgentBoostConfig;
   readonly #store: StateStore;
@@ -50,6 +60,8 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   readonly #payments: PaymentController;
   readonly #ui: OnboardingUiServer;
   readonly #openBrowser: (url: string) => Promise<boolean>;
+  #reset: Promise<NewDemoResult> | undefined;
+  #shuttingDown = false;
 
   constructor(config: AgentBoostConfig, dependencies: RuntimeDependencies = {}) {
     this.#config = config;
@@ -120,6 +132,10 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     try {
       await ensurePasswordFile(this.#config.kohakuPasswordFile);
       await this.#store.initialize();
+      const activeWallet = await this.#store.ensureWalletProfile(
+        this.#config.kohakuWalletName,
+      );
+      this.#wallet.selectWallet?.(activeWallet);
       if (this.#rpcRoute) {
         // The wrapped chain read owns Tor bootstrap as well as recovery, so a
         // transient first bootstrap does not abort the MCP process.
@@ -137,6 +153,8 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   }
 
   async shutdown(): Promise<void> {
+    this.#shuttingDown = true;
+    await this.#reset?.catch(() => undefined);
     await Promise.allSettled([
       this.#onboarding.stop(),
       this.#payments.stop(),
@@ -151,7 +169,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     const state = await this.#store.read();
     const setup = state.onboarding;
     return {
-      contract: "org.agentboost.wallet/1.2",
+      contract: "org.agentboost.wallet/1.3",
       chain_id: "eip155:11155111",
       network_name: "Sepolia",
       asset_type: "eip155:11155111/slip44:60",
@@ -202,7 +220,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
           "the RPC provider still sees methods, addresses, payloads, and timing",
           "Hermes and other agent traffic are not routed through Tor",
           "timing and the Sepolia anonymity set can enable correlation",
-          "the wallet is disposable and has no recovery UX",
+          "demo resets archive local state and retain old Kohaku wallet data",
         ],
       },
       adapters: {
@@ -224,6 +242,12 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         address_ready: setup?.address !== undefined,
         rpc_egress: this.#rpcRoute?.status ?? "ready",
         general_egress_ready: false,
+      },
+      demo_reset: {
+        available: this.#wallet.selectWallet !== undefined,
+        requires_user_confirmation: true,
+        archives_previous_state: true,
+        rebroadcasts_unresolved_payments: false,
       },
     };
   }
@@ -351,11 +375,30 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     clientRequestId: string;
     userConfirmed: boolean;
   }): Promise<PaymentRequest> {
-    return this.#payments.execute(input);
+    return this.#payments.execute(input).then(publicPaymentRequest);
   }
 
   getRequest(requestId: string): Promise<PaymentRequest> {
-    return this.#payments.getRequest(requestId);
+    return this.#payments.getRequest(requestId).then(publicPaymentRequest);
+  }
+
+  startNewDemo(input: { userConfirmed: boolean }): Promise<NewDemoResult> {
+    if (this.#shuttingDown) {
+      return Promise.reject(new Error("AGENT_BOOST_RUNTIME_STOPPING"));
+    }
+    if (!input.userConfirmed) {
+      return Promise.reject(
+        new Error("The user must confirm archiving the current demo and creating a new wallet"),
+      );
+    }
+    if (!this.#wallet.selectWallet) {
+      return Promise.reject(new Error("DEMO_RESET_UNAVAILABLE"));
+    }
+    if (this.#reset) return this.#reset;
+    this.#reset = this.#startNewDemo().finally(() => {
+      this.#reset = undefined;
+    });
+    return this.#reset;
   }
 
   async status(): Promise<Record<string, unknown>> {
@@ -384,6 +427,42 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       },
     };
   }
+
+  async #startNewDemo(): Promise<NewDemoResult> {
+    await this.#onboarding.stop();
+    await this.#payments.stop();
+    const previous = await this.#store.read();
+    const previousWalletName = previous.wallet?.activeName ?? this.#config.kohakuWalletName;
+    const newWalletName = `agent-boost-${randomBytes(8).toString("hex")}`;
+    let archived;
+    try {
+      this.#wallet.selectWallet?.(newWalletName);
+      await this.#wallet.ensureWallet();
+      archived = await this.#store.archiveAndReset(newWalletName);
+    } catch (error) {
+      this.#wallet.selectWallet?.(previousWalletName);
+      this.#payments.resetForNewDemo();
+      await this.#onboarding.resume().catch(() => undefined);
+      throw error;
+    }
+    this.#payments.resetForNewDemo();
+    const started = await this.startOnboarding();
+    return {
+      archiveId: archived.archiveId,
+      ...(archived.previous.onboarding?.setupId
+        ? { previousSetupId: archived.previous.onboarding.setupId }
+        : {}),
+      previousRequestCount: Object.keys(archived.previous.requests).length,
+      ...started,
+    };
+  }
+}
+
+function publicPaymentRequest(request: PaymentRequest): PaymentRequest {
+  const publicRequest = { ...request };
+  delete publicRequest.recipientBalanceBeforeWei;
+  delete publicRequest.reconciliation;
+  return publicRequest;
 }
 
 function fundingAddressBalanceFallback(record: OnboardingRecord): bigint {
@@ -421,6 +500,15 @@ class RecoveringTorChainClient implements ChainClient {
 
   getBalanceWei(address: string): Promise<bigint> {
     return this.#read(() => this.#chain.getBalanceWei(address));
+  }
+
+  getTransactionReceiptStatus(transactionHash: string) {
+    if (!this.#chain.getTransactionReceiptStatus) {
+      return Promise.reject(new Error("Transaction receipt lookup is unavailable"));
+    }
+    return this.#read(() =>
+      this.#chain.getTransactionReceiptStatus!(transactionHash)
+    );
   }
 
   async #read<T>(operation: () => Promise<T>): Promise<T> {

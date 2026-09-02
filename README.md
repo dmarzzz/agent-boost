@@ -41,10 +41,10 @@ Supported hosts:
 - macOS on Intel;
 - Ubuntu 24.04 on ARM64.
 
-The complete clean-install flow has been exercised on macOS Apple silicon and
-Ubuntu 24.04 ARM64. Host detection, paths, and installer behavior are covered
-for Intel macOS, but that target still needs clean-machine execution evidence
-before the event release is tagged.
+Every change runs the same clean-tarball install smoke on native GitHub runners
+for Ubuntu 24.04 ARM64, macOS ARM64, and macOS Intel. The smoke installs into an
+empty prefix, starts the packaged executable, loads runtime configuration,
+checks both Hermes skills, and rejects private planning material in the package.
 
 Prerequisites are Git, Node.js 22 or newer, npm, and a working Hermes install.
 No system Tor installation is required; the POC embeds Arti through `tor-js`.
@@ -173,10 +173,23 @@ ID. The default policy permits:
 
 Agent Boost asks Kohaku to unshield the `0.1` ETH note to a fresh
 wallet-controlled account and append the exact recipient transfer as a tail
-call. Kohaku waits for UserOperation inclusion. Agent Boost additionally checks
-that the recipient's public balance increased by at least the requested amount
-before reporting `confirmed`; otherwise the durable result remains `submitted`
-or unresolved rather than guessing.
+call. Kohaku waits for UserOperation inclusion. Agent Boost stores a recipient
+balance checkpoint before handing execution authority to Kohaku and keeps a
+UserOperation hash distinct from an Ethereum transaction hash. It reports
+`confirmed` only from Kohaku's explicit confirmation, a successful transaction
+receipt, or a sufficient recipient-balance delta. Submitted and interrupted
+requests are reconciled on restart and status reads without broadcasting again.
+If concrete evidence is unavailable, the durable result remains `submitted` or
+`indeterminate` rather than guessing.
+
+### Start a fresh demo
+
+Tell Hermes that you want to start a new demo wallet. Hermes summarizes that
+the current demo will be archived and asks for ordinary confirmation. After you
+approve, `wallet_start_new_demo` drains in-flight work, archives the complete
+state under the private local state directory, retains the previous Kohaku
+wallet, creates a new wallet profile, and presents a fresh funding QR. An
+unresolved prior payment is archived exactly as observed and is never retried.
 
 ### Layered security policy
 
@@ -212,6 +225,17 @@ tool names, internal IDs, booleans, wei, or signing material. See
 [`evals/README.md`](evals/README.md) for the boundary between this deterministic
 contract eval and a live Hermes model eval.
 
+Run the same conversations through a real Hermes model and the fake MCP runtime
+in a disposable profile:
+
+```sh
+npm run eval:live -- --hermes "$(command -v hermes)" --provider <provider> --model <model>
+```
+
+This opt-in eval grades visible response length/content and the exact tool trace.
+It cannot touch a wallet, Tor, Sepolia, or the user's normal Hermes sessions,
+memory, rules, or MCP configuration.
+
 ## What Hermes can see
 
 The agent needs state to make decisions, so address and balance visibility is
@@ -226,7 +250,7 @@ intentional.
 | Delegation limits, expiry, and use | RPC URL and local filesystem paths |
 | Plan, request, and confirmation state | Arbitrary Kohaku command execution |
 
-The MCP surface contains seven native tools:
+The MCP surface contains eight native tools:
 
 | Tool | Purpose |
 | --- | --- |
@@ -234,6 +258,7 @@ The MCP surface contains seven native tools:
 | `onboarding_start` | Create or resume setup and open/present funding UI |
 | `onboarding_status` | Long-poll durable setup progress by revision |
 | `wallet_get_context` | Refresh address, balances, and delegation state |
+| `wallet_start_new_demo` | Confirm, archive, and create a fresh demo wallet |
 | `wallet_plan_private_payment` | Validate one exact recipient and wei amount |
 | `wallet_execute_private_payment` | Execute a confirmed, unexpired plan |
 | `wallet_get_request` | Read durable redacted request state |
@@ -308,7 +333,8 @@ It is not a guarantee of anonymity.
   Hermes, model-provider, Matrix, browser, and other general agent traffic are
   not covered by Agent Boost's RPC route.
 - A fresh or stealth address alone does not hide its funding transaction.
-- The disposable wallet has no recovery or export UX in Agent Boost.
+- Demo reset archives prior state and retains old Kohaku wallet data locally,
+  but Agent Boost still has no seed export or guided wallet-recovery UX.
 - Recipient-balance-delta confirmation proves delivery of at least the amount;
   it is not cryptographic attribution when unrelated concurrent transfers are
   possible.
@@ -354,6 +380,11 @@ secret-bearing repository config.
 The upstream RPC URL is never returned through MCP or given to Kohaku. Do not put credentialed
 URLs in the repository or paste them into a model conversation.
 
+The default is the public Sepolia endpoint
+`https://ethereum-sepolia-rpc.publicnode.com`, routed through Tor with no direct
+fallback. Kohaku's account-abstraction relay also uses its own Tor-backed
+Pimlico path; neither path makes Hermes or general agent traffic private.
+
 ## Development
 
 ```console
@@ -361,6 +392,7 @@ npm ci
 npm run check
 npm test
 npm run build
+npm run release:smoke
 node dist/cli.js doctor
 ```
 

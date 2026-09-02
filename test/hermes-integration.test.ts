@@ -288,6 +288,7 @@ test("uses native tool names and never encodes Hermes version prefixes", () => {
     "onboarding_start",
     "onboarding_status",
     "wallet_get_context",
+    "wallet_start_new_demo",
     "wallet_plan_private_payment",
     "wallet_execute_private_payment",
     "wallet_get_request",

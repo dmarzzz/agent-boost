@@ -42,6 +42,7 @@ mcp_servers:
         - onboarding_start
         - onboarding_status
         - wallet_get_context
+        - wallet_start_new_demo
         - wallet_plan_private_payment
         - wallet_execute_private_payment
         - wallet_get_request
@@ -122,9 +123,17 @@ Agent Boost does not receive audio or independently authenticate the speaker.
 
 The execution tool can cause signing and broadcast. The authority is constrained
 to one native-ETH Sepolia payment under the configured amount and lifetime
-limits. A submitted result is not confirmed. Agent Boost reports confirmed only
-after Kohaku returns from inclusion and the recipient balance delta covers the
-requested amount.
+limits. A submitted result is not confirmed. Agent Boost distinguishes a
+Kohaku UserOperation hash from a transaction hash. It reports confirmed only
+from explicit adapter confirmation, a successful transaction receipt, or the
+recipient balance increasing by the requested amount from the pre-execution
+checkpoint. Otherwise it preserves submitted or indeterminate state and
+reconciles on restart/status reads without rebroadcast.
+
+`wallet_start_new_demo` is the explicit reset path. After ordinary user
+confirmation it archives current state, keeps the prior Kohaku wallet, creates
+a new wallet profile, and returns a fresh funding QR. `onboarding_start` alone
+always resumes the current wallet.
 
 ## Process and state lifetime
 
@@ -134,6 +143,7 @@ Hermes launches Agent Boost as an MCP child. Each launch:
 - acquires the exclusive loopback runtime-ownership lock;
 - bootstraps embedded Tor and verifies the Sepolia chain through it;
 - starts the authenticated fixed-origin loopback RPC relay for Kohaku;
+- restores the persisted active wallet profile before resuming work;
 - resumes an unfinished funding or shield workflow;
 - starts the loopback UI only when onboarding requests it;
 - serializes Kohaku calls for the wallet;

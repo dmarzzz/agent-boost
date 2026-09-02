@@ -34,6 +34,8 @@ correct decision-making, not secrets.
 10. Only one Agent Boost process can own the local wallet runtime at a time.
 11. All Agent Boost and Kohaku Ethereum JSON-RPC uses the fixed Tor route with
     remote hostname resolution and no direct fallback.
+12. Restart/status reconciliation can only observe receipts or balances; it
+    cannot rebroadcast an unresolved request.
 
 ## Important non-goals
 
@@ -62,7 +64,8 @@ funding transaction, on-chain actions, and other process traffic are uncovered.
 
 ### Real-value safety
 
-The wallet stack has not been audited. There is no recovery UX, hardware signer,
+The wallet stack has not been audited. There is no seed export or guided wallet
+recovery UX, hardware signer,
 multi-party approval, production fee policy, chain reorganization handling, or
 formal verification. The event boundary is disposable, valueless Sepolia ETH.
 
@@ -79,7 +82,9 @@ formal verification. The event boundary is disposable, valueless Sepolia ETH.
 | Concurrent MCP processes race signing | Exclusive loopback runtime-ownership lock | A local denial of service can occupy the lock port |
 | QR is framed or fetched remotely | Loopback bind, host/origin checks, CSP, no-store | Other same-user local processes can connect |
 | Shield is duplicated after restart | Persist `shielding`, then poll private balance | Crash before adapter receives command can stall setup |
-| Hash is mistaken for delivery | Recipient balance-delta verification | Concurrent unrelated transfer can produce a false attribution |
+| UserOperation hash is mistaken for a transaction | Distinct durable fields; only explicit transaction hashes enter receipt lookup | Upstream adapter output changes could require parser updates |
+| Hash is mistaken for delivery | Successful receipt or recipient balance-delta verification | Concurrent unrelated transfer can produce a false balance attribution |
+| Demo reset loses an unresolved request | Explicit confirmation plus complete private state archive; old Kohaku wallet retained | Same-user deletion or disk loss can still destroy the archive |
 | RPC observer correlates activity | HTTPS through Tor, remote DNS, fixed-origin fail-closed relay | Provider no longer sees the machine IP, but still sees exit IP, methods, addresses, payloads, and timing |
 | Local process abuses RPC relay | Loopback bind, random 256-bit path, exact Host/path, required-method allowlist, size/concurrency limits, post-call traffic-log redaction | Same-UID process/env inspection is not a custody boundary |
 | Tor becomes unavailable | No global-fetch/direct retry; route becomes failed | Operations stop; an ambiguous broadcast remains unresolved |

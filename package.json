@@ -22,9 +22,11 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/cli.ts",
     "eval": "node --import tsx --test --test-concurrency=1 --test-reporter=spec test/conversation-evals.test.ts",
+    "eval:live": "node scripts/live-hermes-eval.mjs",
     "install:kohaku": "node scripts/install-kohaku.mjs",
     "install:local": "node scripts/install.mjs",
     "release:gate": "node scripts/release-gate.mjs",
+    "release:smoke": "node scripts/clean-install-smoke.mjs",
     "test": "node --import tsx --test --test-concurrency=1 --test-reporter=spec test/**/*.test.ts",
     "test:serial": "node --import tsx --test --test-concurrency=1 --test-reporter=spec test/**/*.test.ts",
     "prepack": "npm run check && npm test && npm run build"

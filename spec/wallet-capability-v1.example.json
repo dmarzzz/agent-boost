@@ -1,5 +1,5 @@
 {
-  "contract": "org.agentboost.wallet/1.2",
+  "contract": "org.agentboost.wallet/1.3",
   "chain_id": "eip155:11155111",
   "network_name": "Sepolia",
   "asset_type": "eip155:11155111/slip44:60",
@@ -57,7 +57,7 @@
       "the RPC provider still sees methods, addresses, payloads, and timing",
       "Hermes and other agent traffic are not routed through Tor",
       "timing and the Sepolia anonymity set can enable correlation",
-      "the wallet is disposable and has no recovery UX"
+      "demo resets archive local state and retain old Kohaku wallet data"
     ]
   },
   "adapters": {
@@ -83,5 +83,11 @@
     "address_ready": true,
     "rpc_egress": "ready",
     "general_egress_ready": false
+  },
+  "demo_reset": {
+    "available": true,
+    "requires_user_confirmation": true,
+    "archives_previous_state": true,
+    "rebroadcasts_unresolved_payments": false
   }
 }

@@ -11,6 +11,9 @@ import type {
 
 export interface StateDocument {
   version: 1;
+  wallet?: {
+    activeName: string;
+  };
   onboarding?: OnboardingRecord;
   plans: Record<string, PaymentPlan>;
   requests: Record<string, PaymentRequest>;
@@ -28,10 +31,12 @@ function cloneState(state: StateDocument): StateDocument {
 
 export class StateStore {
   readonly #path: string;
+  readonly #stateDir: string;
   readonly #events = new EventEmitter();
   #queue: Promise<unknown> = Promise.resolve();
 
   constructor(stateDir: string) {
+    this.#stateDir = stateDir;
     this.#path = join(stateDir, "state.json");
     this.#events.setMaxListeners(100);
   }
@@ -70,6 +75,43 @@ export class StateStore {
       await this.#write(draft);
       this.#events.emit("change", cloneState(draft));
       return cloneState(draft);
+    });
+    this.#queue = operation.catch(() => undefined);
+    return operation;
+  }
+
+  async ensureWalletProfile(defaultName: string): Promise<string> {
+    const state = await this.update((draft) => {
+      draft.wallet ??= { activeName: defaultName };
+    });
+    return state.wallet?.activeName ?? defaultName;
+  }
+
+  async archiveAndReset(newWalletName: string): Promise<{
+    archiveId: string;
+    previous: StateDocument;
+    current: StateDocument;
+  }> {
+    const operation = this.#queue.then(async () => {
+      const previous = await this.read();
+      const archiveId = `${new Date().toISOString().replaceAll(/[:.]/gu, "-")}-${randomUUID()}`;
+      const archiveDir = join(this.#stateDir, "archives", archiveId);
+      await mkdir(archiveDir, { recursive: true, mode: 0o700 });
+      await chmod(archiveDir, 0o700);
+      await this.#writePath(join(archiveDir, "state.json"), previous);
+      const current: StateDocument = {
+        version: 1,
+        wallet: { activeName: newWalletName },
+        plans: {},
+        requests: {},
+      };
+      await this.#write(current);
+      this.#events.emit("change", cloneState(current));
+      return {
+        archiveId,
+        previous: cloneState(previous),
+        current: cloneState(current),
+      };
     });
     this.#queue = operation.catch(() => undefined);
     return operation;
@@ -117,7 +159,13 @@ export class StateStore {
   }
 
   async #write(state: StateDocument): Promise<void> {
-    const temp = `${this.#path}.${process.pid}.${randomUUID()}.tmp`;
+    await this.#writePath(this.#path, state);
+  }
+
+  async #writePath(path: string, state: StateDocument): Promise<void> {
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await chmod(dirname(path), 0o700);
+    const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
     const handle = await open(temp, "wx", 0o600);
     try {
       await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`, "utf8");
@@ -126,9 +174,9 @@ export class StateStore {
       await handle.close();
     }
     await chmod(temp, 0o600);
-    await rename(temp, this.#path);
-    await chmod(this.#path, 0o600);
-    const directory = await open(dirname(this.#path), "r");
+    await rename(temp, path);
+    await chmod(path, 0o600);
+    const directory = await open(dirname(path), "r");
     try {
       await directory.sync();
     } finally {

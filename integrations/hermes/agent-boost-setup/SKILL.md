@@ -81,6 +81,19 @@ Tornado unless the user asks for technical detail. Never promise anonymity.
    `failed` reports its public remediation and stops. Never show a zero-amount
    funding request or an old QR.
 
+## Start a new demo wallet
+
+When the user clearly asks to start over, reset the demo, or create a fresh
+wallet, do not call `onboarding_start`: it intentionally resumes the existing
+wallet. Explain in one sentence that the current local demo and any unresolved
+request will be archived, the old Kohaku wallet will be retained locally, and a
+new wallet will need fresh Sepolia funding. Ask for ordinary confirmation.
+After approval, call `wallet_start_new_demo` yourself with
+`user_confirmed: true`. Present its returned funding QR and exact remaining
+amount using the same funding interaction above. Never ask the user for tool
+syntax or a boolean, never invoke the reset without confirmation, and never
+describe it as deleting or retrying the prior payment.
+
 ## When the participant indicates they sent funds or asks for status
 
 1. If the current conversation contains the latest `setupId` and `revision`,

@@ -60,7 +60,7 @@ export class PaymentController {
   }
 
   async recoverInterruptedRequests(): Promise<void> {
-    await this.#store.update((draft) => {
+    const state = await this.#store.update((draft) => {
       for (const request of Object.values(draft.requests)) {
         if (request.phase !== "executing") continue;
         request.phase = "indeterminate";
@@ -72,6 +72,15 @@ export class PaymentController {
         };
       }
     });
+    for (const request of Object.values(state.requests)) {
+      if (
+        request.phase === "executing" ||
+        request.phase === "submitted" ||
+        request.phase === "indeterminate"
+      ) {
+        await this.reconcileRequest(request.requestId);
+      }
+    }
   }
 
   async plan(input: {
@@ -202,12 +211,98 @@ export class PaymentController {
   async getRequest(requestId: string): Promise<PaymentRequest> {
     const request = (await this.#store.read()).requests[requestId];
     if (!request) throw new Error("REQUEST_NOT_FOUND");
+    if (
+      request.phase === "executing" ||
+      request.phase === "submitted" ||
+      request.phase === "indeterminate"
+    ) {
+      return this.reconcileRequest(requestId);
+    }
     return request;
+  }
+
+  async reconcileRequest(requestId: string): Promise<PaymentRequest> {
+    const request = (await this.#store.read()).requests[requestId];
+    if (!request) throw new Error("REQUEST_NOT_FOUND");
+    if (
+      request.phase !== "executing" &&
+      request.phase !== "submitted" &&
+      request.phase !== "indeterminate"
+    ) {
+      return request;
+    }
+
+    let receiptStatus: "pending" | "success" | "reverted" | undefined;
+    if (
+      request.transactionHash &&
+      this.#chain?.getTransactionReceiptStatus
+    ) {
+      try {
+        receiptStatus = await this.#chain.getTransactionReceiptStatus(
+          request.transactionHash,
+        );
+      } catch {
+        // Receipt lookup is best-effort. Reconciliation never broadcasts.
+      }
+    }
+
+    let delivered = false;
+    if (this.#chain && request.recipientBalanceBeforeWei !== undefined) {
+      try {
+        const currentBalance = await this.#chain.getBalanceWei(request.recipient);
+        delivered =
+          currentBalance >=
+          BigInt(request.recipientBalanceBeforeWei) + BigInt(request.amountWei);
+      } catch {
+        // A temporarily unavailable balance probe leaves the request unresolved.
+      }
+    }
+
+    const checkedAt = this.#clock.now().toISOString();
+    const updated = await this.#store.update((draft) => {
+      const current = draft.requests[requestId];
+      if (!current) throw new Error("REQUEST_NOT_FOUND");
+      if (
+        current.phase !== "executing" &&
+        current.phase !== "submitted" &&
+        current.phase !== "indeterminate"
+      ) {
+        return;
+      }
+      current.reconciliation = {
+        attempts: (current.reconciliation?.attempts ?? 0) + 1,
+        checkedAt,
+      };
+      if (receiptStatus === "reverted") {
+        current.phase = "failed";
+        current.updatedAt = checkedAt;
+        current.error = {
+          code: "TRANSACTION_REVERTED",
+          message: "The payment transaction was included but reverted.",
+        };
+      } else if (receiptStatus === "success" || delivered) {
+        current.phase = "confirmed";
+        current.updatedAt = checkedAt;
+        current.confirmation = {
+          method: receiptStatus === "success"
+            ? "transaction_receipt"
+            : "recipient_balance_delta",
+          checkedAt,
+        };
+        delete current.error;
+      }
+    });
+    return updated.requests[requestId] as PaymentRequest;
   }
 
   async stop(): Promise<void> {
     this.#acceptingExecutions = false;
     await this.#execution?.catch(() => undefined);
+  }
+
+  resetForNewDemo(): void {
+    if (this.#execution) throw new Error("PAYMENT_ALREADY_EXECUTING");
+    this.#acceptingExecutions = true;
   }
 
   async #executePlan(
@@ -217,6 +312,15 @@ export class PaymentController {
     if (!this.#executeEnabled) throw new Error("EXECUTION_DISABLED");
     if (this.#chain) await this.#chain.assertSepolia();
     const livePrivateBalance = await this.#wallet.getPrivateBalanceWei();
+    let recipientBalanceBefore: bigint | undefined;
+    if (this.#chain) {
+      try {
+        recipientBalanceBefore = await this.#chain.getBalanceWei(plan.recipient);
+      } catch {
+        // The payment can proceed, but balance-delta reconciliation will not be
+        // available if no transaction identifier is returned.
+      }
+    }
     const now = this.#clock.now().toISOString();
     const request: PaymentRequest = {
       version: 1,
@@ -228,6 +332,9 @@ export class PaymentController {
       phase: "executing",
       createdAt: now,
       updatedAt: now,
+      ...(recipientBalanceBefore !== undefined
+        ? { recipientBalanceBeforeWei: recipientBalanceBefore.toString() }
+        : {}),
     };
 
     await this.#store.update((draft) => {
@@ -280,15 +387,6 @@ export class PaymentController {
     });
 
     try {
-      let recipientBalanceBefore: bigint | undefined;
-      if (this.#chain) {
-        try {
-          recipientBalanceBefore = await this.#chain.getBalanceWei(plan.recipient);
-        } catch {
-          // A failed confirmation probe must not turn a confirmed user request
-          // into a duplicate broadcast. The durable result remains submitted.
-        }
-      }
       if (this.#chain) await this.#chain.assertSepolia();
       const result = await this.#wallet.executePrivatePayment({
         recipient: plan.recipient,
@@ -317,11 +415,21 @@ export class PaymentController {
         if (!current) throw new Error("REQUEST_NOT_FOUND");
         current.phase = result.confirmed || delivered
           ? "confirmed"
-          : result.transactionHash
+          : result.transactionHash || result.userOperationHash
             ? "submitted"
             : "indeterminate";
         current.updatedAt = this.#clock.now().toISOString();
         if (result.transactionHash) current.transactionHash = result.transactionHash;
+        if (result.userOperationHash) {
+          current.userOperationHash = result.userOperationHash;
+        }
+        if (result.confirmed || delivered) {
+          current.confirmation = {
+            method: result.confirmed ? "adapter" : "recipient_balance_delta",
+            checkedAt: current.updatedAt,
+          };
+          delete current.error;
+        }
         if (draft.onboarding && privateBalanceAfter !== undefined) {
           draft.onboarding.privateBalanceWei = privateBalanceAfter.toString();
           draft.onboarding.revision += 1;

@@ -138,6 +138,21 @@ describe("KohakuWalletAdapter", () => {
     assert.match(create.env?.NODE_OPTIONS ?? "", /network-guard\.mjs/);
   });
 
+  it("can select a fresh validated wallet profile for a new demo", async () => {
+    const runner = new FakeRunner((invocation) => {
+      if (command(invocation) === "list-wallets") {
+        return { exitCode: 0, stdout: '{"wallets":{}}', stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+    const { adapter } = await fixture(runner);
+    adapter.selectWallet("agent-boost-new-demo");
+    await adapter.ensureWallet();
+    const create = runner.calls.find((call) => command(call) === "create-wallet");
+    assert.equal(create?.args[1], "agent-boost-new-demo");
+    assert.throws(() => adapter.selectWallet("../escape"), /wallet name/);
+  });
+
   it("redacts the live relay token from Kohaku's persistent traffic log", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-boost-kohaku-log-"));
     const dataDir = join(root, "kohaku");
@@ -297,7 +312,10 @@ describe("KohakuWalletAdapter", () => {
       if (command(invocation) === "unshield") {
         return {
           exitCode: 0,
-          stdout: JSON.stringify({ explorerHash: TX_HASH }),
+          stdout: JSON.stringify({
+            explorerHash: TX_HASH,
+            relay: { userOpHash: TX_HASH },
+          }),
           stderr: "",
         };
       }
@@ -313,7 +331,7 @@ describe("KohakuWalletAdapter", () => {
         recipient: RECIPIENT,
         amountWei: 20_000_000_000_000_000n,
       }),
-      { transactionHash: TX_HASH },
+      { userOperationHash: TX_HASH },
     );
 
     const shield = runner.calls.find((call) => command(call) === "shield")!;
@@ -333,6 +351,29 @@ describe("KohakuWalletAdapter", () => {
     assert.equal(
       unshield.args[unshield.args.indexOf("--amount-wei") + 1],
       "100000000000000000",
+    );
+  });
+
+  it("keeps user-operation and transaction identifiers distinct", async () => {
+    const userOperationHash = `0x${"cd".repeat(32)}`;
+    const transactionHash = `0x${"ef".repeat(32)}`;
+    const runner = new FakeRunner(() => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        explorerHash: userOperationHash,
+        relay: { userOpHash: userOperationHash },
+        receipt: { transactionHash },
+      }),
+      stderr: "",
+    }));
+    const { adapter } = await fixture(runner);
+
+    assert.deepEqual(
+      await adapter.executePrivatePayment({
+        recipient: RECIPIENT,
+        amountWei: 20_000_000_000_000_000n,
+      }),
+      { transactionHash, userOperationHash },
     );
   });
 

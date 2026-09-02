@@ -1,7 +1,7 @@
 # Wallet capability contract
 
 Agent Boost exposes a wallet-first MCP contract named
-`org.agentboost.wallet/1.2`. It is Sepolia-only.
+`org.agentboost.wallet/1.3`. It is Sepolia-only.
 
 The capability document is available through the read-only `capabilities`
 tool and the resource:
@@ -132,6 +132,18 @@ No input. Refreshes and returns:
 It returns no seed, key, mnemonic, password, note, proof, raw signed
 transaction, RPC URL, or arbitrary adapter output.
 
+### `wallet_start_new_demo`
+
+```json
+{"user_confirmed": true}
+```
+
+Requires explicit user confirmation. It drains current onboarding and payment
+work, archives the complete state with private local permissions, retains the
+old Kohaku wallet, selects a new wallet profile, and starts a fresh funding
+flow. It never rebroadcasts an unresolved request. The tool returns a public
+archive identifier and a new QR; it does not return an archive path or secrets.
+
 ### `wallet_plan_private_payment`
 
 ```json
@@ -174,7 +186,10 @@ automatic retry.
 ```
 
 Returns one durable, redacted request in `executing`, `submitted`,
-`confirmed`, `failed`, or `indeterminate` state.
+`confirmed`, `failed`, or `indeterminate` state. For a nonterminal request, the
+read also attempts reconciliation from a real transaction receipt or the
+recipient-balance checkpoint persisted before execution. Reconciliation never
+broadcasts. Internal checkpoints and attempt metadata are omitted from MCP.
 
 ## Model-visible authority
 

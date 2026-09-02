@@ -22,7 +22,17 @@ syntax, or signing material.
 
 This is a contract-level end-to-end eval, not a claim that a nondeterministic
 model will always produce the golden prose. To evaluate a Hermes model or
-prompt revision, replay the `user` steps in a disposable Hermes profile backed
-by the same fake runtime, then grade its visible messages and tool trace against
-the corresponding case. Keep live-wallet smoke tests separate and never use
-them for an `indeterminate` request.
+prompt revision with a real Hermes model and the fake MCP runtime, run:
+
+```sh
+npm run eval:live -- --hermes "$(command -v hermes)"
+```
+
+Use `--case confirmed-payment-with-emoji` to run one case, `--provider` and
+`--model` to pin inference, and `--report` to write a private-permission JSON report. The runner
+creates a disposable `HERMES_HOME`, exposes only the fake Agent Boost MCP
+toolset, preloads the checked-in skills, grades participant-visible responses
+and the exact tool trace, and removes the profile afterward. It inherits the
+operator's normal inference-provider environment but never copies their
+sessions, memory, rules, or MCP configuration. Keep live-wallet smoke tests
+separate and never use them for an `indeterminate` request.

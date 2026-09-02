@@ -16,10 +16,11 @@
     "security",
     "privacy",
     "adapters",
-    "readiness"
+    "readiness",
+    "demo_reset"
   ],
   "properties": {
-    "contract": {"const": "org.agentboost.wallet/1.2"},
+    "contract": {"const": "org.agentboost.wallet/1.3"},
     "chain_id": {"const": "eip155:11155111"},
     "network_name": {"const": "Sepolia"},
     "asset_type": {"const": "eip155:11155111/slip44:60"},
@@ -201,6 +202,22 @@
         "address_ready": {"type": "boolean"},
         "rpc_egress": {"enum": ["starting", "ready", "failed", "closed"]},
         "general_egress_ready": {"const": false}
+      }
+    },
+    "demo_reset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available",
+        "requires_user_confirmation",
+        "archives_previous_state",
+        "rebroadcasts_unresolved_payments"
+      ],
+      "properties": {
+        "available": {"type": "boolean"},
+        "requires_user_confirmation": {"const": true},
+        "archives_previous_state": {"const": true},
+        "rebroadcasts_unresolved_payments": {"const": false}
       }
     }
   },

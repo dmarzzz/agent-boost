@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -39,4 +39,40 @@ test("StateStore writes atomically with private permissions and wakes waiters", 
   assert.equal((await waiter)?.revision, 1);
   assert.equal((await stat(store.path)).mode & 0o777, 0o600);
   assert.equal((await stat(root)).mode & 0o777, 0o700);
+});
+
+test("StateStore archives a complete demo before starting fresh state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-boost-state-archive-"));
+  const store = new StateStore(root);
+  await store.initialize();
+  await store.ensureWalletProfile("agent-boost");
+  await store.update((draft) => {
+    draft.requests.req_unresolved = {
+      version: 1,
+      requestId: "req_unresolved",
+      clientRequestId: "hermes:wd_unresolved",
+      decisionId: "wd_unresolved",
+      recipient: "0x2222222222222222222222222222222222222222",
+      amountWei: "1",
+      phase: "indeterminate",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+  });
+
+  const reset = await store.archiveAndReset("agent-boost-new");
+  assert.equal(reset.previous.requests.req_unresolved?.phase, "indeterminate");
+  assert.deepEqual(reset.current, {
+    version: 1,
+    wallet: { activeName: "agent-boost-new" },
+    plans: {},
+    requests: {},
+  });
+  const archivePath = join(root, "archives", reset.archiveId, "state.json");
+  const archived = JSON.parse(await readFile(archivePath, "utf8")) as {
+    requests: Record<string, { phase: string }>;
+  };
+  assert.equal(archived.requests.req_unresolved?.phase, "indeterminate");
+  assert.equal((await stat(archivePath)).mode & 0o777, 0o600);
+  assert.equal((await stat(join(root, "archives", reset.archiveId))).mode & 0o777, 0o700);
 });

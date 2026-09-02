@@ -84,6 +84,18 @@ export interface PaymentRequest {
   createdAt: string;
   updatedAt: string;
   transactionHash?: string;
+  userOperationHash?: string;
+  confirmation?: {
+    method: "adapter" | "recipient_balance_delta" | "transaction_receipt";
+    checkedAt: string;
+  };
+  /** Internal reconciliation checkpoint. Omitted from MCP responses. */
+  recipientBalanceBeforeWei?: string;
+  /** Internal reconciliation bookkeeping. Omitted from MCP responses. */
+  reconciliation?: {
+    attempts: number;
+    checkedAt: string;
+  };
   error?: {
     code: string;
     message: string;
@@ -111,6 +123,8 @@ export interface PublicOnboardingSnapshot {
 }
 
 export interface WalletAdapter {
+  /** Select an existing or not-yet-created local wallet profile. */
+  selectWallet?(walletName: string): void;
   ensureWallet(): Promise<void>;
   nextFreshAddress(): Promise<string>;
   prewarmPrivacy(): Promise<void>;
@@ -126,10 +140,19 @@ export interface WalletAdapter {
   executePrivatePayment(input: {
     recipient: string;
     amountWei: bigint;
-  }): Promise<{ transactionHash?: string; confirmed?: boolean }>;
+  }): Promise<{
+    transactionHash?: string;
+    userOperationHash?: string;
+    confirmed?: boolean;
+  }>;
 }
+
+export type TransactionReceiptStatus = "pending" | "success" | "reverted";
 
 export interface ChainClient {
   assertSepolia(): Promise<void>;
   getBalanceWei(address: string): Promise<bigint>;
+  getTransactionReceiptStatus?(
+    transactionHash: string,
+  ): Promise<TransactionReceiptStatus>;
 }

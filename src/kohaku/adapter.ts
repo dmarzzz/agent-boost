@@ -56,7 +56,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
   static readonly compatibleCommit = KOHAKU_COMMIT;
 
   readonly #dataDir: string;
-  readonly #walletName: string;
+  #walletName: string;
   readonly #passwordFile: string;
   readonly #rpcUrl: string;
   readonly #rpcRelayToken: string | undefined;
@@ -69,17 +69,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
   private static readonly queues = new Map<string, Promise<void>>();
 
   constructor(options: KohakuWalletAdapterOptions) {
-    if (!WALLET_NAME_RE.test(options.walletName)) {
-      throw new Error(
-        "Kohaku wallet name must contain only letters, digits, dot, underscore, or dash",
-      );
-    }
-    if (
-      options.walletName === "proving-artifacts" ||
-      options.walletName === "public-sync-cache"
-    ) {
-      throw new Error(`Kohaku wallet name is reserved: ${options.walletName}`);
-    }
+    validateWalletName(options.walletName);
     const rpcUrl = parseRpcUrl(options.rpcUrl);
     const shieldFrom = options.shieldFrom ?? "0";
     if (!FROM_SELECTOR_RE.test(shieldFrom)) {
@@ -99,7 +89,12 @@ export class KohakuWalletAdapter implements WalletAdapter {
     this.#runner = options.runner ?? new SpawnCommandRunner();
     this.#shieldFrom = shieldFrom;
     this.#tornadoWithdrawalWei = withdrawalWei;
-    this.#queueKey = `${this.#dataDir}\0${this.#walletName}`;
+    this.#queueKey = this.#dataDir;
+  }
+
+  selectWallet(walletName: string): void {
+    validateWalletName(walletName);
+    this.#walletName = walletName;
   }
 
   ensureWallet(): Promise<void> {
@@ -243,7 +238,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
   executePrivatePayment(input: {
     recipient: string;
     amountWei: bigint;
-  }): Promise<{ transactionHash?: string }> {
+  }): Promise<{ transactionHash?: string; userOperationHash?: string }> {
     if (!ETH_ADDRESS_RE.test(input.recipient)) {
       return Promise.reject(new Error("Payment recipient must be an Ethereum address"));
     }
@@ -270,7 +265,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
         tailCall,
         "--broadcast",
       ]);
-      return optionalTransactionHash(result.stdout);
+      return optionalPaymentIdentifiers(result.stdout);
     });
   }
 
@@ -385,6 +380,17 @@ async function ensureSecureDirectory(path: string, label: string): Promise<void>
   await chmod(path, 0o700);
 }
 
+function validateWalletName(walletName: string): void {
+  if (!WALLET_NAME_RE.test(walletName)) {
+    throw new Error(
+      "Kohaku wallet name must contain only letters, digits, dot, underscore, or dash",
+    );
+  }
+  if (walletName === "proving-artifacts" || walletName === "public-sync-cache") {
+    throw new Error(`Kohaku wallet name is reserved: ${walletName}`);
+  }
+}
+
 function parseRpcUrl(raw: string): string {
   let parsed: URL;
   try {
@@ -463,13 +469,41 @@ function parseJsonObject(stdout: string, command: string): Record<string, unknow
 
 function optionalTransactionHash(stdout: string): { transactionHash?: string } {
   const payload = parseJsonObject(stdout, "broadcast");
-  const transactionHash = findTransactionHash(payload);
+  const transactionHash = findHashForKeys(payload, [
+    "transactionHash",
+    "txHash",
+    "bundleTxHash",
+    "hash",
+  ]);
   return transactionHash ? { transactionHash } : {};
 }
 
-function findTransactionHash(value: unknown): string | undefined {
+function optionalPaymentIdentifiers(stdout: string): {
+  transactionHash?: string;
+  userOperationHash?: string;
+} {
+  const payload = parseJsonObject(stdout, "broadcast");
+  const transactionHash = findHashForKeys(payload, [
+    "transactionHash",
+    "txHash",
+    "bundleTxHash",
+  ]);
+  const userOperationHash = findHashForKeys(payload, [
+    "userOperationHash",
+    "userOpHash",
+  ]);
+  return {
+    ...(transactionHash ? { transactionHash } : {}),
+    ...(userOperationHash ? { userOperationHash } : {}),
+  };
+}
+
+function findHashForKeys(
+  value: unknown,
+  keys: readonly string[],
+): string | undefined {
   if (!isRecord(value)) return undefined;
-  for (const key of ["explorerHash", "transactionHash", "txHash", "hash"]) {
+  for (const key of keys) {
     const candidate = value[key];
     if (typeof candidate === "string" && TX_HASH_RE.test(candidate)) {
       return candidate;
@@ -478,11 +512,11 @@ function findTransactionHash(value: unknown): string | undefined {
   for (const candidate of Object.values(value)) {
     if (Array.isArray(candidate)) {
       for (const entry of candidate) {
-        const nested = findTransactionHash(entry);
+        const nested = findHashForKeys(entry, keys);
         if (nested) return nested;
       }
     } else {
-      const nested = findTransactionHash(candidate);
+      const nested = findHashForKeys(candidate, keys);
       if (nested) return nested;
     }
   }

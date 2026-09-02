@@ -37,6 +37,15 @@ export interface AgentBoostRuntime {
     userConfirmed: boolean;
   }): Promise<PaymentRequest>;
   getRequest(requestId: string): Promise<PaymentRequest>;
+  startNewDemo(input: { userConfirmed: boolean }): Promise<{
+    archiveId: string;
+    previousSetupId?: string;
+    previousRequestCount: number;
+    record: OnboardingRecord;
+    snapshot: PublicOnboardingSnapshot;
+    uiOpened: boolean;
+    qrPngBase64?: string;
+  }>;
 }
 
 type Outcome =
@@ -129,6 +138,15 @@ function compactToolText(structured: Record<string, unknown>): string {
       return `Setup ready. Private spendable test balance: ${amount} Sepolia ETH. Reply with one concise confirmation.`;
     }
     return `Setup status: ${phase}. Use the structured status internally and give the user only the next action.`;
+  }
+
+  if (code === "DEMO_RESET_STARTED") {
+    const funding = asRecord(data.funding);
+    const remaining = stringField(funding, "remaining_amount_eth");
+    const address = stringField(funding, "address");
+    return remaining && address
+      ? `New demo wallet ready for funding: ${remaining} Sepolia ETH to ${address}. A QR is attached when available. The previous demo remains archived locally.`
+      : "New demo wallet created. The previous demo remains archived locally.";
   }
 
   if (code === "WALLET_CONTEXT") {
@@ -259,6 +277,13 @@ function requestOutcome(request: PaymentRequest): Outcome {
   return request.phase;
 }
 
+function publicPaymentRequest(request: PaymentRequest): Record<string, unknown> {
+  const publicRequest: Record<string, unknown> = { ...request };
+  delete publicRequest.recipientBalanceBeforeWei;
+  delete publicRequest.reconciliation;
+  return publicRequest;
+}
+
 export async function createMcpServer(
   runtime: AgentBoostRuntime,
 ): Promise<McpServer> {
@@ -274,7 +299,7 @@ export async function createMcpServer(
     {
       title: "Agent Boost capabilities",
       description:
-        "Read the Sepolia wallet contract, live feature readiness, delegated testnet limits, and explicit privacy exclusions. This grants no authority.",
+        "Read the Sepolia wallet contract, live feature readiness, delegated testnet limits, and explicit privacy exclusions. This grants no authority. Do not call merely to clarify a missing or ambiguous payment amount or recipient; ask the user for that missing human detail first.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -378,11 +403,52 @@ export async function createMcpServer(
   );
 
   server.registerTool(
+    "wallet_start_new_demo",
+    {
+      title: "Archive this demo and start a new wallet",
+      description:
+        "After the user clearly asks to start over and confirms, archive the current local demo state and create a fresh disposable Sepolia wallet with a new funding QR. The old wallet and request history remain recoverable locally. This never retries an unresolved payment. The agent—not the user—calls this tool.",
+      inputSchema: z.object({
+        user_confirmed: z.boolean().describe(
+          "True only after the user confirms archiving the current demo and funding a new wallet.",
+        ),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async ({ user_confirmed }) => {
+      try {
+        const started = await runtime.startNewDemo({
+          userConfirmed: user_confirmed,
+        });
+        return result(
+          envelope(
+            digest,
+            onboardingOutcome(started.record),
+            "DEMO_RESET_STARTED",
+            {
+              setup: publicOnboardingState(started.record),
+              funding: fundingDetails(started.snapshot, Boolean(started.qrPngBase64)),
+              archive_id: started.archiveId,
+              previous_setup_id: started.previousSetupId,
+              previous_request_count: started.previousRequestCount,
+              ui_opened: started.uiOpened,
+            },
+            { mode: "wait", safeWithSameArguments: false, afterMs: 2_000 },
+          ),
+          started.qrPngBase64,
+        );
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
     "wallet_plan_private_payment",
     {
       title: "Plan a shielded Sepolia test payment",
       description:
-        "The agent—not the user—calls this to prepare one exact native-ETH payment from the private test balance. amount_atomic is wei. Planning never executes. Return a short human readback and, when the active policy requires it, accept ordinary approval such as yes, send it, or ✅. Never ask the user to type an MCP command or identifier.",
+        "The agent—not the user—calls this to prepare one exact native-ETH payment from the private test balance. Call wallet_get_context immediately before planning so the agent has the live address, spendable balance, and delegation state. amount_atomic is wei. Planning never executes. Return a short human readback and, when the active policy requires it, accept ordinary approval such as yes, send it, or ✅. Never ask the user to type an MCP command or identifier.",
       inputSchema: z.object({
         recipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
         amount_atomic: z.string().regex(/^(0|[1-9][0-9]*)$/),
@@ -441,7 +507,7 @@ export async function createMcpServer(
             digest,
             requestOutcome(request),
             "PAYMENT_REQUEST",
-            { request },
+            { request: publicPaymentRequest(request) },
             request.phase === "executing" || request.phase === "submitted"
               ? { mode: "wait", safeWithSameArguments: true, afterMs: 3_000 }
               : { mode: "never", safeWithSameArguments: false },
@@ -466,7 +532,9 @@ export async function createMcpServer(
       try {
         const request = await runtime.getRequest(request_id);
         return result(
-          envelope(digest, requestOutcome(request), "PAYMENT_STATUS", { request }),
+          envelope(digest, requestOutcome(request), "PAYMENT_STATUS", {
+            request: publicPaymentRequest(request),
+          }),
         );
       } catch (error) {
         return domainError(digest, error);

@@ -79,15 +79,30 @@ function fakeRuntime(): AgentBoostRuntime {
         phase: "submitted",
         createdAt: new Date(0).toISOString(),
         updatedAt: new Date(0).toISOString(),
+        recipientBalanceBeforeWei: "123",
+        reconciliation: {
+          attempts: 2,
+          checkedAt: new Date(0).toISOString(),
+        },
       };
     },
     async getRequest() {
       throw new Error("not used");
     },
+    async startNewDemo() {
+      return {
+        archiveId: "archive_12345678",
+        previousSetupId: "setup_old1234",
+        previousRequestCount: 1,
+        record: setup,
+        snapshot: setup,
+        uiOpened: true,
+      };
+    },
   };
 }
 
-test("MCP exposes the seven wallet-first tools and structured onboarding", async () => {
+test("MCP exposes wallet-first tools and structured onboarding", async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = await createMcpServer(fakeRuntime());
   const client = new Client({ name: "test", version: "1.0.0" });
@@ -104,6 +119,7 @@ test("MCP exposes the seven wallet-first tools and structured onboarding", async
       "wallet_get_context",
       "wallet_get_request",
       "wallet_plan_private_payment",
+      "wallet_start_new_demo",
     ],
   );
   const started = await client.callTool({ name: "onboarding_start", arguments: {} });
@@ -141,6 +157,16 @@ test("MCP exposes the seven wallet-first tools and structured onboarding", async
   assert.match(startText?.type === "text" ? startText.text : "", /reply ✅ or say sent/u);
   assert.doesNotMatch(startText?.type === "text" ? startText.text : "", /manifest_digest|setupId/u);
   assert.doesNotMatch(JSON.stringify(started), /127\.0\.0\.1|uiUrl/u);
+
+  const reset = await client.callTool({
+    name: "wallet_start_new_demo",
+    arguments: { user_confirmed: true },
+  });
+  const resetPayload = reset.structuredContent as {
+    data: { archive_id: string; previous_request_count: number };
+  };
+  assert.equal(resetPayload.data.archive_id, "archive_12345678");
+  assert.equal(resetPayload.data.previous_request_count, 1);
 
   const status = await client.callTool({
     name: "onboarding_status",
@@ -185,6 +211,10 @@ test("MCP exposes the seven wallet-first tools and structured onboarding", async
   assert.equal(
     executedPayload.data.request.clientRequestId,
     "hermes:wd_12345678",
+  );
+  assert.doesNotMatch(
+    JSON.stringify(executedPayload),
+    /recipientBalanceBeforeWei|reconciliation/,
   );
   const executedText = executed.content.find((block) => block.type === "text");
   assert.match(

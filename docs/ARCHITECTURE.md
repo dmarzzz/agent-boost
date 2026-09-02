@@ -16,7 +16,7 @@ seed storage, Tornado proving, signing, and broadcast.
 | Tor RPC route | Embedded Arti client, fixed HTTPS origin, remote DNS, no direct fallback |
 | Loopback RPC relay | Random-path JSON-RPC bridge from Kohaku to the Tor route |
 | Sepolia RPC client | Tor-routed chain assertion and live public balance reads |
-| State store | Atomic durable setup, plan, request, and delegation records |
+| State store | Atomic durable setup, plan, request, delegation, wallet-profile, and archive records |
 
 The first release contains no general agent egress or operator approval
 dashboard. Its proxy is narrowly limited to the configured Sepolia RPC origin.
@@ -75,7 +75,7 @@ wallet_get_context
   → wallet_execute_private_payment(decision_id, stable client ID)
   → Kohaku unshield --next + exact value tail call
   → submitted
-  → recipient balance delta verified
+  → transaction receipt or recipient balance delta verified
   → confirmed
 ```
 
@@ -84,8 +84,11 @@ before signing, execution asserts Sepolia again, refreshes the spendable
 private balance, and rechecks the kill switch, delegation chain, expiry,
 per-payment limit, lifetime limit, and one-payment rule. It then writes an
 `executing` request and consumes the allowance before invoking Kohaku. This
-prevents a crash or error from making a possibly submitted payment look safely
-repeatable.
+The recipient's pre-execution balance is stored in that same durable request
+before the adapter call. This prevents a crash or error from making a possibly
+submitted payment look safely repeatable and makes later read-only
+reconciliation possible. UserOperation and transaction hashes are separate
+fields; only a true transaction hash is queried as a transaction receipt.
 
 Kohaku's Tornado path withdraws the configured `0.1` ETH note to the next
 wallet-controlled EIP-7702 account. The recipient payment is an exact tail call;
@@ -120,7 +123,14 @@ from a remembered or merely total balance.
 - the random relay token is redacted from Kohaku's traffic log after each call;
 - a process-shared loopback lock prevents concurrent wallet runtimes;
 - output and execution time are bounded;
-- operations are serialized by data directory and wallet name.
+- operations are serialized by Kohaku data directory, including wallet-profile
+  changes.
+
+A confirmed demo reset first stops onboarding and drains payment execution. It
+creates a new Kohaku profile, writes the complete prior state into a private
+archive directory, atomically replaces active state with the new profile, and
+starts onboarding. The old wallet and request history are retained locally;
+none of their side effects are replayed.
 
 The Kohaku installation is built from a fixed commit in a staging directory,
 verified, hashed, and atomically renamed into place. An unmanaged target is
@@ -138,7 +148,8 @@ never overwritten.
 | Plan expired or delegation used | Reject before adapter call |
 | A second Agent Boost process starts | Fail closed on the runtime ownership lock |
 | User did not confirm | Reject before durable request |
-| Submission cannot be proven delivered | Keep `submitted`/unresolved |
+| Submission cannot be proven delivered | Keep `submitted`/unresolved; reconcile later without broadcast |
+| User requests a fresh demo | Require confirmation, archive state and old wallet, then create a new funding QR |
 | UI cannot open | Return QR through MCP when possible |
 | UI port unavailable | Continue with MCP QR/address fallback |
 | General egress unavailable | Report it; never claim the RPC route covers it |
