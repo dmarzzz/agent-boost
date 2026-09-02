@@ -6,6 +6,7 @@ import { loadConfig } from "../src/config.js";
 test("loadConfig is Sepolia-only, HTTPS-only, and avoids reserved ports", () => {
   const config = loadConfig({}, "/tmp/agent-boost-home");
   assert.equal(config.uiPort, 9183);
+  assert.equal(config.autoOpenUi, false);
   assert.equal(config.torRpcPort, 9185);
   assert.equal(config.shadeTreeProxyPort, 9186);
   assert.equal(config.shadeTreeEnabled, true);

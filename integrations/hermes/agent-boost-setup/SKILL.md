@@ -1,7 +1,7 @@
 ---
 name: agent-boost-setup
 description: Set up and fund a local Sepolia wallet conversationally.
-version: 0.2.0
+version: 0.3.0
 platforms: [macos, linux]
 metadata:
   hermes:
@@ -33,6 +33,64 @@ Use four participant-facing states and no implementation vocabulary:
 
 Never say MCP, toolset, process lock, loopback, shielding transaction, or
 Tornado unless the user asks for technical detail. Never promise anonymity.
+
+## Dark Mode opening
+
+For a new setup only, wait until `capabilities` confirms the real starting
+state, then open with this compact Matrix- and terminal-safe reveal. Never
+replay it when resuming an existing setup.
+
+```text
+        \  |  /
+      --  ☀  --
+        /  |  \
+           ↓
+          ◐
+           ↓
+          ●
+
+ D A R K  M O D E
+   entering the chat…
+```
+
+Follow it with only the lines supported by the live capability result:
+
+```text
+The vault combination stays home. I’m printing Hermes a tiny permission slip instead. 🪪
+💳 Spawning a disposable test wallet…
+🕶️ Creating the private payment pocket…
+🧅 Adding layers to the wallet route…
+🌳 Leaving covered web asleep… shhh
+🙋 Payments will knock first.
+Like turning knobs? Say advanced setup ⚙️
+```
+
+Do not report fake percentages or mark a capability ready before its check
+passes. On resume, skip the theater and state only the current action.
+
+## Public capability receipt
+
+The shareable explainer is `https://agent-boost.vercel.app/`. It is a static,
+stateless receipt. Put only coarse feature state in its URL fragment; never put
+an address, balance, amount, transaction, setup ID, timestamp, credential, or
+other identifier in the URL. Use version `1` and only these keys:
+
+- `eth`, `spend`, and `zec`: `ready`, `setup`, `off`, `attention`, or
+  `unavailable`;
+- `tor`: `wallet`, `setup`, `off`, `attention`, or `unavailable`;
+- `shade` and `think`: `on`, `setup`, `off`, `attention`, or `unavailable`.
+
+Example:
+
+```text
+https://agent-boost.vercel.app/#v=1&eth=ready&spend=ready&zec=off&tor=wallet&shade=off&think=off
+```
+
+The receipt is explanatory, not authoritative. Construct its fragment only
+from the latest tool results. Send it as **View your agent’s loadout 🎒** after
+readiness, or when the user asks what is enabled. A remote Hermes cannot open a
+browser on the participant’s device, so send a clickable link; do not claim it
+opened. Keep the local funding page as an optional same-device fallback only.
 
 ## Start, resume, or resend
 
@@ -112,9 +170,27 @@ describe it as deleting or retrying the prior payment.
 4. Setup is complete only when the phase is `private_ready`,
    `privateBalanceWei` is at least `shieldAmountWei`, and a fresh
    `capabilities` call reports `readiness.rpc_egress: ready`. Then say that
-   Agent Boost is ready for Sepolia test payments and state the spendable
-   private test balance. `funding_pending`, `funded_public`, and `shielding`
-   are never success.
+   Agent Boost is ready for Sepolia test payments. Do not put the balance or
+   wallet address in the capability-receipt URL. `funding_pending`,
+   `funded_public`, and `shielding` are never success. Use this completion,
+   with the feature fragment derived from live state:
+
+   ```text
+   ╭────────────────────────╮
+   │  🌑 DARK MODE: ONLINE  │
+   ╰────────────────────────╯
+
+   The vault combination stayed home. Hermes got the menu. 😎
+   💳 Ethereum test wallet — ready
+   🕶️ Private payment pocket — ready
+   🧅 Wallet traffic — taking the onion route
+   🌳 Covered web — napping for now
+
+   [View your agent’s loadout 🎒](<capability-receipt URL>)
+
+   Ready to take Dark Mode for a spin? 🚀
+   You can say advanced setup anytime.
+   ```
 5. Preserve the newest revision after every status result. Narrate only the four
    participant-facing states above; do not print raw phase names or wei unless
    the user asks.

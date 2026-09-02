@@ -437,7 +437,7 @@ secret-bearing repository config.
 | `AGENT_BOOST_SHIELD_WEI` | `100000000000000000` | Tornado shield/note amount |
 | `AGENT_BOOST_PAYMENT_LIMIT_WEI` | `50000000000000000` | One-payment maximum |
 | `AGENT_BOOST_DELEGATION_TTL_MS` | `604800000` | Delegated execution lifetime (seven days) |
-| `AGENT_BOOST_OPEN_UI` | `true` | Attempt to open a graphical browser |
+| `AGENT_BOOST_OPEN_UI` | `false` | Optionally open the same-device fallback UI |
 | `AGENT_BOOST_EXECUTE` | `true` | Enable bounded testnet execution |
 | `AGENT_BOOST_STATE_DIR` | `~/.local/share/agent-boost` | Durable state root |
 | `AGENT_BOOST_SHADE_TREE_ENABLED` | `true` | Enable optional explicit covered egress |

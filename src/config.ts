@@ -220,7 +220,7 @@ export function loadConfig(
       7 * 24 * 60 * 60_000,
       "AGENT_BOOST_DELEGATION_TTL_MS",
     ),
-    autoOpenUi: booleanEnv(env.AGENT_BOOST_OPEN_UI, true),
+    autoOpenUi: booleanEnv(env.AGENT_BOOST_OPEN_UI, false),
     autoShield: booleanEnv(env.AGENT_BOOST_AUTO_SHIELD, true),
     executeEnabled: booleanEnv(env.AGENT_BOOST_EXECUTE, true),
     security: {

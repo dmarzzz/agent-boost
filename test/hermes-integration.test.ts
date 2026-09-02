@@ -131,6 +131,13 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.doesNotMatch(setupSkill, /send_message` a third|exact tag as the/u);
   assert.doesNotMatch(setupSkill, /offer (?:the )?loopback|normally 0\.2/u);
   assert.match(setupSkill, /\/reload-skills.*\/reload-mcp/su);
+  assert.match(setupSkill, /D A R K  M O D E/u);
+  assert.match(setupSkill, /tiny permission slip/u);
+  assert.match(setupSkill, /DARK MODE: ONLINE/u);
+  assert.match(setupSkill, /agent-boost\.vercel\.app\/#v=1/u);
+  assert.match(setupSkill, /never put[\s\S]*address[\s\S]*balance[\s\S]*setup ID/u);
+  assert.match(setupSkill, /remote Hermes cannot open a[\s\S]*participant’s device/u);
+  assert.match(setupSkill, /View your agent’s loadout/u);
   assert.match(operationalSkill, /testnet_delegated/u);
   assert.match(operationalSkill, /wallet_plan_private_payment/u);
   assert.match(operationalSkill, /`user_confirmed: true`/u);

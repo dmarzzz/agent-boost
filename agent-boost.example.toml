@@ -10,7 +10,7 @@ directory = "~/.local/share/agent-boost"
 [ui]
 host = "127.0.0.1"
 port = 9183
-open_browser = true
+open_browser = false
 
 [wallet]
 adapter = "kohaku"
