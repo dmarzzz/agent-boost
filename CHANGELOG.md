@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- README cut to the essentials; the install details, demo walkthrough, tools,
+  configuration, privacy claims, and runtime hardening notes moved to `docs/`
+  with an index at `docs/README.md`.
 - README banner replaced with the phosphor Toggle Circuit board as a 1731 px
   WebP (about 100 KB, down from a 2.5 MB PNG).
 - Repository hygiene: CI workflow behind the README badge, badge and link rows,

@@ -21,6 +21,17 @@ node dist/cli.js doctor
 Drop a new `*.test.ts` under `test/` and it is picked up; there is no manifest.
 `npm run eval:live` needs a running Hermes and is not part of CI.
 
+`npm test` covers policy and idempotency, state permissions, command injection
+resistance, exact Kohaku argv, Sepolia-only RPC, MCP schemas, Hermes config
+drift, QR contents, loopback request filtering, UI state honesty, responsive
+layout contracts, and recipient-delivery confirmation. `make install-kohaku`
+repairs the pinned Kohaku dependency on its own.
+
+An active Hermes gateway keeps one Agent Boost MCP child open and owns the
+runtime lock. In that state `agent-boost status` still works because it is
+read-only, while a second `hermes mcp test agent-boost` intentionally fails
+closed. Stop the gateway only when you specifically need a standalone MCP test.
+
 ## Definitions of done
 
 Every change is expected to meet these before it lands:

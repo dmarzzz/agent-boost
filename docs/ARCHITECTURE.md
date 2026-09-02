@@ -1,5 +1,21 @@
 # Architecture
 
+```mermaid
+flowchart LR
+    U[User] <-->|conversation and verbal approval| H[Hermes]
+    H <-->|MCP over stdio| A[Agent Boost sidecar]
+    A -->|loopback-only funding page| UI[QR onboarding UI]
+    A -->|bounded argv + random loopback RPC URL| K[Kohaku CLI]
+    A -->|fixed-origin JSON-RPC| T[Embedded Tor / Arti]
+    K -->|JSON-RPC via authenticated relay| T
+    K -->|supported protocol HTTP via its Tor client| E[(Sepolia + protocol services)]
+    T -->|HTTPS JSON-RPC through Tor| E
+    A -->|explicit HTTPS GET or HEAD| S[Shade Tree authenticated Proxy]
+    S -->|embedded Arti + RLN-proved CONNECT| W[(Public HTTPS destination)]
+    O[Event operator] -->|scan QR and fund| E
+    A -->|address, balances, policy, status| H
+```
+
 Agent Boost is a local, wallet-first sidecar between Hermes and Kohaku. It owns
 the agent-facing contract, durable workflow state, delegated-spend policy,
 onboarding UI, and redacted results. Kohaku owns wallet derivation, encrypted
@@ -161,3 +177,32 @@ never overwritten.
 | UI cannot open | Return QR through MCP when possible |
 | UI port unavailable | Continue with MCP QR/address fallback |
 | General egress unavailable | Report it; never claim the RPC route covers it |
+
+## Runtime surfaces and hardening
+
+Agent Boost starts as the Hermes MCP child process and resumes its durable local
+state after restarts. The onboarding web server binds only to `127.0.0.1`
+(default port `9183`), accepts only loopback hosts and same-origin requests, and
+serves a read-only UI with a restrictive Content Security Policy. Port `9180`
+is deliberately reserved so this POC cannot collide with an older local
+service. A separate exclusive loopback bind on port `9184` is a crash-safe
+process ownership lock; a second Agent Boost process fails closed instead of
+sharing the wallet. A fixed-destination JSON-RPC relay binds to `127.0.0.1:9185`
+with a random 256-bit path token. It accepts JSON-RPC POST only, forwards only
+to the configured HTTPS Sepolia origin through Tor, and has no direct retry.
+The optional Shade Tree Proxy binds separately to `127.0.0.1:9186`, requires a
+fresh in-memory 256-bit authentication token, and is reachable only through the
+three bounded egress tools. Its member identity stays in owner-only local
+files; its forward-only slot cursor is persisted separately and is never reset
+or rewound to reclaim capacity.
+
+Local state writes are flushed and atomically renamed. Agent Boost directories
+are hardened to `0700` and state, password, wallet, and provenance files to
+`0600`. Kohaku commands run without a shell, are serialized per wallet, pass
+only the authenticated loopback relay through the child environment rather
+than the upstream RPC URL or argv, and never return raw upstream stderr through
+MCP. Inherited proxy variables and Kohaku's Tor-disable switch are scrubbed.
+A child-process network guard rejects Kohaku's built-in public RPC fallbacks;
+only loopback fetches are allowed, including Kohaku's own Tor-backed Pimlico
+relay. Kohaku's traffic log is scrubbed of the live Agent Boost relay token
+after every invocation.
