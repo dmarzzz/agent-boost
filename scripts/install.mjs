@@ -12,6 +12,7 @@ import {
   spawnCommand,
 } from "./lib/kohaku-install.mjs";
 import { configureHermesIfAvailable } from "./lib/hermes-install.mjs";
+import { installPinnedShadeTree } from "./lib/shade-tree-install.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const prefix = resolve(
@@ -66,6 +67,7 @@ try {
   const tarball = join(packDir, filename);
   await readFile(tarball);
   const kohaku = await installPinnedKohaku();
+  const shadeTree = await installPinnedShadeTree();
   await checked(
     "npm",
     [
@@ -100,6 +102,7 @@ try {
           version: version.stdout.trim(),
         },
         kohaku,
+        shade_tree: shadeTree,
         hermes,
         path_configured: pathConfigured,
         setup_prompt: "Set up Agent Boost for me.",

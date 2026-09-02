@@ -25,6 +25,7 @@ export interface AgentBoostConfig {
   fundingTargetWei: bigint;
   shieldAmountWei: bigint;
   paymentLimitWei: bigint;
+  delegationTtlMs: number;
   autoOpenUi: boolean;
   autoShield: boolean;
   executeEnabled: boolean;
@@ -46,6 +47,15 @@ export interface AgentBoostConfig {
   fundingPollMs: number;
   privateBalancePollMs: number;
   setupTimeoutMs: number;
+  shadeTreeEnabled: boolean;
+  shadeTreeInstallDir: string;
+  shadeTreeBin: string;
+  shadeTreeProfileDir: string;
+  shadeTreeSlotStateDir: string;
+  shadeTreeProxyPort: number;
+  shadeTreeStartTimeoutMs: number;
+  shadeTreeRequestTimeoutMs: number;
+  shadeTreeMaxResponseBytes: number;
 }
 
 const DEFAULT_SECURITY = {
@@ -103,6 +113,10 @@ export function loadConfig(
     env.AGENT_BOOST_KOHAKU_INSTALL_DIR ??
       `${stateDir}/dependencies/kohaku-cli`,
   );
+  const shadeTreeInstallDir = resolve(
+    env.AGENT_BOOST_SHADE_TREE_INSTALL_DIR ??
+      `${stateDir}/dependencies/shade-tree`,
+  );
   const paymentApprovalOverride = paymentApprovalEnv(
     env.AGENT_BOOST_PAYMENT_APPROVAL,
   );
@@ -145,6 +159,23 @@ export function loadConfig(
     );
   }
 
+  const shadeTreeProxyPort = positiveIntegerEnv(
+    env.AGENT_BOOST_SHADE_TREE_PROXY_PORT,
+    9186,
+    "AGENT_BOOST_SHADE_TREE_PROXY_PORT",
+  );
+  if (
+    shadeTreeProxyPort > 65_535 ||
+    shadeTreeProxyPort === 9180 ||
+    shadeTreeProxyPort === AGENT_BOOST_RUNTIME_LOCK_PORT ||
+    shadeTreeProxyPort === uiPort ||
+    shadeTreeProxyPort === torRpcPort
+  ) {
+    throw new Error(
+      "AGENT_BOOST_SHADE_TREE_PROXY_PORT must be an available port other than 9180, 9184, the UI port, or the Tor RPC port",
+    );
+  }
+
   return {
     stateDir,
     torDataDir: resolve(
@@ -184,6 +215,11 @@ export function loadConfig(
       DEFAULT_PAYMENT_LIMIT_WEI,
       "AGENT_BOOST_PAYMENT_LIMIT_WEI",
     ),
+    delegationTtlMs: positiveIntegerEnv(
+      env.AGENT_BOOST_DELEGATION_TTL_MS,
+      7 * 24 * 60 * 60_000,
+      "AGENT_BOOST_DELEGATION_TTL_MS",
+    ),
     autoOpenUi: booleanEnv(env.AGENT_BOOST_OPEN_UI, true),
     autoShield: booleanEnv(env.AGENT_BOOST_AUTO_SHIELD, true),
     executeEnabled: booleanEnv(env.AGENT_BOOST_EXECUTE, true),
@@ -213,6 +249,32 @@ export function loadConfig(
       env.AGENT_BOOST_SETUP_TIMEOUT_MS,
       30 * 60_000,
       "AGENT_BOOST_SETUP_TIMEOUT_MS",
+    ),
+    shadeTreeEnabled: booleanEnv(env.AGENT_BOOST_SHADE_TREE_ENABLED, true),
+    shadeTreeInstallDir,
+    shadeTreeBin:
+      env.AGENT_BOOST_SHADE_TREE_BIN ?? `${shadeTreeInstallDir}/bin/shade-tree`,
+    shadeTreeProfileDir: resolve(
+      env.AGENT_BOOST_SHADE_TREE_PROFILE_DIR ?? `${stateDir}/shade-tree/profile`,
+    ),
+    shadeTreeSlotStateDir: resolve(
+      env.AGENT_BOOST_SHADE_TREE_SLOT_STATE_DIR ?? `${stateDir}/shade-tree/slots`,
+    ),
+    shadeTreeProxyPort,
+    shadeTreeStartTimeoutMs: positiveIntegerEnv(
+      env.AGENT_BOOST_SHADE_TREE_START_TIMEOUT_MS,
+      10_000,
+      "AGENT_BOOST_SHADE_TREE_START_TIMEOUT_MS",
+    ),
+    shadeTreeRequestTimeoutMs: positiveIntegerEnv(
+      env.AGENT_BOOST_SHADE_TREE_REQUEST_TIMEOUT_MS,
+      30_000,
+      "AGENT_BOOST_SHADE_TREE_REQUEST_TIMEOUT_MS",
+    ),
+    shadeTreeMaxResponseBytes: positiveIntegerEnv(
+      env.AGENT_BOOST_SHADE_TREE_MAX_RESPONSE_BYTES,
+      1_048_576,
+      "AGENT_BOOST_SHADE_TREE_MAX_RESPONSE_BYTES",
     ),
   };
 }

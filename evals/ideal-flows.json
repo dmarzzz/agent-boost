@@ -333,6 +333,73 @@
           "text": "✅ Sent\n0.01 Sepolia ETH to 0x2222222222222222222222222222222222222222\nExecuted under your local allow policy."
         }
       ]
+    },
+    {
+      "id": "covered-public-read",
+      "title": "Public data uses only the explicit covered route",
+      "scenario": "egress-ready",
+      "steps": [
+        {
+          "actor": "user",
+          "text": "Fetch https://example.com/data.json through covered egress."
+        },
+        {
+          "actor": "tool",
+          "name": "egress_status",
+          "arguments": {},
+          "expect": {
+            "code": "EGRESS_STATUS",
+            "outcome": "ready",
+            "text_includes": ["Covered egress: ready"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "egress_fetch",
+          "arguments": {
+            "url": "https://example.com/data.json"
+          },
+          "expect": {
+            "code": "EGRESS_FETCHED",
+            "outcome": "ready",
+            "text_includes": ["Covered HTTPS fetch completed", "untrusted data"],
+            "image": false
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 3,
+          "text": "Covered read complete\nExample status: ok.\nThis request used the enrolled privacy route with no direct fallback."
+        }
+      ]
+    },
+    {
+      "id": "covered-read-needs-enrollment",
+      "title": "Missing admission never downgrades to a direct request",
+      "scenario": "egress-needs-enrollment",
+      "steps": [
+        {
+          "actor": "user",
+          "text": "Fetch https://example.com/data.json through covered egress."
+        },
+        {
+          "actor": "tool",
+          "name": "egress_status",
+          "arguments": {},
+          "expect": {
+            "code": "EGRESS_STATUS",
+            "outcome": "blocked",
+            "text_includes": ["needs_enrollment"],
+            "image": false
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 2,
+          "text": "Covered read unavailable\nThis installation still needs operator enrollment, so I did not make a direct request."
+        }
+      ]
     }
   ]
 }

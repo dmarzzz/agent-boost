@@ -143,16 +143,20 @@ Hermes launches Agent Boost as an MCP child. Each launch:
 - acquires the exclusive loopback runtime-ownership lock;
 - bootstraps embedded Tor and verifies the Sepolia chain through it;
 - starts the authenticated fixed-origin loopback RPC relay for Kohaku;
+- starts the authenticated Shade Tree loopback Proxy only when a complete,
+  owner-only Grove enrollment profile is present;
 - restores the persisted active wallet profile before resuming work;
 - resumes an unfinished funding or shield workflow;
 - starts the loopback UI only when onboarding requests it;
 - serializes Kohaku calls for the wallet;
 - shuts down the watcher and UI when MCP closes.
 
-There is no background daemon, administrative TCP API, or general egress
-module. The only proxy is the loopback JSON-RPC relay: it has a random path,
-accepts POST only, and can reach only the configured HTTPS Sepolia RPC through
-Tor.
+There is no background daemon or administrative TCP API. The fixed-origin
+loopback JSON-RPC relay has a random path, accepts POST only, and can reach only
+the configured HTTPS Sepolia RPC through Tor. The separate optional Shade Tree
+Proxy accepts authenticated CONNECT and is reachable through the bounded
+`egress_fetch` tool only; it is not injected into Hermes process-wide proxy
+settings. See [Covered egress](COVERED-EGRESS.md).
 
 ## Troubleshooting
 
@@ -164,5 +168,7 @@ make install-kohaku
 ```
 
 `doctor` verifies Node, pinned Kohaku provenance and executable, a Tor-observed
-exit, the Sepolia chain ID through that Tor path, and Hermes availability. It
-warns that general Hermes and agent traffic is not covered.
+exit, the Sepolia chain ID through that Tor path, Hermes availability, and the
+redacted covered-egress lifecycle. It warns when Shade Tree is unsupported or
+needs operator enrollment and never implies that general Hermes traffic is
+covered.

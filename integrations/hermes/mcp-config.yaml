@@ -15,5 +15,8 @@ mcp_servers:
         - wallet_plan_private_payment
         - wallet_execute_private_payment
         - wallet_get_request
+        - egress_capabilities
+        - egress_status
+        - egress_fetch
       resources: false
       prompts: false

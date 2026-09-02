@@ -71,6 +71,10 @@ test("onboarding reaches private_ready after funding and one shield", async () =
 
   const started = await controller.start();
   assert.equal(started.address, "0x1111111111111111111111111111111111111111");
+  assert.equal(
+    started.delegation.expiresAt,
+    new Date(7 * 24 * 60 * 60_000).toISOString(),
+  );
 
   let state = started;
   for (let index = 0; index < 20; index += 1) {

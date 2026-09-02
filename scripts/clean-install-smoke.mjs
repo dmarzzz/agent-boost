@@ -73,6 +73,7 @@ try {
     "agent-boost.example.toml",
     "dist/cli.js",
     "dist/kohaku/network-guard.mjs",
+    "dist/shade-tree/runtime.js",
     "integrations/hermes/agent-boost/SKILL.md",
     "integrations/hermes/agent-boost-setup/SKILL.md",
   ]) {
@@ -90,6 +91,13 @@ try {
   }
   if (config.security.effective["payment.execute"] !== "confirm") {
     throw new Error("Installed package lost the default confirmation policy");
+  }
+  if (
+    config.shadeTreeEnabled !== true ||
+    config.shadeTreeProxyPort !== 9186 ||
+    config.shadeTreeMaxResponseBytes !== 1_048_576
+  ) {
+    throw new Error("Installed package lost the covered-egress fail-closed defaults");
   }
 
   const packageFiles = await walk(packageRoot);
@@ -121,6 +129,7 @@ try {
       "installed_executable_started",
       "runtime_config_loaded",
       "default_security_confirmed",
+      "covered_egress_defaults_loaded",
       "hermes_skills_packaged",
       "private_notes_excluded",
     ],

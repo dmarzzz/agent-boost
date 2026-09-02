@@ -41,6 +41,7 @@
         "per_payment_limit_atomic",
         "lifetime_limit_atomic",
         "max_payments",
+        "default_lifetime_seconds",
         "requires_exact_verbal_confirmation",
         "requires_user_confirmation"
       ],
@@ -51,6 +52,7 @@
         "per_payment_limit_atomic": {"$ref": "#/$defs/atomic"},
         "lifetime_limit_atomic": {"$ref": "#/$defs/atomic"},
         "max_payments": {"const": 1},
+        "default_lifetime_seconds": {"type": "integer", "minimum": 1},
         "requires_exact_verbal_confirmation": {"const": false},
         "requires_user_confirmation": {"type": "boolean"}
       }
@@ -171,11 +173,16 @@
         "general_egress": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["name", "available", "stage"],
+          "required": ["name", "available", "contract", "mode", "status", "direct_fallback"],
           "properties": {
             "name": {"const": "shade-tree"},
-            "available": {"const": false},
-            "stage": {"const": "next"}
+            "available": {"type": "boolean"},
+            "contract": {"const": "org.agentboost.egress/0.1"},
+            "mode": {"const": "explicit_fetch"},
+            "status": {
+              "enum": ["disabled", "not_installed", "needs_enrollment", "starting", "ready", "degraded", "exhausted", "failed"]
+            },
+            "direct_fallback": {"const": false}
           }
         }
       }
@@ -201,7 +208,7 @@
         "wallet_ready": {"type": "boolean"},
         "address_ready": {"type": "boolean"},
         "rpc_egress": {"enum": ["starting", "ready", "failed", "closed"]},
-        "general_egress_ready": {"const": false}
+        "general_egress_ready": {"type": "boolean"}
       }
     },
     "demo_reset": {

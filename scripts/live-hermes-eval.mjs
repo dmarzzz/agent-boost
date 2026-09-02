@@ -48,6 +48,8 @@ const expectedTraces = {
     "wallet_plan_private_payment",
     "wallet_execute_private_payment",
   ],
+  "covered-public-read": ["egress_status", "egress_fetch"],
+  "covered-read-needs-enrollment": ["egress_status"],
 };
 
 const responseRules = {
@@ -71,13 +73,19 @@ const responseRules = {
   "local-allow-override": [
     { includes: ["Sent", "0.01", "0x2222222222222222222222222222222222222222"], excludes: ["approve"], maxLines: 4 },
   ],
+  "covered-public-read": [
+    { includes: ["status", "ok", "no direct fallback"], maxLines: 4 },
+  ],
+  "covered-read-needs-enrollment": [
+    { includes: ["needs", "operator enrollment", "direct request"], maxLines: 3 },
+  ],
 };
 
 const forbidden = [
   /\bmcp\b/iu,
   /\bwei\b/iu,
   /\b(?:decision_id|request_id|client_request_id|user_confirmed|amount_atomic)\b/iu,
-  /\b(?:wallet_get_context|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request)\b/iu,
+  /\b(?:wallet_get_context|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|egress_status|egress_fetch)\b/iu,
   /\b(?:seed phrase|private key|wallet password)\b/iu,
   /\b(?:wd_|req_|sha256:)[A-Za-z0-9._:-]*/u,
 ];
@@ -157,6 +165,9 @@ async function runFlow(flow, hermes, options) {
             "wallet_plan_private_payment",
             "wallet_execute_private_payment",
             "wallet_get_request",
+            "egress_capabilities",
+            "egress_status",
+            "egress_fetch",
           ],
           resources: false,
           prompts: false,

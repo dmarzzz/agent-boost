@@ -26,7 +26,7 @@ mode = "testnet_delegated"
 execute = true
 payment_limit_wei = "50000000000000000"
 maximum_payments = 1
-expires_after_hours = 24
+expires_after_hours = 168
 
 [security]
 # Built-in defaults are merged with explicit local overrides. The current POC
@@ -45,5 +45,9 @@ loopback_port = 9185
 direct_fallback = false
 
 [general_egress]
-private = false
-next = "shade-tree"
+mode = "explicit_fetch"
+adapter = "shade-tree-v4"
+loopback_port = 9186
+direct_fallback = false
+requires_operator_enrollment = true
+whole_agent_proxy = false

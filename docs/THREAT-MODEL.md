@@ -59,8 +59,12 @@ The recipient is public after payment.
 
 Agent Boost routes its own and Kohaku's Ethereum JSON-RPC through embedded Tor.
 Kohaku separately routes supported non-RPC privacy traffic through its own Tor
-client. This is not anonymous general egress: Hermes, Matrix/model traffic, the
-funding transaction, on-chain actions, and other process traffic are uncovered.
+client. An enrolled `egress_fetch` can send one bounded public HTTPS read
+through Shade Tree, but this is not anonymous general egress: Hermes,
+Matrix/model traffic, the funding transaction, on-chain actions, and other
+process traffic remain outside that request. The Shade Tree node observes the
+target hostname/port and traffic metadata, and a global observer may correlate
+timing despite Tor.
 
 ### Real-value safety
 
@@ -88,6 +92,10 @@ formal verification. The event boundary is disposable, valueless Sepolia ETH.
 | RPC observer correlates activity | HTTPS through Tor, remote DNS, fixed-origin fail-closed relay | Provider no longer sees the machine IP, but still sees exit IP, methods, addresses, payloads, and timing |
 | Local process abuses RPC relay | Loopback bind, random 256-bit path, exact Host/path, required-method allowlist, size/concurrency limits, post-call traffic-log redaction | Same-UID process/env inspection is not a custody boundary |
 | Tor becomes unavailable | No global-fetch/direct retry; route becomes failed | Operations stop; an ambiguous broadcast remains unresolved |
+| Covered fetch targets local infrastructure | URL policy rejects IP literals/local names; Shade Tree nodes validate all DNS answers against private/reserved ranges | A future node-policy regression or DNS attack remains an upstream risk |
+| Covered response prompt-injects Hermes | Response is labeled `untrusted_external`; Hermes skill treats it as data | Model instruction hierarchy is not an OS sandbox |
+| Shade Tree member slot is reused | Forward-only crash-safe cursor is burned before proof; corrupt/locked/rollback state fails closed | Deleting/restoring state outside Agent Boost can create slashable reuse |
+| Shade Tree or Grove is unavailable | Explicit fetch returns degraded/failed/exhausted and has no direct fallback | The requested read is unavailable until recovery or epoch advance |
 | Dependency supply-chain drift | Commit pin, lockfile install, local hashes | Initial Git/npm fetch still trusts upstream transport/registries |
 
 ## Logging and storage

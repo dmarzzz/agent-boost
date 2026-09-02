@@ -26,6 +26,9 @@ export const HERMES_NATIVE_TOOLS = [
   "wallet_plan_private_payment",
   "wallet_execute_private_payment",
   "wallet_get_request",
+  "egress_capabilities",
+  "egress_status",
+  "egress_fetch",
 ] as const;
 
 export interface CommandResult {

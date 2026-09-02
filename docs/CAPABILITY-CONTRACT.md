@@ -23,10 +23,14 @@ Actual authority is enforced from durable local state.
   tail call;
 - authority: one time-bounded Sepolia test payment under the effective local
   `allow`, `confirm`, or `deny` execution policy;
+- default authority lifetime: seven days; expiry disables delegated execution,
+  not wallet or balance access;
 - default maximum: `0.05` ETH;
 - mainnet: unavailable;
 - Ethereum JSON-RPC egress: Tor for Agent Boost and Kohaku, no direct fallback;
-- general agent egress: unavailable; Shade Tree is the next module.
+- covered public HTTPS egress: optional Shade Tree v4 explicit-fetch module,
+  independently enrolled and never used as a direct fallback;
+- general process egress: unavailable; Hermes is not blanket-routed.
 
 The accurate privacy claim is “privacy-improving shielded Sepolia test
 payment.” The capability document explicitly sets
@@ -87,6 +91,34 @@ part of the contract. An unresolved side effect must never be replaced with a
 new client request ID.
 
 ## Tools
+
+The wallet contract above and covered-egress contract below share the stable
+tool-result envelope but have separate manifest digests.
+
+### `egress_capabilities`
+
+No input. Returns `org.agentboost.egress/0.1`, GET/HEAD-only policy, resource
+limits, fail-closed behavior, and the exact non-anonymity claim. It returns no
+member, proof, Proxy, or operator material.
+
+### `egress_status`
+
+No input. Returns one redacted state: `disabled`, `not_installed`,
+`needs_enrollment`, `starting`, `ready`, `degraded`, `exhausted`, or `failed`.
+Readiness never implies that wallet RPC or all Hermes traffic uses Shade Tree.
+
+### `egress_fetch`
+
+```json
+{"url":"https://example.com/data.json","method":"GET"}
+```
+
+Fetches public UTF-8 text or JSON over HTTPS port 443 through the authenticated
+local Shade Tree Proxy. It accepts GET or HEAD, no request body, credentials,
+cookies, arbitrary headers, IP literals, local names, or non-443 port. It
+revalidates up to three redirects, stops at 1 MiB/30 seconds by default, verifies
+destination TLS, and never falls back to direct or raw Tor egress. Returned
+content is explicitly `untrusted_external`.
 
 ### `capabilities`
 

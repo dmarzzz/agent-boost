@@ -16,6 +16,12 @@ import type { AgentBoostRuntime } from "./mcp.js";
 import { OnboardingController } from "./onboarding.js";
 import { PaymentController } from "./payment.js";
 import { SepoliaRpcClient } from "./rpc/index.js";
+import {
+  ShadeTreeEgress,
+  type CoveredEgressPort,
+  type CoveredFetchInput,
+  type CoveredFetchResult,
+} from "./shade-tree/index.js";
 import { StateStore } from "./state/store.js";
 import { RuntimeLock } from "./state/runtime-lock.js";
 import {
@@ -36,6 +42,7 @@ export interface RuntimeDependencies {
   rpcRoute?: TorRpcRoutePort;
   rpcProxy?: TorRpcProxyPort;
   openBrowser?: (url: string) => Promise<boolean>;
+  coveredEgress?: CoveredEgressPort;
 }
 
 interface NewDemoResult {
@@ -60,6 +67,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   readonly #payments: PaymentController;
   readonly #ui: OnboardingUiServer;
   readonly #openBrowser: (url: string) => Promise<boolean>;
+  readonly #egress: CoveredEgressPort;
   #reset: Promise<NewDemoResult> | undefined;
   #shuttingDown = false;
 
@@ -125,6 +133,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       port: config.uiPort,
     });
     this.#openBrowser = dependencies.openBrowser ?? openVisibleBrowser;
+    this.#egress = dependencies.coveredEgress ?? new ShadeTreeEgress(config);
   }
 
   async initialize(): Promise<void> {
@@ -142,10 +151,12 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         await this.#chain.assertSepolia();
       }
       await this.#rpcProxy?.start();
+      await this.#egress.start();
       await this.#payments.recoverInterruptedRequests();
       await this.#onboarding.resume();
     } catch (error) {
       await this.#rpcProxy?.stop().catch(() => undefined);
+      await this.#egress.stop().catch(() => undefined);
       await this.#rpcRoute?.close().catch(() => undefined);
       await this.#runtimeLock.release();
       throw error;
@@ -159,6 +170,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       this.#onboarding.stop(),
       this.#payments.stop(),
       this.#ui.stop(),
+      this.#egress.stop(),
     ]);
     await this.#rpcProxy?.stop().catch(() => undefined);
     await this.#rpcRoute?.close().catch(() => undefined);
@@ -168,6 +180,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   async capabilities(): Promise<Record<string, unknown>> {
     const state = await this.#store.read();
     const setup = state.onboarding;
+    const egress = await this.#egress.status();
     return {
       contract: "org.agentboost.wallet/1.3",
       chain_id: "eip155:11155111",
@@ -183,6 +196,9 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         per_payment_limit_atomic: this.#config.paymentLimitWei.toString(),
         lifetime_limit_atomic: this.#config.paymentLimitWei.toString(),
         max_payments: 1,
+        default_lifetime_seconds: Math.floor(
+          this.#config.delegationTtlMs / 1_000,
+        ),
         requires_exact_verbal_confirmation: false,
         requires_user_confirmation:
           this.#config.security.effective["payment.execute"] === "confirm",
@@ -218,7 +234,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         limitations: [
           "funding source and amount remain public",
           "the RPC provider still sees methods, addresses, payloads, and timing",
-          "Hermes and other agent traffic are not routed through Tor",
+          "only explicit covered-fetch calls use Shade Tree; Hermes and other agent traffic are not blanket-routed",
           "timing and the Sepolia anonymity set can enable correlation",
           "demo resets archive local state and retain old Kohaku wallet data",
         ],
@@ -234,14 +250,21 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
           scope: "ethereum_json_rpc",
           direct_fallback: false,
         },
-        general_egress: { name: "shade-tree", available: false, stage: "next" },
+        general_egress: {
+          name: "shade-tree",
+          available: egress.status === "ready",
+          contract: "org.agentboost.egress/0.1",
+          mode: "explicit_fetch",
+          status: egress.status,
+          direct_fallback: false,
+        },
       },
       readiness: {
         phase: setup?.phase ?? "not_started",
         wallet_ready: setup?.phase === "private_ready",
         address_ready: setup?.address !== undefined,
         rpc_egress: this.#rpcRoute?.status ?? "ready",
-        general_egress_ready: false,
+        general_egress_ready: egress.status === "ready",
       },
       demo_reset: {
         available: this.#wallet.selectWallet !== undefined,
@@ -360,7 +383,28 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         direct_fallback: false,
       },
       general_egress_privacy: false,
+      covered_egress: {
+        mode: "explicit_fetch",
+        status: (await this.#egress.status()).status,
+        direct_fallback: false,
+      },
     };
+  }
+
+  egressCapabilities(): Promise<Record<string, unknown>> {
+    return Promise.resolve(this.#egress.capabilities());
+  }
+
+  async egressStatus(): Promise<Record<string, unknown>> {
+    return {
+      ...(await this.#egress.status()),
+      direct_fallback: false,
+      enrollment_secret_exposed: false,
+    };
+  }
+
+  egressFetch(input: CoveredFetchInput): Promise<CoveredFetchResult> {
+    return this.#egress.fetch(input);
   }
 
   planPrivatePayment(input: {
@@ -413,6 +457,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         status: this.#rpcRoute?.status ?? "ready",
         direct_fallback: false,
       },
+      covered_egress: await this.egressStatus(),
     };
   }
 

@@ -29,6 +29,9 @@ const HERMES_NATIVE_TOOLS = [
   "wallet_plan_private_payment",
   "wallet_execute_private_payment",
   "wallet_get_request",
+  "egress_capabilities",
+  "egress_status",
+  "egress_fetch",
 ];
 
 const ENVELOPE_KEYS = [
@@ -117,6 +120,7 @@ export function buildIsolatedEnvironment(baseEnvironment, paths) {
   environment.HERMES_HOME = paths.hermesHome;
   environment.AGENT_BOOST_PREFIX = paths.prefix;
   environment.AGENT_BOOST_KOHAKU_INSTALL_DIR = paths.kohakuInstallDir;
+  environment.AGENT_BOOST_SHADE_TREE_INSTALL_DIR = paths.shadeTreeInstallDir;
   environment.AGENT_BOOST_STATE_DIR = paths.stateDir;
   environment.AGENT_BOOST_TOR_DATA_DIR = paths.torDataDir;
   environment.AGENT_BOOST_KOHAKU_DATA_DIR = paths.kohakuDataDir;
@@ -124,6 +128,7 @@ export function buildIsolatedEnvironment(baseEnvironment, paths) {
   environment.AGENT_BOOST_OPEN_UI = "false";
   environment.AGENT_BOOST_UI_PORT = String(paths.uiPort);
   environment.AGENT_BOOST_TOR_RPC_PORT = String(paths.torRpcPort);
+  environment.AGENT_BOOST_SHADE_TREE_PROXY_PORT = String(paths.shadeTreeProxyPort);
   return environment;
 }
 
@@ -254,18 +259,33 @@ export async function verifyInstalledHermes(options) {
   if (install.installed !== true) throw new Error("Agent Boost installer did not succeed");
   const agentBoost = record(install.agent_boost, "installer agent_boost");
   const kohaku = record(install.kohaku, "installer kohaku");
+  const shadeTree = record(install.shade_tree, "installer shade_tree");
   const hermes = record(install.hermes, "installer hermes");
+  const realSandboxRoot = await realpath(options.sandboxRoot);
   if (kohaku.commit !== EXPECTED_KOHAKU_COMMIT) {
     throw new Error("Installer did not use the pinned Kohaku commit");
+  }
+  if (shadeTree.version !== "0.4.0") {
+    throw new Error("Installer did not report the pinned Shade Tree release");
+  }
+  if (shadeTree.available === true) {
+    const shadeTreeExecutable = await realpath(
+      stringValue(shadeTree.executable, "Shade Tree executable"),
+    );
+    assertWithin(realSandboxRoot, shadeTreeExecutable, "Shade Tree executable");
+    if (!/^[0-9a-f]{64}$/u.test(stringValue(shadeTree.sha256, "Shade Tree SHA-256"))) {
+      throw new Error("Installer did not report a Shade Tree SHA-256 pin");
+    }
+  } else if (shadeTree.status !== "unsupported") {
+    throw new Error("Installer returned an unexpected Shade Tree availability state");
   }
   if (hermes.status !== "configured") {
     throw new Error("Hermes was not configured during the clean install");
   }
 
-  const [executable, realSandboxRoot] = await Promise.all([
-    realpath(stringValue(agentBoost.executable, "Agent Boost executable")),
-    realpath(options.sandboxRoot),
-  ]);
+  const executable = await realpath(
+    stringValue(agentBoost.executable, "Agent Boost executable"),
+  );
   assertWithin(realSandboxRoot, executable, "Agent Boost executable");
   const hermesResult = record(hermes.result, "Hermes installer result");
   if (hermesResult.config_changed !== true) {

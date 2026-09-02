@@ -89,6 +89,32 @@ function fakeRuntime(): AgentBoostRuntime {
     async getRequest() {
       throw new Error("not used");
     },
+    async egressCapabilities() {
+      return {
+        contract: "org.agentboost.egress/0.1",
+        mode: "explicit_fetch",
+        policy: { direct_fallback: false },
+      };
+    },
+    async egressStatus() {
+      return {
+        status: "ready",
+        code: "SHADE_TREE_READY",
+        detail: "Covered HTTPS egress is ready",
+        direct_fallback: false,
+      };
+    },
+    async egressFetch(input) {
+      return {
+        status: 200,
+        finalUrl: input.url,
+        contentType: "application/json",
+        body: '{"hello":"world"}',
+        bytes: 17,
+        redirects: 0,
+        route: "shade-tree" as const,
+      };
+    },
     async startNewDemo() {
       return {
         archiveId: "archive_12345678",
@@ -113,6 +139,9 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
     tools.tools.map((tool) => tool.name).sort(),
     [
       "capabilities",
+      "egress_capabilities",
+      "egress_fetch",
+      "egress_status",
       "onboarding_start",
       "onboarding_status",
       "wallet_execute_private_payment",
@@ -122,6 +151,22 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
       "wallet_start_new_demo",
     ],
   );
+  const egressStatus = await client.callTool({ name: "egress_status", arguments: {} });
+  assert.equal(
+    (egressStatus.structuredContent as { data: { status: string } }).data.status,
+    "ready",
+  );
+  assert.doesNotMatch(JSON.stringify(egressStatus), /token|member leaf|\.onion/iu);
+  const fetched = await client.callTool({
+    name: "egress_fetch",
+    arguments: { url: "https://example.com/data.json" },
+  });
+  const fetchedData = (fetched.structuredContent as {
+    data: Record<string, unknown>;
+  }).data;
+  assert.equal(fetchedData.route, "shade-tree");
+  assert.equal(fetchedData.content_trust, "untrusted_external");
+  assert.equal(fetchedData.direct_fallback, false);
   const started = await client.callTool({ name: "onboarding_start", arguments: {} });
   assert.equal(started.isError, undefined);
   assert.equal(

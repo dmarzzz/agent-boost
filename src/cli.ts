@@ -11,6 +11,7 @@ import {
 } from "./kohaku/index.js";
 import { runStdioMcp } from "./mcp.js";
 import { SepoliaRpcClient } from "./rpc/index.js";
+import { ShadeTreeEgress } from "./shade-tree/index.js";
 import {
   createLocalRuntime,
   readLocalStatus,
@@ -200,11 +201,18 @@ async function doctor(): Promise<void> {
     });
   }
 
-  checks.push({
-    name: "general_egress_privacy",
-    status: "warn",
-    detail: "Shade Tree is not enabled; Hermes and non-RPC agent traffic are not Tor-routed",
-  });
+  const shadeTree = new ShadeTreeEgress(config);
+  try {
+    await shadeTree.start();
+    const covered = await shadeTree.status();
+    checks.push({
+      name: "covered_egress",
+      status: covered.status === "ready" ? "pass" : "warn",
+      detail: `${covered.status}: ${covered.detail}; explicit HTTPS fetch only, no direct fallback`,
+    });
+  } finally {
+    await shadeTree.stop();
+  }
 
   const passed = checks.every((check) => check.status !== "fail");
   print({ passed, network: "sepolia", checks });

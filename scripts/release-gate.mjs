@@ -100,14 +100,22 @@ export async function runReleaseGate(options) {
     prefixBin: join(prefix, "bin"),
     hermesHome: join(options.sandboxRoot, "hermes"),
     kohakuInstallDir: join(options.sandboxRoot, "dependencies", "kohaku-cli"),
+    shadeTreeInstallDir: join(options.sandboxRoot, "dependencies", "shade-tree"),
     stateDir: join(options.sandboxRoot, "state"),
     torDataDir: join(options.sandboxRoot, "state", "tor"),
     kohakuDataDir: join(options.sandboxRoot, "state", "kohaku"),
     passwordFile: join(options.sandboxRoot, "state", "secrets", "kohaku-password"),
     uiPort: await reserveLoopbackPort(),
     torRpcPort: await reserveLoopbackPort(),
+    shadeTreeProxyPort: await reserveLoopbackPort(),
   };
   if (paths.uiPort === paths.torRpcPort) paths.torRpcPort = await reserveLoopbackPort();
+  while (
+    paths.shadeTreeProxyPort === paths.uiPort ||
+    paths.shadeTreeProxyPort === paths.torRpcPort
+  ) {
+    paths.shadeTreeProxyPort = await reserveLoopbackPort();
+  }
 
   await mkdir(candidateRoot, { recursive: true, mode: 0o700 });
   const copiedFiles = await copyTrackedCandidate(options.candidateSource, candidateRoot);

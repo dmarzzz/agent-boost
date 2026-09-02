@@ -11,7 +11,8 @@ keeping seed phrases, private keys, wallet passwords, and raw privacy notes out
 of MCP results and the model conversation. Its Sepolia JSON-RPC path is routed
 through embedded Tor for both Agent Boost and Kohaku, with no direct fallback.
 
-The current build demonstrates one complete path:
+The current build demonstrates one complete wallet path and adds a separately
+enrolled covered-egress module:
 
 1. Hermes asks Agent Boost to create a disposable Sepolia wallet.
 2. Agent Boost bootstraps Tor, verifies Sepolia through it, and opens a local
@@ -22,6 +23,12 @@ The current build demonstrates one complete path:
 6. Hermes reads the live balance, plans the exact transfer, reads the terms
    back, and waits for verbal confirmation.
 7. Agent Boost signs and submits within a Sepolia-only, one-payment delegation.
+
+When a Grove operator has enrolled the installation, Hermes can also make an
+explicit public HTTPS GET or HEAD request through Shade Tree. That path is
+independent of wallet RPC: it uses an authenticated loopback Proxy, embedded
+Arti, and a fresh RLN proof per CONNECT tunnel. It never falls back to a direct
+connection and never blanket-routes Hermes or its model/Matrix traffic.
 
 No terminal is needed after the one-time installation. On a graphical local
 machine, the funding page opens in the browser. On a headless host, Agent Boost
@@ -49,8 +56,12 @@ checks both Hermes skills, and rejects private planning material in the package.
 Prerequisites are Git, Node.js 22 or newer, npm, and a working Hermes install.
 No system Tor installation is required; the POC embeds Arti through `tor-js`.
 The installer builds the repository, installs Agent Boost under `~/.local`,
-fetches and verifies the pinned Kohaku commit, and configures the active Hermes
-profile without replacing a conflicting MCP entry.
+fetches and verifies the pinned Kohaku commit, installs the checksummed Shade
+Tree v0.4.0 live client where upstream publishes one, and configures the active
+Hermes profile without replacing a conflicting MCP entry. Covered egress is
+currently supported on Ubuntu ARM64 and macOS Apple silicon. The wallet remains
+supported on macOS Intel, but Shade Tree v0.4.0 has no Intel live binary; the
+installer reports that limitation instead of substituting an unproved route.
 
 ```console
 git clone https://github.com/dmarzzz/agent-boost.git
@@ -63,10 +74,13 @@ The default executables and state paths are:
 ```text
 ~/.local/bin/agent-boost
 ~/.local/share/agent-boost/dependencies/kohaku-cli/
+~/.local/share/agent-boost/dependencies/shade-tree/
 ~/.local/share/agent-boost/state.json
 ~/.local/share/agent-boost/kohaku/
 ~/.local/share/agent-boost/tor/
 ~/.local/share/agent-boost/secrets/kohaku-password
+~/.local/share/agent-boost/shade-tree/profile/
+~/.local/share/agent-boost/shade-tree/slots/
 ```
 
 If the installer says `~/.local/bin` is not on `PATH`, add it before continuing.
@@ -100,6 +114,16 @@ The installer pins Kohaku to commit
 and records local SHA-256 provenance for its lockfile, launcher, and compiled
 bundle. A managed installation is reused only when its pin and hashes still
 match.
+
+Shade Tree is pinned to release
+[`v0.4.0`](https://github.com/dmarzzz/shade-tree-node/releases/tag/v0.4.0)
+at commit
+[`db074e4e75daf87b50fd52bda5378c9d04ce6c4d`](https://github.com/dmarzzz/shade-tree-node/commit/db074e4e75daf87b50fd52bda5378c9d04ce6c4d).
+Agent Boost verifies the platform SHA-256 during installation and again before
+launch. The binary alone does not grant Grove access: an operator must admit a
+locally generated identity and provision the exact matching member set and
+trust-pinned discovery values. Until then Hermes reports `needs_enrollment`;
+wallet setup and payments continue to work.
 
 The Kohaku runtime is currently large: roughly 0.8 GiB after production
 pruning, before proving artifacts. Its pinned production dependency tree also
@@ -168,7 +192,7 @@ ID. The default policy permits:
 - native test ETH only;
 - at most `0.05` ETH;
 - one payment for the lifetime of the setup;
-- execution within 24 hours of setup;
+- execution within seven days of setup;
 - no mainnet path.
 
 Agent Boost asks Kohaku to unshield the `0.1` ETH note to a fresh
@@ -182,6 +206,13 @@ requests are reconciled on restart and status reads without broadcasting again.
 If concrete evidence is unavailable, the durable result remains `submitted` or
 `indeterminate` rather than guessing.
 
+The seven-day deadline applies to delegated Agent Boost execution, not to the
+wallet, address, or funds. Address and balance reads remain available after it
+expires. This POC currently blocks new Agent Boost transfers under an expired
+delegation; the planned multi-wallet release requires an explicit
+reauthorization and confirmed recovery-transfer path before it ships. Never
+interpret expiry as deletion or loss of access to the encrypted wallet.
+
 ### Start a fresh demo
 
 Tell Hermes that you want to start a new demo wallet. Hermes summarizes that
@@ -190,6 +221,27 @@ approve, `wallet_start_new_demo` drains in-flight work, archives the complete
 state under the private local state directory, retains the previous Kohaku
 wallet, creates a new wallet profile, and presents a fresh funding QR. An
 unresolved prior payment is archived exactly as observed and is never retried.
+
+### Fetch public data through covered egress
+
+After the installation has been admitted to a Shade Tree Grove, tell Hermes,
+for example:
+
+> Fetch https://example.com/data.json through covered egress.
+
+Hermes checks `egress_status`, then calls `egress_fetch` itself. Users never
+handle a Proxy URL, auth token, identity secret, member set, or terminal
+command. The first release permits public DNS names over HTTPS port 443, GET or
+HEAD, at most three redirects, UTF-8 text/JSON responses up to 1 MiB, and a
+30-second request deadline. It sends no credentials, cookies, request body, or
+custom headers. Every redirect is revalidated and every returned body is
+marked `untrusted_external` so content cannot become agent instructions.
+
+This is accurately described as privacy-improving covered HTTPS egress, not an
+anonymity guarantee. The destination sees a Shade Tree node address. The node
+sees the destination hostname, port, timing, lifetime, and traffic volume;
+end-to-end TLS hides the path, query, and body from the node. A global observer
+may still correlate timing. See [Covered egress](docs/COVERED-EGRESS.md).
 
 ### Layered security policy
 
@@ -250,7 +302,7 @@ intentional.
 | Delegation limits, expiry, and use | RPC URL and local filesystem paths |
 | Plan, request, and confirmation state | Arbitrary Kohaku command execution |
 
-The MCP surface contains eight native tools:
+The MCP surface contains eleven native tools:
 
 | Tool | Purpose |
 | --- | --- |
@@ -262,6 +314,9 @@ The MCP surface contains eight native tools:
 | `wallet_plan_private_payment` | Validate one exact recipient and wei amount |
 | `wallet_execute_private_payment` | Execute a confirmed, unexpired plan |
 | `wallet_get_request` | Read durable redacted request state |
+| `egress_capabilities` | Read the explicit covered-fetch contract and limits |
+| `egress_status` | Read redacted install, enrollment, and route readiness |
+| `egress_fetch` | Fetch public HTTPS text/JSON with no direct fallback |
 
 All monetary authority values use canonical integer strings in wei. Plans are
 read-only, expire after five minutes, and bind recipient plus amount in a
@@ -281,6 +336,8 @@ flowchart LR
     K -->|JSON-RPC via authenticated relay| T
     K -->|supported protocol HTTP via its Tor client| E[(Sepolia + protocol services)]
     T -->|HTTPS JSON-RPC through Tor| E
+    A -->|explicit HTTPS GET or HEAD| S[Shade Tree authenticated Proxy]
+    S -->|embedded Arti + RLN-proved CONNECT| W[(Public HTTPS destination)]
     O[Event operator] -->|scan QR and fund| E
     A -->|address, balances, policy, status| H
 ```
@@ -295,6 +352,11 @@ process ownership lock; a second Agent Boost process fails closed instead of
 sharing the wallet. A fixed-destination JSON-RPC relay binds to `127.0.0.1:9185`
 with a random 256-bit path token. It accepts JSON-RPC POST only, forwards only
 to the configured HTTPS Sepolia origin through Tor, and has no direct retry.
+The optional Shade Tree Proxy binds separately to `127.0.0.1:9186`, requires a
+fresh in-memory 256-bit authentication token, and is reachable only through the
+three bounded egress tools. Its member identity stays in owner-only local
+files; its forward-only slot cursor is persisted separately and is never reset
+or rewound to reclaim capacity.
 
 Local state writes are flushed and atomically renamed. Agent Boost directories
 are hardened to `0700` and state, password, wallet, and provenance files to
@@ -330,8 +392,9 @@ It is not a guarantee of anonymity.
   the RPC provider, but the provider still sees RPC methods, wallet addresses,
   payloads, and timing.
 - Kohaku separately uses Tor for supported privacy-protocol HTTP traffic.
-  Hermes, model-provider, Matrix, browser, and other general agent traffic are
-  not covered by Agent Boost's RPC route.
+  Explicit `egress_fetch` calls can use Shade Tree after enrollment. Hermes,
+  model-provider, Matrix, browser, and all other process traffic remain outside
+  that covered request.
 - A fresh or stealth address alone does not hide its funding transaction.
 - Demo reset archives prior state and retains old Kohaku wallet data locally,
   but Agent Boost still has no seed export or guided wallet-recovery UX.
@@ -339,8 +402,8 @@ It is not a guarantee of anonymity.
   it is not cryptographic attribution when unrelated concurrent transfers are
   possible.
 
-The next module is Shade Tree cover for broader agent egress. It is not claimed
-or exposed by this release.
+Shade Tree cover is a research-preview, explicitly invoked module. It does not
+change the wallet RPC route and it is never presented as whole-agent privacy.
 
 ## Local security boundary
 
@@ -373,9 +436,15 @@ secret-bearing repository config.
 | `AGENT_BOOST_FUNDING_WEI` | `200000000000000000` | Requested initial funding |
 | `AGENT_BOOST_SHIELD_WEI` | `100000000000000000` | Tornado shield/note amount |
 | `AGENT_BOOST_PAYMENT_LIMIT_WEI` | `50000000000000000` | One-payment maximum |
+| `AGENT_BOOST_DELEGATION_TTL_MS` | `604800000` | Delegated execution lifetime (seven days) |
 | `AGENT_BOOST_OPEN_UI` | `true` | Attempt to open a graphical browser |
 | `AGENT_BOOST_EXECUTE` | `true` | Enable bounded testnet execution |
 | `AGENT_BOOST_STATE_DIR` | `~/.local/share/agent-boost` | Durable state root |
+| `AGENT_BOOST_SHADE_TREE_ENABLED` | `true` | Enable optional explicit covered egress |
+| `AGENT_BOOST_SHADE_TREE_PROXY_PORT` | `9186` | Authenticated loopback Shade Tree Proxy |
+| `AGENT_BOOST_SHADE_TREE_PROFILE_DIR` | `$AGENT_BOOST_STATE_DIR/shade-tree/profile` | Operator-provisioned owner-only profile |
+| `AGENT_BOOST_SHADE_TREE_REQUEST_TIMEOUT_MS` | `30000` | Covered request deadline |
+| `AGENT_BOOST_SHADE_TREE_MAX_RESPONSE_BYTES` | `1048576` | Covered response body cap |
 
 The upstream RPC URL is never returned through MCP or given to Kohaku. Do not put credentialed
 URLs in the repository or paste them into a model conversation.

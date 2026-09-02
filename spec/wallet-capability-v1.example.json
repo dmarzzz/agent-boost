@@ -13,6 +13,7 @@
     "per_payment_limit_atomic": "50000000000000000",
     "lifetime_limit_atomic": "50000000000000000",
     "max_payments": 1,
+    "default_lifetime_seconds": 604800,
     "requires_exact_verbal_confirmation": false,
     "requires_user_confirmation": true
   },
@@ -55,7 +56,7 @@
     "limitations": [
       "funding source and amount remain public",
       "the RPC provider still sees methods, addresses, payloads, and timing",
-      "Hermes and other agent traffic are not routed through Tor",
+      "only explicit covered-fetch calls use Shade Tree; Hermes and other agent traffic are not blanket-routed",
       "timing and the Sepolia anonymity set can enable correlation",
       "demo resets archive local state and retain old Kohaku wallet data"
     ]
@@ -74,7 +75,10 @@
     "general_egress": {
       "name": "shade-tree",
       "available": false,
-      "stage": "next"
+      "contract": "org.agentboost.egress/0.1",
+      "mode": "explicit_fetch",
+      "status": "needs_enrollment",
+      "direct_fallback": false
     }
   },
   "readiness": {

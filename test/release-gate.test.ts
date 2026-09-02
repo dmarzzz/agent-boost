@@ -199,12 +199,14 @@ test("isolated environment scrubs inherited Agent Boost and Node overrides", () 
       prefixBin: "/gate/prefix/bin",
       hermesHome: "/gate/hermes",
       kohakuInstallDir: "/gate/dependencies/kohaku-cli",
+      shadeTreeInstallDir: "/gate/dependencies/shade-tree",
       stateDir: "/gate/state",
       torDataDir: "/gate/state/tor",
       kohakuDataDir: "/gate/state/kohaku",
       passwordFile: "/gate/state/secrets/kohaku-password",
       uiPort: 19001,
       torRpcPort: 19002,
+      shadeTreeProxyPort: 19003,
     },
   );
   assert.equal(environment.NODE_OPTIONS, undefined);
@@ -256,6 +258,9 @@ test("release gate verifies isolated Hermes config and exact packaged skills", a
       "        - wallet_plan_private_payment",
       "        - wallet_execute_private_payment",
       "        - wallet_get_request",
+      "        - egress_capabilities",
+      "        - egress_status",
+      "        - egress_fetch",
       "      resources: false",
       "      prompts: false",
       "",
@@ -270,6 +275,11 @@ test("release gate verifies isolated Hermes config and exact packaged skills", a
       installed: true,
       agent_boost: { executable },
       kohaku: { commit: "fcf9defa4d5ff7f63222f1b3bbe2d30e631ceffd" },
+      shade_tree: {
+        version: "0.4.0",
+        available: false,
+        status: "unsupported",
+      },
       hermes: {
         status: "configured",
         hermes_version: "Hermes 0.16.0\nProject: /private/local/hermes-checkout",
