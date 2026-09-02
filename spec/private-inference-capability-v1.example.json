@@ -1,0 +1,40 @@
+{
+  "contract": "org.agentboost.private-inference/0.1",
+  "provider": "aci",
+  "mode": "explicit_query",
+  "enabled": true,
+  "audiences": ["user", "agent"],
+  "operations": {
+    "query": true,
+    "dynamic_policy_evaluation": true
+  },
+  "assurance": {
+    "attestation_before_credentials": true,
+    "tee_models_only": true,
+    "signed_receipt_before_result": true,
+    "trust_mode": "reviewed_release",
+    "release_pinned": true,
+    "direct_fallback": false
+  },
+  "policy": {
+    "mode": "restrict_only",
+    "can_relax_static_policy": false,
+    "failure_mode": "deny",
+    "wallet_enforcement_wired": false
+  },
+  "privacy": {
+    "protects_request_and_response_from_gateway_host": true,
+    "protects_request_and_response_from_model_provider_outside_tee": true,
+    "hides_origin_ip": false,
+    "hides_timing_or_traffic_shape": false,
+    "primary_agent_sees_tool_arguments": true,
+    "existing_conversation_becomes_private": false,
+    "opaque_local_artifacts_supported": false
+  },
+  "limits": {
+    "max_input_chars": 32768,
+    "max_output_tokens": 2048,
+    "max_response_bytes": 1048576,
+    "request_timeout_ms": 120000
+  }
+}

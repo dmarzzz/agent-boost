@@ -33,6 +33,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "@phala/aci-provider": "0.7.2",
+    "@phala/aci-verifier": "0.7.2",
     "pngjs": "5.0.0",
     "qrcode": "1.5.4",
     "tor-js": "0.4.0",

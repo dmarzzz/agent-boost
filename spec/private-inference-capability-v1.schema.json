@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-boost:schema:private-inference-capability:v1",
+  "title": "Agent Boost private inference capability",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "provider",
+    "mode",
+    "enabled",
+    "audiences",
+    "operations",
+    "assurance",
+    "policy",
+    "privacy",
+    "limits"
+  ],
+  "properties": {
+    "contract": { "const": "org.agentboost.private-inference/0.1" },
+    "provider": { "const": "aci" },
+    "mode": { "const": "explicit_query" },
+    "enabled": { "type": "boolean" },
+    "audiences": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": { "enum": ["user", "agent"] }
+    },
+    "operations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query", "dynamic_policy_evaluation"],
+      "properties": {
+        "query": { "type": "boolean" },
+        "dynamic_policy_evaluation": { "type": "boolean" }
+      }
+    },
+    "assurance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attestation_before_credentials",
+        "tee_models_only",
+        "signed_receipt_before_result",
+        "trust_mode",
+        "release_pinned",
+        "direct_fallback"
+      ],
+      "properties": {
+        "attestation_before_credentials": { "const": true },
+        "tee_models_only": { "const": true },
+        "signed_receipt_before_result": { "const": true },
+        "trust_mode": { "enum": ["reviewed_release", "hardware"] },
+        "release_pinned": { "type": "boolean" },
+        "direct_fallback": { "const": false }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "can_relax_static_policy",
+        "failure_mode",
+        "wallet_enforcement_wired"
+      ],
+      "properties": {
+        "mode": { "const": "restrict_only" },
+        "can_relax_static_policy": { "const": false },
+        "failure_mode": { "const": "deny" },
+        "wallet_enforcement_wired": { "const": false }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protects_request_and_response_from_gateway_host",
+        "protects_request_and_response_from_model_provider_outside_tee",
+        "hides_origin_ip",
+        "hides_timing_or_traffic_shape",
+        "primary_agent_sees_tool_arguments",
+        "existing_conversation_becomes_private",
+        "opaque_local_artifacts_supported"
+      ],
+      "properties": {
+        "protects_request_and_response_from_gateway_host": { "const": true },
+        "protects_request_and_response_from_model_provider_outside_tee": { "const": true },
+        "hides_origin_ip": { "const": false },
+        "hides_timing_or_traffic_shape": { "const": false },
+        "primary_agent_sees_tool_arguments": { "const": true },
+        "existing_conversation_becomes_private": { "const": false },
+        "opaque_local_artifacts_supported": { "const": false }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_input_chars",
+        "max_output_tokens",
+        "max_response_bytes",
+        "request_timeout_ms"
+      ],
+      "properties": {
+        "max_input_chars": { "type": "integer", "minimum": 1 },
+        "max_output_tokens": { "type": "integer", "minimum": 1 },
+        "max_response_bytes": { "type": "integer", "minimum": 1 },
+        "request_timeout_ms": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

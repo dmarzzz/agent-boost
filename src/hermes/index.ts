@@ -29,6 +29,9 @@ export const HERMES_NATIVE_TOOLS = [
   "egress_capabilities",
   "egress_status",
   "egress_fetch",
+  "private_inference_capabilities",
+  "private_inference_status",
+  "private_inference_query",
 ] as const;
 
 export interface CommandResult {

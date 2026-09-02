@@ -7,6 +7,18 @@ seed storage, Tornado proving, signing, and broadcast.
 
 ## Components
 
+### Private inference
+
+`src/private-inference/` is an in-process ACI client boundary. It owns endpoint
+credentials, model allowlisting, attestation/release policy, request bounds,
+and response-receipt verification. Connections are lazy and are closed with the
+wallet runtime. The remote ACI gateway and model runtime remain provider-side;
+Agent Boost does not launch the Rust gateway as a local sidecar.
+
+The same module exposes an internal restrict-only policy evaluator. It is not
+wired into payment enforcement in this release; doing so requires a separate
+action-digest binding and fail-closed execution review.
+
 | Component | Responsibility |
 | --- | --- |
 | Hermes | Conversation, exact readback, verbal confirmation, MCP orchestration |
