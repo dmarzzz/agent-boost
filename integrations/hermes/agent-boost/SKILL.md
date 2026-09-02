@@ -61,9 +61,11 @@ Tor fail-closed routing, delegation limits, expiry, or adapter readiness.
 
 1. Call `capabilities` when the contract version or readiness is unknown, or a
    tool reports unsupported or degraded state.
-2. Call `wallet_get_context` before wallet-dependent reasoning. Use the
-   reported private spendable balance and delegation limits; never guess from
-   a prior turn.
+2. Call `wallet_get_context` before wallet-dependent reasoning. For a general
+   balance question, report `balance_atomic`: the live on-chain balance of the
+   returned main account. "Main" means it funds subaccounts; it does not
+   control, own, recover, or revoke them. Do not add subaccount balances or
+   setup funding targets. Payment planning validates spendability separately.
 3. Once recipient and amount are exact, call `wallet_plan_private_payment`
    yourself. Branch on `data.plan.decision`; a denied or expired plan never
    executes.

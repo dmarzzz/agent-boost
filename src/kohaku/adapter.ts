@@ -48,9 +48,10 @@ interface KohakuBalancesPayload {
 }
 
 /**
- * Kohaku 0.1-note payments withdraw to a fresh wallet-controlled 7702 account,
+ * Kohaku 0.1-note payments withdraw to a fresh 7702 payment subaccount,
  * then send the requested value as a tail call. Kohaku forwards the remainder
- * (less the paymaster fee) to that fresh account.
+ * (less the paymaster fee) to that fresh account. "Subaccount" describes its
+ * funding role; the main account has no authority over it.
  */
 export class KohakuWalletAdapter implements WalletAdapter {
   static readonly compatibleCommit = KOHAKU_COMMIT;
@@ -192,7 +193,6 @@ export class KohakuWalletAdapter implements WalletAdapter {
       const result = await this.#runWalletCommand("balances", [
         "--include",
         "tornado",
-        "--skip-stealth-scan",
       ]);
       const payload = parseJsonObject(
         result.stdout,

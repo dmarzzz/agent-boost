@@ -296,6 +296,8 @@ describe("KohakuWalletAdapter", () => {
       publicBalanceWei: 300_000_000_000_000_000n,
       privateBalanceWei: 100_000_000_000_000_000n,
     });
+    const balanceCall = runner.calls.find((call) => command(call) === "balances")!;
+    assert.equal(balanceCall.args.includes("--skip-stealth-scan"), false);
     assert.equal(address, ADDRESS);
     assert.equal(runner.maxActive, 1);
   });

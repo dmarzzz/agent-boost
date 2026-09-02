@@ -7,6 +7,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { AgentBoostRuntime } from "../src/mcp.js";
 import { createMcpServer } from "../src/mcp.js";
 
+const WALLET_ADDRESS = "0x1111111111111111111111111111111111111111";
+
 function fakeRuntime(): AgentBoostRuntime {
   const setup = {
     version: 1 as const,
@@ -15,7 +17,7 @@ function fakeRuntime(): AgentBoostRuntime {
     phase: "awaiting_funding" as const,
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
-    address: "0x1111111111111111111111111111111111111111",
+    address: WALLET_ADDRESS,
     publicBalanceWei: "50000000000000000",
     privateBalanceWei: "0",
     requiredFundingWei: "200000000000000000",
@@ -49,7 +51,15 @@ function fakeRuntime(): AgentBoostRuntime {
       return setup;
     },
     async walletContext() {
-      return { setup };
+      return {
+        chain_id: "eip155:11155111",
+        account_role: "main_funding_source",
+        controls_subaccounts: false,
+        account_id: `eip155:11155111:${setup.address}`,
+        setup_phase: "private_ready",
+        address: setup.address,
+        balance_atomic: "1500000000000000000",
+      };
     },
     async planPrivatePayment(input) {
       return {
@@ -225,6 +235,36 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   assert.equal(statusPayload.data.funding.qr_attached, false);
   assert.doesNotMatch(JSON.stringify(status), /127\.0\.0\.1|uiUrl/u);
 
+  const walletContext = await client.callTool({
+    name: "wallet_get_context",
+    arguments: {},
+  });
+  const walletData = (walletContext.structuredContent as {
+    data: {
+      account_role: string;
+      controls_subaccounts: boolean;
+      address: string;
+      balance_atomic: string;
+    };
+  }).data;
+  assert.equal(walletData.account_role, "main_funding_source");
+  assert.equal(walletData.controls_subaccounts, false);
+  assert.equal(walletData.address, WALLET_ADDRESS);
+  assert.equal(walletData.balance_atomic, "1500000000000000000");
+  const walletText = walletContext.content.find((block) => block.type === "text");
+  assert.match(
+    walletText?.type === "text" ? walletText.text : "",
+    new RegExp(`Main account balance: 1\\.5 Sepolia ETH at ${WALLET_ADDRESS}`, "u"),
+  );
+  assert.match(
+    walletText?.type === "text" ? walletText.text : "",
+    /Main.*funding source.*no control over subaccounts/u,
+  );
+  assert.doesNotMatch(
+    walletText?.type === "text" ? walletText.text : "",
+    /funding address|public \+|private balance|spendable total/u,
+  );
+
   const plan = await client.callTool({
     name: "wallet_plan_private_payment",
     arguments: {
@@ -291,6 +331,67 @@ test("MCP error envelopes redact RPC credentials and local paths", async () => {
   assert.match(serialized, /\[redacted-url\]/);
   assert.match(serialized, /\[redacted-path\]/);
   assert.doesNotMatch(serialized, /private-token|Users\/alice/);
+
+  await client.close();
+  await server.close();
+});
+
+test("MCP rejects additional balance fields at the public contract boundary", async () => {
+  const runtime = fakeRuntime();
+  const validContext = await runtime.walletContext();
+  runtime.walletContext = async () => ({
+    ...validContext,
+    balances: {
+      private_payment_spendable_atomic: "999999999999999999",
+    },
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = new Client({ name: "test", version: "1.0.0" });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({
+    name: "wallet_get_context",
+    arguments: {},
+  });
+  const structured = response.structuredContent as {
+    outcome: string;
+    code: string;
+    data: { message: string };
+  };
+  assert.equal(structured.outcome, "blocked");
+  assert.equal(structured.code, "REQUEST_BLOCKED");
+  assert.match(structured.data.message, /additional balance fields are forbidden/u);
+  assert.doesNotMatch(JSON.stringify(response), /999999999999999999/u);
+
+  await client.close();
+  await server.close();
+});
+
+test("MCP rejects any claim that the main account controls subaccounts", async () => {
+  const runtime = fakeRuntime();
+  const validContext = await runtime.walletContext();
+  runtime.walletContext = async () => ({
+    ...validContext,
+    controls_subaccounts: true,
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = new Client({ name: "test", version: "1.0.0" });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({
+    name: "wallet_get_context",
+    arguments: {},
+  });
+  const structured = response.structuredContent as {
+    outcome: string;
+    code: string;
+    data: { message: string };
+  };
+  assert.equal(structured.outcome, "blocked");
+  assert.equal(structured.code, "REQUEST_BLOCKED");
+  assert.match(structured.data.message, /invalid main account semantics/u);
 
   await client.close();
   await server.close();

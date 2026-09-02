@@ -187,9 +187,10 @@ ID. The default policy permits:
 - execution within seven days of setup;
 - no mainnet path.
 
-Agent Boost asks Kohaku to unshield the `0.1` ETH note to a fresh
-wallet-controlled account and append the exact recipient transfer as a tail
-call. Kohaku waits for UserOperation inclusion. Agent Boost stores a recipient
+Agent Boost asks Kohaku to unshield the `0.1` ETH note to a fresh payment
+subaccount and append the exact recipient transfer as a tail call. The main
+account is a funding source only and has no control or recovery authority over
+subaccounts. Kohaku waits for UserOperation inclusion. Agent Boost stores a recipient
 balance checkpoint before handing execution authority to Kohaku and keeps a
 UserOperation hash distinct from an Ethereum transaction hash. It reports
 `confirmed` only from Kohaku's explicit confirmation, a successful transaction
@@ -287,10 +288,10 @@ intentional.
 
 | Hermes can read | Not returned through Agent Boost tools |
 | --- | --- |
-| Sepolia address and chain ID | Seed phrase and private keys |
-| Live funding-address balance | Kohaku wallet password |
-| Live aggregate public-wallet ETH | Raw Tornado notes and proofs |
-| Live private-payment spendable ETH | Raw signed transactions |
+| Main Sepolia account address and chain ID | Seed phrase and private keys |
+| Live on-chain balance for that main account | Kohaku wallet password |
+| Setup and payment readiness | Raw Tornado notes and proofs |
+| Payment decisions and status | Raw signed transactions |
 | Delegation limits, expiry, and use | RPC URL and local filesystem paths |
 | Plan, request, and confirmation state | Arbitrary Kohaku command execution |
 

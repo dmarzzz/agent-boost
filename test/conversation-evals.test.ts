@@ -227,12 +227,13 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
     },
     async walletContext() {
       return {
+        chain_id: "eip155:11155111",
+        account_role: "main_funding_source",
+        controls_subaccounts: false,
+        account_id: `eip155:11155111:${WALLET}`,
         setup_phase: "private_ready",
         address: WALLET,
-        balances: {
-          public_atomic: "0",
-          private_payment_spendable_atomic: "100000000000000000",
-        },
+        balance_atomic: "100000000000000000",
         delegation: ready.delegation,
         security: { payment_execute: approval },
       };

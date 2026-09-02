@@ -328,54 +328,44 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
 
   async walletContext(): Promise<Record<string, unknown>> {
     let record = await this.#onboarding.getRecord();
-    let publicWalletTotal = BigInt(record.publicBalanceWei);
-    if (record.address) {
-      const [fundingAddressBalance, walletBalances] = await Promise.all([
-        this.#chain.getBalanceWei(record.address),
-        record.phase === "private_ready"
-          ? this.#wallet.getBalanceSnapshot
-            ? this.#wallet.getBalanceSnapshot()
-            : this.#wallet.getPrivateBalanceWei().then((privateBalanceWei) => ({
-                publicBalanceWei: fundingAddressBalanceFallback(record),
-                privateBalanceWei,
-              }))
-          : Promise.resolve({
-              publicBalanceWei: fundingAddressBalanceFallback(record),
-              privateBalanceWei: BigInt(record.privateBalanceWei),
-            }),
-      ]);
-      publicWalletTotal = walletBalances.publicBalanceWei;
-      const privateBalance = walletBalances.privateBalanceWei;
+    let observedAt = record.updatedAt;
+    while (record.address) {
+      const observedSetupId = record.setupId;
+      const observedAddress = record.address;
+      const addressBalance = await this.#chain.getBalanceWei(observedAddress);
+      observedAt = new Date().toISOString();
       const state = await this.#store.update((draft) => {
-        if (!draft.onboarding || draft.onboarding.setupId !== record.setupId) return;
-        const changed =
-          draft.onboarding.publicBalanceWei !== fundingAddressBalance.toString() ||
-          draft.onboarding.privateBalanceWei !== privateBalance.toString();
-        if (!changed) return;
-        draft.onboarding.publicBalanceWei = fundingAddressBalance.toString();
-        draft.onboarding.privateBalanceWei = privateBalance.toString();
+        if (
+          !draft.onboarding ||
+          draft.onboarding.setupId !== observedSetupId ||
+          draft.onboarding.address !== observedAddress
+        ) return;
+        if (draft.onboarding.publicBalanceWei === addressBalance.toString()) return;
+        draft.onboarding.publicBalanceWei = addressBalance.toString();
         draft.onboarding.revision += 1;
         draft.onboarding.updatedAt = new Date().toISOString();
       });
       record = state.onboarding as OnboardingRecord;
+      if (record.setupId === observedSetupId && record.address === observedAddress) break;
+      observedAt = record.updatedAt;
     }
     return {
       chain_id: "eip155:11155111",
+      account_role: "main_funding_source",
+      controls_subaccounts: false,
       account_id: record.address
         ? `eip155:11155111:${record.address}`
         : undefined,
       address: record.address,
       setup_phase: record.phase,
-      balances: {
-        funding_address_eth_atomic: record.publicBalanceWei,
-        public_wallet_total_atomic: publicWalletTotal.toString(),
-        private_payment_spendable_atomic: record.privateBalanceWei,
-      },
+      // Public contract invariant: this value comes only from eth_getBalance
+      // for the returned main account, never from wallet/subaccount accounting.
+      ...(record.address ? { balance_atomic: record.publicBalanceWei } : {}),
       delegation: record.delegation,
       security: {
         payment_execute: this.#config.security.effective["payment.execute"],
       },
-      freshness: { observed_at: record.updatedAt, revision: record.revision },
+      freshness: { observed_at: observedAt, revision: record.revision },
       rpc_route: {
         mode: "tor",
         scope: "ethereum_json_rpc",
@@ -508,10 +498,6 @@ function publicPaymentRequest(request: PaymentRequest): PaymentRequest {
   delete publicRequest.recipientBalanceBeforeWei;
   delete publicRequest.reconciliation;
   return publicRequest;
-}
-
-function fundingAddressBalanceFallback(record: OnboardingRecord): bigint {
-  return BigInt(record.publicBalanceWei);
 }
 
 function requiredRpcRoute(route: TorRpcRoutePort | undefined): TorRpcRoutePort {

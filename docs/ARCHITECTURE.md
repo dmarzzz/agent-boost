@@ -48,7 +48,7 @@ not_started
 any active phase → failed
 ```
 
-The wallet and fresh funding address are created before the QR appears.
+The wallet and fresh main account address are created before the QR appears.
 Proving-artifact preparation continues while the user funds. The watcher polls
 the exact address until the configured target arrives, persists `shielding`
 before invoking Kohaku, and waits for the private spendable balance rather than
@@ -69,7 +69,7 @@ diagnosis rather than an automatic retry.
 
 ```text
 wallet_get_context
-  → live funding-address + aggregate public + private spendable balances
+  → live main account address + its on-chain balance
   → wallet_plan_private_payment(recipient, amount)
   → verbal confirmation of immutable plan
   → wallet_execute_private_payment(decision_id, stable client ID)
@@ -90,21 +90,29 @@ submitted payment look safely repeatable and makes later read-only
 reconciliation possible. UserOperation and transaction hashes are separate
 fields; only a true transaction hash is queried as a transaction receipt.
 
-Kohaku's Tornado path withdraws the configured `0.1` ETH note to the next
-wallet-controlled EIP-7702 account. The recipient payment is an exact tail call;
+Kohaku's Tornado path withdraws the configured `0.1` ETH note to the next fresh
+EIP-7702 payment subaccount. The recipient payment is an exact tail call;
 the paymaster fee and remaining change are separate from the recipient amount.
 
 ## Live balance semantics
 
-The initial funding address and Kohaku wallet total are different concepts after
-shielding or unshielding. Agent Boost reports both:
+`wallet_get_context` reports one balance: `balance_atomic`, the live
+`eth_getBalance` value for its returned main account address. This is the same
+address/value pair a Sepolia explorer displays. Setup funding targets and
+subaccount or shielded balances are not added to the main account balance.
 
-- `funding_address_eth_atomic`: live balance at the address shown in the QR;
-- `public_wallet_total_atomic`: aggregate ETH across Kohaku public accounts;
-- `private_payment_spendable_atomic`: spendable Tornado ETH.
+"Main" describes a funding source only. Funding a subaccount is an ordinary
+one-way transfer and grants the main account no signing authority, ownership,
+recovery capability, revocation capability, or right to move the subaccount's
+funds. The names do not define a custody hierarchy.
 
-Payment planning refreshes the private value again, so Hermes cannot authorize
-from a remembered or merely total balance.
+The runtime makes this machine-readable as
+`account_role: main_funding_source` and `controls_subaccounts: false`. Before
+publishing `wallet_get_context`, the MCP boundary rejects missing or malformed
+address/balance pairs and any second balance-shaped field at any nesting depth.
+
+Payment planning refreshes its private spendability internally, so Hermes
+cannot authorize a payment from the displayed address balance alone.
 
 ## Filesystem and subprocess behavior
 

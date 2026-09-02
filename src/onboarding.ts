@@ -52,7 +52,7 @@ export class OnboardingController {
         return existing;
       }
 
-      // A retryable failure must keep the same setup and funding address. In
+      // A retryable failure must keep the same setup and main account address. In
       // particular, a temporary RPC failure while waiting for funding should
       // not invalidate a QR code the participant may already be scanning.
       if (existing.error?.retryable) {

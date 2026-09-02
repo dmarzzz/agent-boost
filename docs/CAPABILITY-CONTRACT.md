@@ -152,10 +152,9 @@ Returns the latest durable state or waits for a greater revision. Only
 
 No input. Refreshes and returns:
 
-- funding address and CAIP account ID;
-- current funding-address ETH;
-- Kohaku's current aggregate public-wallet ETH;
-- current private-payment spendable ETH;
+- main account address and CAIP account ID;
+- that main account's current on-chain ETH as `balance_atomic`;
+- `account_role: main_funding_source` and `controls_subaccounts: false`;
 - setup phase;
 - delegation amount, use, and expiry;
 - observation timestamp and revision.
@@ -163,6 +162,12 @@ No input. Refreshes and returns:
 
 It returns no seed, key, mnemonic, password, note, proof, raw signed
 transaction, RPC URL, or arbitrary adapter output.
+
+"Main" identifies the account that funds subaccounts. It conveys no control,
+ownership, signing authority, recovery, or revocation rights over them, and
+subaccount balances are not included in `balance_atomic`.
+The MCP boundary rejects the response if any other field whose name contains
+`balance` is introduced, including nested aggregate or private-pool balances.
 
 ### `wallet_start_new_demo`
 

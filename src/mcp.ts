@@ -156,9 +156,7 @@ function compactToolText(structured: Record<string, unknown>): string {
       return `Funding needed: ${remaining} Sepolia ETH to ${address}. A QR is attached when available. After sending, the user can reply ✅ or say sent.`;
     }
     if (phase === "private_ready") {
-      const privateBalance = stringField(setup, "privateBalanceWei");
-      const amount = privateBalance ? formatEthWei(BigInt(privateBalance)) : "unknown";
-      return `Setup ready. Private spendable test balance: ${amount} Sepolia ETH. Reply with one concise confirmation.`;
+      return "Setup ready for private Sepolia payments. Reply with one concise confirmation.";
     }
     return `Setup status: ${phase}. Use the structured status internally and give the user only the next action.`;
   }
@@ -173,11 +171,12 @@ function compactToolText(structured: Record<string, unknown>): string {
   }
 
   if (code === "WALLET_CONTEXT") {
-    const balances = asRecord(data.balances);
-    const privateBalance = stringField(balances, "private_payment_spendable_atomic");
-    const amount = privateBalance ? formatEthWei(BigInt(privateBalance)) : "unknown";
+    const balance = stringField(data, "balance_atomic");
+    const amount = balance ? formatEthWei(BigInt(balance)) : "unknown";
+    const address = stringField(data, "address");
     const phase = stringField(data, "setup_phase") ?? "unknown";
-    return `Wallet status: ${phase}. Private spendable test balance: ${amount} Sepolia ETH. Do not expose raw atomic values unless asked.`;
+    const location = address ? ` at ${address}` : "";
+    return `Wallet status: ${phase}. Main account balance: ${amount} Sepolia ETH${location}. “Main” means the funding source; it has no control over subaccounts. Do not expose raw atomic values unless asked.`;
   }
 
   if (code === "PAYMENT_PLANNED" || code === "PAYMENT_DENIED") {
@@ -221,6 +220,59 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function stringField(record: Record<string, unknown>, key: string): string | undefined {
   return typeof record[key] === "string" ? record[key] : undefined;
+}
+
+function enforceMainAccountContext(context: Record<string, unknown>): void {
+  if (
+    context.chain_id !== "eip155:11155111" ||
+    context.account_role !== "main_funding_source" ||
+    context.controls_subaccounts !== false
+  ) {
+    throw new Error("WALLET_CONTEXT_CONTRACT_VIOLATION: invalid main account semantics");
+  }
+
+  const address = context.address;
+  const balance = context.balance_atomic;
+  if (address === undefined || balance === undefined) {
+    if (address !== undefined || balance !== undefined || context.account_id !== undefined) {
+      throw new Error("WALLET_CONTEXT_CONTRACT_VIOLATION: address and balance must appear together");
+    }
+  } else if (
+    typeof address !== "string" ||
+    !/^0x[0-9a-fA-F]{40}$/u.test(address) ||
+    typeof balance !== "string" ||
+    !/^(?:0|[1-9][0-9]*)$/u.test(balance) ||
+    context.account_id !== `eip155:11155111:${address}`
+  ) {
+    throw new Error("WALLET_CONTEXT_CONTRACT_VIOLATION: invalid address balance pair");
+  }
+
+  const seen = new WeakSet<object>();
+  const visit = (value: unknown, path: readonly string[]): void => {
+    if (!value || typeof value !== "object") return;
+    if (seen.has(value)) {
+      throw new Error("WALLET_CONTEXT_CONTRACT_VIOLATION: cyclic context");
+    }
+    seen.add(value);
+    try {
+      if (Array.isArray(value)) {
+        value.forEach((entry, index) => visit(entry, [...path, index.toString()]));
+        return;
+      }
+      for (const [key, entry] of Object.entries(value)) {
+        const isSoleBalanceField = path.length === 0 && key === "balance_atomic";
+        if (key.toLowerCase().includes("balance") && !isSoleBalanceField) {
+          throw new Error(
+            "WALLET_CONTEXT_CONTRACT_VIOLATION: additional balance fields are forbidden",
+          );
+        }
+        visit(entry, [...path, key]);
+      }
+    } finally {
+      seen.delete(value);
+    }
+  };
+  visit(context, []);
 }
 
 function domainError(digest: string, error: unknown): CallToolResult {
@@ -492,14 +544,16 @@ export async function createMcpServer(
     {
       title: "Read wallet context",
       description:
-        "Read the disposable Sepolia wallet address, public/private balances, setup state, active security policy, and bounded delegated-spend policy. The agent calls this silently for reasoning and keeps the user response concise. Returns no seed, key, password, or raw note material.",
+        "Read the disposable Sepolia main account address and its live on-chain ETH balance, plus setup state, active security policy, and bounded delegated-spend policy. Main means the account can fund subaccounts; it does not control, own, recover, or revoke them. For a balance question, report this main-account balance exactly and do not include subaccount balances. Payment planning validates spendability separately. The agent calls this silently for reasoning and keeps the user response concise. Returns no seed, key, password, or raw note material.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async () => {
       try {
+        const context = await runtime.walletContext();
+        enforceMainAccountContext(context);
         return result(
-          envelope(digest, "ready", "WALLET_CONTEXT", await runtime.walletContext()),
+          envelope(digest, "ready", "WALLET_CONTEXT", context),
         );
       } catch (error) {
         return domainError(digest, error);

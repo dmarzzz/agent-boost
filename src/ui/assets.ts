@@ -60,10 +60,10 @@ export const INDEX_HTML = `<!doctype html>
             <strong id="funding-amount">Waiting for address</strong>
           </div>
           <div class="fact-row">
-            <span class="fact-label">Wallet address</span>
+            <span class="fact-label">Main account address</span>
             <div class="address-row">
               <code id="wallet-address">—</code>
-              <button id="copy-address" type="button" aria-label="Copy wallet address" disabled>
+              <button id="copy-address" type="button" aria-label="Copy main account address" disabled>
                 <span class="copy-default">Copy</span>
                 <span class="copy-done" hidden>Copied</span>
               </button>
@@ -71,8 +71,7 @@ export const INDEX_HTML = `<!doctype html>
             </div>
           </div>
           <div class="balance-row">
-            <div><span class="fact-label">Received</span><strong id="public-balance">0 ETH</strong></div>
-            <div><span class="fact-label">Private</span><strong id="private-balance">0 ETH</strong></div>
+            <div><span class="fact-label">Main account balance</span><strong id="address-balance">0 ETH</strong></div>
           </div>
           <div class="route-row" id="rpc-route" data-status="starting" role="status" aria-live="polite" aria-atomic="true">
             <span class="route-dot" aria-hidden="true"></span>
@@ -216,7 +215,7 @@ h1 { max-width: 630px; margin: 0; font-family: "Arial Narrow", "Roboto Condensed
 .address-row button:hover:not(:disabled) { border-color: var(--ultraviolet); }
 .address-row button:disabled { opacity: .38; cursor: not-allowed; }
 button:focus-visible { outline: 3px solid var(--volt); outline-offset: 3px; }
-.balance-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.balance-row { display: grid; grid-template-columns: 1fr; gap: 20px; }
 .balance-row strong { font: 600 14px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .route-row { display: flex; align-items: center; gap: 10px; color: var(--muted); }
 .route-row .fact-label { margin-bottom: 3px; }
@@ -293,8 +292,7 @@ const elements = {
   address: document.querySelector('#wallet-address'),
   copy: document.querySelector('#copy-address'),
   copyStatus: document.querySelector('#copy-status'),
-  publicBalance: document.querySelector('#public-balance'),
-  privateBalance: document.querySelector('#private-balance'),
+  addressBalance: document.querySelector('#address-balance'),
   rpcRoute: document.querySelector('#rpc-route'),
   rpcRouteLabel: document.querySelector('#rpc-route-label'),
   handoff: document.querySelector('#hermes-handoff'),
@@ -311,7 +309,7 @@ const viewByPhase = {
   not_started: ['Creating your test wallet', 'Hermes is preparing a local Sepolia wallet on this device.', 0, 0],
   creating_wallet: ['Creating your test wallet', 'A new local Sepolia wallet is being prepared for this demo.', 0, 0],
   preparing_privacy: ['Creating your test wallet', 'Agent Boost is finishing the wallet before funding.', 1, 1],
-  awaiting_funding: ['Fund your test wallet', 'Scan the QR code or copy the address. Send only Sepolia ETH.', 1, 1],
+  awaiting_funding: ['Fund your main account', 'Scan the QR code or copy the address. Send only Sepolia ETH.', 1, 1],
   funding_pending: ['More funding needed', 'Some Sepolia ETH arrived. Send the remaining amount shown.', 2, 2],
   funded_public: ['Funding found', 'Your test ETH arrived. Agent Boost is preparing the private balance.', 2, 2],
   shielding: ['Preparing your private balance', 'This can take a few minutes. No action is needed.', 3, 3],
@@ -323,7 +321,7 @@ function formatEth(wei) {
   try {
     const value = BigInt(wei);
     const whole = value / 1000000000000000000n;
-    const fraction = (value % 1000000000000000000n).toString().padStart(18, '0').replace(/0+$/, '').slice(0, 6);
+    const fraction = (value % 1000000000000000000n).toString().padStart(18, '0').replace(/0+$/, '');
     return whole.toString() + (fraction ? '.' + fraction : '') + ' ETH';
   } catch {
     return '—';
@@ -405,8 +403,7 @@ function render(snapshot) {
     : stillFunding
       ? formatEth(remainingFunding(snapshot)) + ' needed'
       : 'Funding complete';
-  elements.publicBalance.textContent = formatEth(snapshot.publicBalanceWei);
-  elements.privateBalance.textContent = formatEth(snapshot.privateBalanceWei);
+  elements.addressBalance.textContent = formatEth(snapshot.publicBalanceWei);
 
   elements.rpcRoute.dataset.status = routeStatus;
   elements.rpcRouteLabel.textContent = routeStatus === 'ready'
@@ -470,7 +467,7 @@ elements.copy.addEventListener('click', async () => {
   if (elements.copy.disabled) return;
   try {
     await navigator.clipboard.writeText(elements.address.textContent);
-    elements.copyStatus.textContent = 'Wallet address copied.';
+    elements.copyStatus.textContent = 'Main account address copied.';
     elements.copy.querySelector('.copy-default').hidden = true;
     elements.copy.querySelector('.copy-done').hidden = false;
     window.setTimeout(() => {
@@ -484,7 +481,7 @@ elements.copy.addEventListener('click', async () => {
     range.selectNodeContents(elements.address);
     selection.removeAllRanges();
     selection.addRange(range);
-    elements.copyStatus.textContent = 'Wallet address selected. Copy it manually.';
+    elements.copyStatus.textContent = 'Main account address selected. Copy it manually.';
   }
 });
 

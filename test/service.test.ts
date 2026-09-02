@@ -5,9 +5,15 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { loadConfig } from "../src/config.js";
-import type { ChainClient, WalletAdapter } from "../src/contracts.js";
+import type {
+  ChainClient,
+  OnboardingPhase,
+  OnboardingRecord,
+  WalletAdapter,
+} from "../src/contracts.js";
 import { createLocalRuntime, readLocalStatus } from "../src/service.js";
 import type { RpcFetch } from "../src/rpc/sepolia.js";
+import { StateStore } from "../src/state/store.js";
 import type {
   TorRpcProxyPort,
   TorRpcRoutePort,
@@ -38,6 +44,68 @@ class SetupWallet implements WalletAdapter {
   async executePrivatePayment(): Promise<Record<string, never>> {
     return {};
   }
+}
+
+class SnapshotWallet extends SetupWallet {
+  snapshotReads = 0;
+
+  constructor(
+    readonly publicBalanceWei: bigint,
+    readonly privateBalanceWei: bigint,
+  ) {
+    super();
+  }
+
+  override async getPrivateBalanceWei(): Promise<bigint> {
+    return this.privateBalanceWei;
+  }
+
+  async getBalanceSnapshot(): Promise<{
+    publicBalanceWei: bigint;
+    privateBalanceWei: bigint;
+  }> {
+    this.snapshotReads += 1;
+    return {
+      publicBalanceWei: this.publicBalanceWei,
+      privateBalanceWei: this.privateBalanceWei,
+    };
+  }
+}
+
+async function seedOnboarding(
+  stateDir: string,
+  phase: OnboardingPhase,
+  publicBalanceWei: bigint,
+  privateBalanceWei: bigint,
+): Promise<void> {
+  const now = new Date(0).toISOString();
+  const record: OnboardingRecord = {
+    version: 1,
+    setupId: "setup_balance_test",
+    revision: 1,
+    phase,
+    createdAt: now,
+    updatedAt: now,
+    address: "0x1111111111111111111111111111111111111111",
+    publicBalanceWei: publicBalanceWei.toString(),
+    privateBalanceWei: privateBalanceWei.toString(),
+    requiredFundingWei: "200000000000000000",
+    shieldAmountWei: "100000000000000000",
+    delegation: {
+      mode: "testnet_delegated",
+      chainId: 11_155_111,
+      perPaymentLimitWei: "50000000000000000",
+      lifetimeLimitWei: "50000000000000000",
+      spentWei: "0",
+      expiresAt: new Date(86_400_000).toISOString(),
+      enabled: true,
+    },
+  };
+  const store = new StateStore(stateDir);
+  await store.initialize();
+  await store.update((draft) => {
+    draft.onboarding = record;
+  });
 }
 
 class RecoverableRoute implements TorRpcRoutePort {
@@ -299,4 +367,48 @@ test("exhausted Tor bootstrap retries fail closed before proxy start and release
     },
   });
   await replacement.shutdown();
+});
+
+test("wallet context reports only the live balance of its displayed address", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-boost-balance-context-"));
+  const config = {
+    ...loadConfig({
+      AGENT_BOOST_STATE_DIR: root,
+      AGENT_BOOST_FUNDING_POLL_MS: "1",
+    }, root),
+    uiPort: 0,
+  };
+  await seedOnboarding(
+    root,
+    "private_ready",
+    1n,
+    100_000_000_000_000_000n,
+  );
+  const wallet = new SnapshotWallet(999n, 999n);
+  const runtime = await createLocalRuntime(config, {
+    wallet,
+    chain: {
+      async assertSepolia() {},
+      async getBalanceWei() {
+        return 200_000_000_000_000_000n;
+      },
+    },
+  });
+  try {
+    const context = await runtime.walletContext() as {
+      account_role: string;
+      controls_subaccounts: boolean;
+      address: string;
+      balance_atomic: string;
+      balances?: unknown;
+    };
+    assert.equal(context.account_role, "main_funding_source");
+    assert.equal(context.controls_subaccounts, false);
+    assert.equal(context.address, "0x1111111111111111111111111111111111111111");
+    assert.equal(context.balance_atomic, "200000000000000000");
+    assert.equal(context.balances, undefined);
+    assert.equal(wallet.snapshotReads, 0);
+  } finally {
+    await runtime.shutdown();
+  }
 });
