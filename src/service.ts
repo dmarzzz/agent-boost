@@ -15,6 +15,15 @@ import { KohakuWalletAdapter } from "./kohaku/index.js";
 import type { AgentBoostRuntime } from "./mcp.js";
 import { OnboardingController } from "./onboarding.js";
 import { PaymentController } from "./payment.js";
+import {
+  PrivateInference,
+  type DynamicPolicyInput,
+  type DynamicPolicyResult,
+  type PrivateInferencePort,
+  type PrivateInferenceQueryInput,
+  type PrivateInferenceResult,
+  type PrivateInferenceStatus,
+} from "./private-inference/index.js";
 import { SepoliaRpcClient } from "./rpc/index.js";
 import {
   ShadeTreeEgress,
@@ -43,6 +52,7 @@ export interface RuntimeDependencies {
   rpcProxy?: TorRpcProxyPort;
   openBrowser?: (url: string) => Promise<boolean>;
   coveredEgress?: CoveredEgressPort;
+  privateInference?: PrivateInferencePort;
 }
 
 interface NewDemoResult {
@@ -68,6 +78,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   readonly #ui: OnboardingUiServer;
   readonly #openBrowser: (url: string) => Promise<boolean>;
   readonly #egress: CoveredEgressPort;
+  readonly #privateInference: PrivateInferencePort;
   #reset: Promise<NewDemoResult> | undefined;
   #shuttingDown = false;
 
@@ -134,6 +145,8 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     });
     this.#openBrowser = dependencies.openBrowser ?? openVisibleBrowser;
     this.#egress = dependencies.coveredEgress ?? new ShadeTreeEgress(config);
+    this.#privateInference = dependencies.privateInference ??
+      new PrivateInference(config.privateInference);
   }
 
   async initialize(): Promise<void> {
@@ -171,6 +184,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       this.#payments.stop(),
       this.#ui.stop(),
       this.#egress.stop(),
+      this.#privateInference.close(),
     ]);
     await this.#rpcProxy?.stop().catch(() => undefined);
     await this.#rpcRoute?.close().catch(() => undefined);
@@ -407,6 +421,24 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return this.#egress.fetch(input);
   }
 
+  privateInferenceCapabilities(): Promise<Record<string, unknown>> {
+    return Promise.resolve(this.#privateInference.capabilities());
+  }
+
+  privateInferenceStatus(): Promise<PrivateInferenceStatus> {
+    return this.#privateInference.status();
+  }
+
+  privateInferenceQuery(
+    input: PrivateInferenceQueryInput,
+  ): Promise<PrivateInferenceResult> {
+    return this.#privateInference.query(input);
+  }
+
+  evaluateDynamicPolicy(input: DynamicPolicyInput): Promise<DynamicPolicyResult> {
+    return this.#privateInference.evaluatePolicy(input);
+  }
+
   planPrivatePayment(input: {
     recipient: string;
     amountWei: string;
@@ -458,6 +490,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         direct_fallback: false,
       },
       covered_egress: await this.egressStatus(),
+      private_inference: await this.privateInferenceStatus(),
     };
   }
 

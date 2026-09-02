@@ -51,3 +51,24 @@ loopback_port = 9186
 direct_fallback = false
 requires_operator_enrollment = true
 whole_agent_proxy = false
+
+[private_inference]
+enabled = false
+adapter = "aci"
+base_url = "https://tee.redpill.ai/v1"
+api_key_environment = "AGENT_BOOST_PRIVATE_INFERENCE_API_KEY"
+model = "provider/model-id"
+model_allowlist = ["provider/model-id"]
+trust_mode = "reviewed_release"
+accepted_compose_hashes = ["replace-with-reviewed-64-character-sha256"]
+accepted_session_ids = []
+request_timeout_ms = 120000
+max_input_chars = 32768
+max_output_tokens = 2048
+max_response_bytes = 1048576
+direct_fallback = false
+
+[dynamic_policy]
+mode = "restrict_only"
+failure_decision = "deny"
+wallet_enforcement_wired = false

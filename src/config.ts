@@ -7,6 +7,10 @@ import {
   DEFAULT_SHIELD_WEI,
   type PaymentApproval,
 } from "./contracts.js";
+import type {
+  PrivateInferenceConfig,
+  PrivateInferenceTrustMode,
+} from "./private-inference/index.js";
 import { AGENT_BOOST_RUNTIME_LOCK_PORT } from "./state/runtime-lock.js";
 
 export interface AgentBoostConfig {
@@ -56,6 +60,7 @@ export interface AgentBoostConfig {
   shadeTreeStartTimeoutMs: number;
   shadeTreeRequestTimeoutMs: number;
   shadeTreeMaxResponseBytes: number;
+  privateInference: PrivateInferenceConfig;
 }
 
 const DEFAULT_SECURITY = {
@@ -98,6 +103,136 @@ function paymentApprovalEnv(value: string | undefined): PaymentApproval | undefi
   if (value === undefined) return undefined;
   if (value === "allow" || value === "confirm" || value === "deny") return value;
   throw new Error("AGENT_BOOST_PAYMENT_APPROVAL must be allow, confirm, or deny");
+}
+
+function commaSeparatedEnv(value: string | undefined): string[] {
+  if (value === undefined) return [];
+  return [...new Set(value.split(",").map((entry) => entry.trim()).filter(Boolean))];
+}
+
+function privateInferenceTrustModeEnv(
+  value: string | undefined,
+): PrivateInferenceTrustMode {
+  if (value === undefined || value === "reviewed_release") return "reviewed_release";
+  if (value === "hardware") return value;
+  throw new Error(
+    "AGENT_BOOST_PRIVATE_INFERENCE_TRUST_MODE must be reviewed_release or hardware",
+  );
+}
+
+function privateInferenceBaseUrlEnv(value: string | undefined): string {
+  const baseUrl = value ?? "https://tee.redpill.ai/v1";
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("AGENT_BOOST_PRIVATE_INFERENCE_BASE_URL must be a valid HTTPS URL");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error("AGENT_BOOST_PRIVATE_INFERENCE_BASE_URL must use HTTPS");
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error(
+      "AGENT_BOOST_PRIVATE_INFERENCE_BASE_URL must not contain credentials, a query, or a fragment",
+    );
+  }
+  return baseUrl.replace(/\/$/u, "");
+}
+
+function digestListEnv(value: string | undefined, name: string): string[] {
+  const values = commaSeparatedEnv(value);
+  for (const digest of values) {
+    if (!/^[0-9a-f]{64}$/u.test(digest)) {
+      throw new Error(`${name} entries must be 64-character lowercase SHA-256 digests`);
+    }
+  }
+  return values;
+}
+
+function loadPrivateInferenceConfig(env: NodeJS.ProcessEnv): PrivateInferenceConfig {
+  const enabled = booleanEnv(env.AGENT_BOOST_PRIVATE_INFERENCE_ENABLED, false);
+  const disabledDefaults: PrivateInferenceConfig = {
+    enabled: false,
+    baseUrl: "https://tee.redpill.ai/v1",
+    modelAllowlist: [],
+    trustMode: "reviewed_release",
+    acceptedComposeHashes: [],
+    acceptedSessionIds: [],
+    requestTimeoutMs: 120_000,
+    maxInputChars: 32_768,
+    maxOutputTokens: 2_048,
+    maxResponseBytes: 1_048_576,
+  };
+  if (!enabled) return disabledDefaults;
+
+  const apiKey = env.AGENT_BOOST_PRIVATE_INFERENCE_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "AGENT_BOOST_PRIVATE_INFERENCE_API_KEY is required when private inference is enabled",
+    );
+  }
+  const model = env.AGENT_BOOST_PRIVATE_INFERENCE_MODEL;
+  if (!model) {
+    throw new Error(
+      "AGENT_BOOST_PRIVATE_INFERENCE_MODEL is required when private inference is enabled",
+    );
+  }
+  const modelAllowlist = commaSeparatedEnv(
+    env.AGENT_BOOST_PRIVATE_INFERENCE_MODEL_ALLOWLIST,
+  );
+  if (modelAllowlist.length === 0 || !modelAllowlist.includes(model)) {
+    throw new Error(
+      "AGENT_BOOST_PRIVATE_INFERENCE_MODEL_ALLOWLIST must include the configured model",
+    );
+  }
+  const trustMode = privateInferenceTrustModeEnv(
+    env.AGENT_BOOST_PRIVATE_INFERENCE_TRUST_MODE,
+  );
+  const acceptedComposeHashes = digestListEnv(
+    env.AGENT_BOOST_PRIVATE_INFERENCE_ACCEPTED_COMPOSE_HASHES,
+    "AGENT_BOOST_PRIVATE_INFERENCE_ACCEPTED_COMPOSE_HASHES",
+  );
+  if (trustMode === "reviewed_release" && acceptedComposeHashes.length === 0) {
+    throw new Error(
+      "AGENT_BOOST_PRIVATE_INFERENCE_ACCEPTED_COMPOSE_HASHES is required in reviewed_release trust mode",
+    );
+  }
+
+  return {
+    enabled: true,
+    baseUrl: privateInferenceBaseUrlEnv(
+      env.AGENT_BOOST_PRIVATE_INFERENCE_BASE_URL,
+    ),
+    apiKey,
+    model,
+    modelAllowlist,
+    trustMode,
+    acceptedComposeHashes,
+    acceptedSessionIds: digestListEnv(
+      env.AGENT_BOOST_PRIVATE_INFERENCE_ACCEPTED_SESSION_IDS,
+      "AGENT_BOOST_PRIVATE_INFERENCE_ACCEPTED_SESSION_IDS",
+    ),
+    requestTimeoutMs: positiveIntegerEnv(
+      env.AGENT_BOOST_PRIVATE_INFERENCE_REQUEST_TIMEOUT_MS,
+      120_000,
+      "AGENT_BOOST_PRIVATE_INFERENCE_REQUEST_TIMEOUT_MS",
+    ),
+    maxInputChars: positiveIntegerEnv(
+      env.AGENT_BOOST_PRIVATE_INFERENCE_MAX_INPUT_CHARS,
+      32_768,
+      "AGENT_BOOST_PRIVATE_INFERENCE_MAX_INPUT_CHARS",
+    ),
+    maxOutputTokens: positiveIntegerEnv(
+      env.AGENT_BOOST_PRIVATE_INFERENCE_MAX_OUTPUT_TOKENS,
+      2_048,
+      "AGENT_BOOST_PRIVATE_INFERENCE_MAX_OUTPUT_TOKENS",
+    ),
+    maxResponseBytes: positiveIntegerEnv(
+      env.AGENT_BOOST_PRIVATE_INFERENCE_MAX_RESPONSE_BYTES,
+      1_048_576,
+      "AGENT_BOOST_PRIVATE_INFERENCE_MAX_RESPONSE_BYTES",
+    ),
+  };
 }
 
 export function loadConfig(
@@ -276,5 +411,6 @@ export function loadConfig(
       1_048_576,
       "AGENT_BOOST_SHADE_TREE_MAX_RESPONSE_BYTES",
     ),
+    privateInference: loadPrivateInferenceConfig(env),
   };
 }

@@ -92,6 +92,27 @@ new client request ID.
 
 ## Tools
 
+Private inference uses a separate closed capability manifest,
+`org.agentboost.private-inference/0.1`, because it has a different authority and
+privacy boundary from the wallet contract. Its schema and example live under
+`spec/private-inference-capability-v1.*`.
+
+### `private_inference_capabilities`
+
+Returns the static ACI mode, resource limits, trust policy, dynamic-policy
+semantics, and exact privacy exclusions. It remains available while disabled.
+
+### `private_inference_status`
+
+Returns redacted verification and model readiness. It never returns keys, raw
+attestation evidence, or verifier internals.
+
+### `private_inference_query`
+
+Runs one bounded query against an allowlisted model over the verified ACI
+channel. Success requires a completed response receipt and explicitly reports
+that there was no direct fallback and that Hermes saw normal tool arguments.
+
 The wallet contract above and covered-egress contract below share the stable
 tool-result envelope but have separate manifest digests.
 

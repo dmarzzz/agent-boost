@@ -295,6 +295,9 @@ test("uses native tool names and never encodes Hermes version prefixes", () => {
     "egress_capabilities",
     "egress_status",
     "egress_fetch",
+    "private_inference_capabilities",
+    "private_inference_status",
+    "private_inference_query",
   ]);
   assert.doesNotMatch(JSON.stringify(HERMES_NATIVE_TOOLS), /mcp[_-]+agent/u);
 });

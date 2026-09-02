@@ -115,6 +115,48 @@ function fakeRuntime(): AgentBoostRuntime {
         route: "shade-tree" as const,
       };
     },
+    async privateInferenceCapabilities() {
+      return {
+        contract: "org.agentboost.private-inference/0.1",
+        enabled: true,
+        privacy: { primary_agent_sees_tool_arguments: true },
+      };
+    },
+    async privateInferenceStatus() {
+      return {
+        contract: "org.agentboost.private-inference/0.1",
+        status: "ready",
+        enabled: true,
+        trust_mode: "reviewed_release",
+        release_pinned: true,
+        model: "private/test-model",
+        receipt_count: 0,
+        detail: "Verified and ready.",
+        direct_fallback: false,
+      };
+    },
+    async privateInferenceQuery(input) {
+      return {
+        model: input.model ?? "private/test-model",
+        answer: "confidential answer",
+        receipt_id: "receipt-123",
+        receipt_verified: true,
+        attestation_verified: true,
+        release_pinned: true,
+        direct_fallback: false,
+        hides_origin_ip: false,
+        primary_agent_saw_tool_arguments: true,
+      };
+    },
+    async evaluateDynamicPolicy(input) {
+      return {
+        baseline: input.baseline,
+        effective_decision: input.baseline,
+        reason: "test",
+        enforcement: "restrict_only",
+        failed_closed: false,
+      };
+    },
     async startNewDemo() {
       return {
         archiveId: "archive_12345678",
@@ -144,6 +186,9 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
       "egress_status",
       "onboarding_start",
       "onboarding_status",
+      "private_inference_capabilities",
+      "private_inference_query",
+      "private_inference_status",
       "wallet_execute_private_payment",
       "wallet_get_context",
       "wallet_get_request",
@@ -151,6 +196,22 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
       "wallet_start_new_demo",
     ],
   );
+  const privateTool = tools.tools.find(
+    (tool) => tool.name === "private_inference_query",
+  );
+  assert.match(privateTool?.description ?? "", /Hermes' primary model/u);
+  assert.match(privateTool?.description ?? "", /no direct fallback/iu);
+  const privateResult = await client.callTool({
+    name: "private_inference_query",
+    arguments: { query: "sensitive subproblem" },
+  });
+  const privateData = (privateResult.structuredContent as {
+    data: Record<string, unknown>;
+  }).data;
+  assert.equal(privateData.answer, "confidential answer");
+  assert.equal(privateData.receipt_verified, true);
+  assert.equal(privateData.primary_agent_saw_tool_arguments, true);
+  assert.match(JSON.stringify(privateResult), /calling agent already saw/u);
   const egressStatus = await client.callTool({ name: "egress_status", arguments: {} });
   assert.equal(
     (egressStatus.structuredContent as { data: { status: string } }).data.status,

@@ -6,6 +6,11 @@ provide a production custody boundary or guaranteed anonymity.
 
 ## Protected data
 
+- Private-inference API keys remain in process configuration and are not
+  returned through MCP.
+- An explicit ACI request and response are protected from infrastructure
+  outside the successfully verified TEE, and an answer is withheld until its
+  response receipt verifies.
 - Kohaku seed and derived private keys;
 - local wallet password;
 - raw Tornado notes and proof material;
@@ -38,6 +43,14 @@ correct decision-making, not secrets.
     cannot rebroadcast an unresolved request.
 
 ## Important non-goals
+
+### Whole-conversation or anonymous inference
+
+Private inference does not retroactively protect the Hermes conversation.
+Hermes's primary model sees normal MCP tool arguments and returned answers. The
+ACI route also does not hide origin IP, traffic timing, request size, or model
+choice. Hardware trust mode verifies the TEE but does not prove an independently
+reviewed software release.
 
 ### Same-user isolation
 

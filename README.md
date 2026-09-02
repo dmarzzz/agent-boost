@@ -243,6 +243,22 @@ sees the destination hostname, port, timing, lifetime, and traffic volume;
 end-to-end TLS hides the path, query, and body from the node. A global observer
 may still correlate timing. See [Covered egress](docs/COVERED-EGRESS.md).
 
+### Query a confidential model
+
+Agent Boost can expose an opt-in `private_inference_query` tool backed by the
+[Dstack private AI gateway / ACI](https://github.com/Dstack-TEE/private-ai-gateway).
+The in-process client verifies the remote TEE, restricts requests to a local
+model allowlist, and returns an answer only after its response receipt verifies.
+There is no ordinary-provider fallback.
+
+This protects the explicit second inference from infrastructure outside the
+verified TEE. It does not make the existing Hermes conversation private:
+Hermes's primary model sees normal MCP arguments and the returned answer, and
+the route does not hide origin IP or timing. See the
+[product requirements](docs/PRIVATE-INFERENCE.md) and
+[provider roadmap](docs/PRIVATE-INFERENCE-PROVIDERS.md) for the full boundary,
+hosted-versus-self-hosted deployment, and future zkAPI/OpenAnonymity adapters.
+
 ### Layered security policy
 
 Agent Boost ships with built-in defaults and merges explicit local overrides
@@ -445,6 +461,13 @@ secret-bearing repository config.
 | `AGENT_BOOST_SHADE_TREE_PROFILE_DIR` | `$AGENT_BOOST_STATE_DIR/shade-tree/profile` | Operator-provisioned owner-only profile |
 | `AGENT_BOOST_SHADE_TREE_REQUEST_TIMEOUT_MS` | `30000` | Covered request deadline |
 | `AGENT_BOOST_SHADE_TREE_MAX_RESPONSE_BYTES` | `1048576` | Covered response body cap |
+| `AGENT_BOOST_PRIVATE_INFERENCE_ENABLED` | `false` | Enable explicit ACI-backed private inference |
+| `AGENT_BOOST_PRIVATE_INFERENCE_BASE_URL` | `https://tee.redpill.ai/v1` | Hosted or self-hosted HTTPS ACI endpoint |
+| `AGENT_BOOST_PRIVATE_INFERENCE_API_KEY` | none | Downstream gateway credential; keep outside chat and source control |
+| `AGENT_BOOST_PRIVATE_INFERENCE_MODEL` | none | Default confidential model identifier |
+| `AGENT_BOOST_PRIVATE_INFERENCE_MODEL_ALLOWLIST` | none | Comma-separated eligible models; must include the default |
+| `AGENT_BOOST_PRIVATE_INFERENCE_TRUST_MODE` | `reviewed_release` | `reviewed_release` or evaluation-only `hardware` |
+| `AGENT_BOOST_PRIVATE_INFERENCE_ACCEPTED_COMPOSE_HASHES` | none | Required reviewed release pins in `reviewed_release` mode |
 
 The upstream RPC URL is never returned through MCP or given to Kohaku. Do not put credentialed
 URLs in the repository or paste them into a model conversation.

@@ -10,6 +10,7 @@ import {
   SpawnCommandRunner,
 } from "./kohaku/index.js";
 import { runStdioMcp } from "./mcp.js";
+import { PrivateInference } from "./private-inference/index.js";
 import { SepoliaRpcClient } from "./rpc/index.js";
 import { ShadeTreeEgress } from "./shade-tree/index.js";
 import {
@@ -212,6 +213,22 @@ async function doctor(): Promise<void> {
     });
   } finally {
     await shadeTree.stop();
+  }
+
+  const privateInference = new PrivateInference(config.privateInference);
+  try {
+    const inference = await privateInference.status();
+    checks.push({
+      name: "private_inference",
+      status: !inference.enabled
+        ? "warn"
+        : inference.status === "ready"
+          ? "pass"
+          : "fail",
+      detail: `${inference.status}: ${inference.detail} No direct fallback.`,
+    });
+  } finally {
+    await privateInference.close();
   }
 
   const passed = checks.every((check) => check.status !== "fail");
