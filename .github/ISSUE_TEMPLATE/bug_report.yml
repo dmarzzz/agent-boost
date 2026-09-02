@@ -1,0 +1,90 @@
+name: Bug report
+description: Report a reproducible defect in Agent Boost
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem.
+
+        **Do not report security vulnerabilities here.** Use the repository's [private vulnerability reporting](https://github.com/dmarzzz/agent-boost/security/advisories/new) instead.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: This report does not contain seeds, keys, wallet passwords, funded addresses you care about, or a suspected security vulnerability.
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and its impact.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest reliable sequence of commands, Hermes prompts, configuration, or code that reproduces the problem.
+      placeholder: |
+        1. Run ...
+        2. Ask Hermes ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Output of `agent-boost --version`, or the full commit SHA.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Wallet or Kohaku
+        - Zcash or Zallet
+        - Covered egress or Shade Tree
+        - Private inference
+        - MCP tools or Hermes integration
+        - Onboarding UI or funding page
+        - Tor route or networking
+        - Documentation
+        - Build, test, or tooling
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Node version, Hermes version, and any non-secret configuration needed to reproduce. Output of `agent-boost doctor` is ideal.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Paste concise logs or stack traces after removing secrets, addresses, and private infrastructure details.
+      render: shell

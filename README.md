@@ -1,8 +1,21 @@
-![Agent Boost — a local agent core and its dark sidecar](assets/agent-boost-hero.png)
+![Agent Boost banner: two agents, one switch, four private lanes](assets/agent-boost-readme-banner.webp)
 
 # Agent Boost
 
 **Dark mode for your agent.**
+
+[![ci][ci-badge]][ci-url]
+[![clean install][install-badge]][install-url]
+[![Node.js 22+][node-badge]][node-url]
+[![Hermes 0.16+][hermes-badge]][hermes-url]
+![research preview][preview-badge]
+[![license][license-badge]][license-url]
+
+[Install](#install) · [Run the demo](#run-the-demo) ·
+[Architecture](docs/ARCHITECTURE.md) · [Threat model](docs/THREAT-MODEL.md) ·
+[Capability contract](docs/CAPABILITY-CONTRACT.md) ·
+[Covered egress](docs/COVERED-EGRESS.md) · [Security](SECURITY.md) ·
+[Contributing](CONTRIBUTING.md)
 
 Agent Boost is a local, wallet-first privacy sidecar for AI agents. This proof
 of concept gives a Hermes agent the public wallet facts it needs to reason—its
@@ -482,7 +495,23 @@ is read-only, while a second `hermes mcp test agent-boost` intentionally fails
 closed. Stop or restart the gateway only when an operator specifically needs a
 standalone MCP connectivity test.
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the test layout and the house rules.
+Report security issues through the private channel in
+[SECURITY.md](SECURITY.md).
+
 ## License
 
 No license has been granted yet. Treat this repository as all rights reserved
 until a license file is added.
+
+[ci-badge]: https://github.com/dmarzzz/agent-boost/actions/workflows/ci.yml/badge.svg
+[ci-url]: https://github.com/dmarzzz/agent-boost/actions/workflows/ci.yml
+[install-badge]: https://github.com/dmarzzz/agent-boost/actions/workflows/release-matrix.yml/badge.svg
+[install-url]: https://github.com/dmarzzz/agent-boost/actions/workflows/release-matrix.yml
+[node-badge]: https://img.shields.io/badge/node-%3E%3D22-3f8f14.svg
+[node-url]: https://nodejs.org/en/download
+[hermes-badge]: https://img.shields.io/badge/hermes-0.16%2B-3f8f14.svg
+[hermes-url]: integrations/hermes/agent-boost/SKILL.md
+[preview-badge]: https://img.shields.io/badge/status-research%20preview-9ee01e.svg
+[license-badge]: https://img.shields.io/badge/license-all%20rights%20reserved-lightgrey.svg
+[license-url]: #license

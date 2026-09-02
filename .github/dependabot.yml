@@ -1,0 +1,21 @@
+# Dependabot: weekly dependency and toolchain update PRs for the two ecosystems
+# this repo ships: npm (root) and the GitHub Actions pinned in the workflows.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "javascript"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "github-actions"
