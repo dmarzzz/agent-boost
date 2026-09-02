@@ -1,0 +1,73 @@
+name: Feature request
+description: Propose a focused improvement to Agent Boost
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explain the problem first. Proposals that touch what the agent can see or do (tool surfaces, allowlists, network routes, payment limits, disclosure) should address the threat model explicitly.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched existing issues and the docs for related work.
+          required: true
+        - label: This request does not disclose a security vulnerability or sensitive infrastructure details.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete limitation or user need should be addressed? Who encounters it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest useful behavior or interface change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Note current workarounds or simpler approaches you considered.
+
+  - type: textarea
+    id: trust_model
+    attributes:
+      label: Security and trust-model impact
+      description: What does the agent newly get, and what stays behind the sidecar? Name new trusted parties, data exposure, and failure modes, or state why none apply.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable outcomes that would make the request complete.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Contribution
+      description: Are you interested in implementing this after the design is agreed?
+      options:
+        - "Yes"
+        - Maybe, with guidance
+        - "No"
+    validations:
+      required: true
