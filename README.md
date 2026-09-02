@@ -17,15 +17,16 @@
 [Covered egress](docs/COVERED-EGRESS.md) · [Security](SECURITY.md) ·
 [Contributing](CONTRIBUTING.md)
 
-Agent Boost is a local sidecar that gives a Hermes agent a private wallet and a
-covered lane to the web without ever handing it a key.
+Agent Boost is a local sidecar that gives a Hermes agent private money, a
+private identity, and anonymous egress without ever handing it a key.
 
-- **Private payment**: a disposable Sepolia wallet shielded through Kohaku, one
-  bounded payment per verbal confirmation, RPC over Tor with no direct fallback.
-- **Private search**: explicit public HTTPS reads through Shade Tree after
-  operator enrollment, never a direct connection.
-- **Nothing else leaves the sidecar**: seeds, keys, wallet passwords, raw notes,
-  and route credentials never enter MCP results or the conversation.
+- **Private payment and identity**: stealth Ethereum addresses and balances
+  through Kohaku, and shielded Zcash through Zallet; the agent sees addresses
+  and balances, never keys.
+- **Anonymous egress**: public HTTPS reads through a Shade Tree, or a grove of
+  them, over Tor with no direct fallback.
+- **Private inference**: sensitive subproblems sent to an attested confidential
+  model, with a receipt the sidecar verifies.
 
 > [!WARNING]
 > Unaudited research software. Sepolia-only, disposable test funds. Never send
