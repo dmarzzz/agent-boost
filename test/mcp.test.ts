@@ -62,6 +62,10 @@ function fakeRuntime(): AgentBoostRuntime {
         expiresAt: new Date(300_000).toISOString(),
         decision: "allow",
         blockers: [],
+        approval: {
+          action: "confirm" as const,
+          userConfirmationRequired: true,
+        },
       };
     },
     async executePrivatePayment(input) {
@@ -132,6 +136,10 @@ test("MCP exposes the seven wallet-first tools and structured onboarding", async
   assert.equal(startPayload.data.setup.uiOpened, undefined);
   assert.equal(startPayload.data.public.uiUrl, undefined);
   assert.equal(started.content.some((block) => block.type === "image"), true);
+  const startText = started.content.find((block) => block.type === "text");
+  assert.equal(startText?.type, "text");
+  assert.match(startText?.type === "text" ? startText.text : "", /reply ✅ or say sent/u);
+  assert.doesNotMatch(startText?.type === "text" ? startText.text : "", /manifest_digest|setupId/u);
   assert.doesNotMatch(JSON.stringify(started), /127\.0\.0\.1|uiUrl/u);
 
   const status = await client.callTool({
@@ -145,6 +153,44 @@ test("MCP exposes the seven wallet-first tools and structured onboarding", async
   assert.equal(statusPayload.data.funding.remaining_amount_eth, "0.15");
   assert.equal(statusPayload.data.funding.qr_attached, false);
   assert.doesNotMatch(JSON.stringify(status), /127\.0\.0\.1|uiUrl/u);
+
+  const plan = await client.callTool({
+    name: "wallet_plan_private_payment",
+    arguments: {
+      recipient: "0x2222222222222222222222222222222222222222",
+      amount_atomic: "10000000000000000",
+    },
+  });
+  const planText = plan.content.find((block) => block.type === "text");
+  assert.equal(planText?.type, "text");
+  assert.match(planText?.type === "text" ? planText.text : "", /reply ✅, yes, or send it/u);
+  assert.doesNotMatch(planText?.type === "text" ? planText.text : "", /wd_|amountWei|intentDigest/u);
+
+  const executeTool = tools.tools.find(
+    (tool) => tool.name === "wallet_execute_private_payment",
+  );
+  assert.match(executeTool?.description ?? "", /agent—not the user/u);
+  assert.match(executeTool?.description ?? "", /Never ask the user to supply tool syntax/u);
+
+  const executed = await client.callTool({
+    name: "wallet_execute_private_payment",
+    arguments: {
+      decision_id: "wd_12345678",
+      user_confirmed: true,
+    },
+  });
+  const executedPayload = executed.structuredContent as {
+    data: { request: { clientRequestId: string } };
+  };
+  assert.equal(
+    executedPayload.data.request.clientRequestId,
+    "hermes:wd_12345678",
+  );
+  const executedText = executed.content.find((block) => block.type === "text");
+  assert.match(
+    executedText?.type === "text" ? executedText.text : "",
+    /not confirmed[\s\S]*wallet_get_request[\s\S]*Never infer success/u,
+  );
 
   await client.close();
   await server.close();

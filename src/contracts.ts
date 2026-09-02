@@ -4,6 +4,8 @@ export const DEFAULT_FUNDING_WEI = 200_000_000_000_000_000n;
 export const DEFAULT_SHIELD_WEI = 100_000_000_000_000_000n;
 export const DEFAULT_PAYMENT_LIMIT_WEI = 50_000_000_000_000_000n;
 
+export type PaymentApproval = "allow" | "confirm" | "deny";
+
 export type OnboardingPhase =
   | "not_started"
   | "creating_wallet"
@@ -65,6 +67,10 @@ export interface PaymentPlan {
   expiresAt: string;
   decision: "allow" | "deny" | "indeterminate";
   blockers: string[];
+  approval: {
+    action: PaymentApproval;
+    userConfirmationRequired: boolean;
+  };
 }
 
 export interface PaymentRequest {

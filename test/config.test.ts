@@ -10,6 +10,13 @@ test("loadConfig is Sepolia-only, HTTPS-only, and avoids reserved ports", () => 
   assert.equal(config.torDataDir, "/tmp/agent-boost-home/.local/share/agent-boost/tor");
   assert.equal(config.fundingTargetWei, 200_000_000_000_000_000n);
   assert.equal(config.paymentLimitWei, 50_000_000_000_000_000n);
+  assert.deepEqual(config.security.default, {
+    "wallet.read": "allow",
+    "payment.plan": "allow",
+    "payment.execute": "confirm",
+  });
+  assert.deepEqual(config.security.overrides, {});
+  assert.equal(config.security.effective["payment.execute"], "confirm");
   assert.match(config.rpcUrl, /^https:/);
   assert.equal(
     config.kohakuBin,
@@ -35,5 +42,14 @@ test("loadConfig is Sepolia-only, HTTPS-only, and avoids reserved ports", () => 
   assert.throws(
     () => loadConfig({ AGENT_BOOST_TOR_RPC_PORT: "9183" }, "/tmp/home"),
     /UI port/,
+  );
+  assert.equal(
+    loadConfig({ AGENT_BOOST_PAYMENT_APPROVAL: "allow" }, "/tmp/home")
+      .security.effective["payment.execute"],
+    "allow",
+  );
+  assert.throws(
+    () => loadConfig({ AGENT_BOOST_PAYMENT_APPROVAL: "sometimes" }, "/tmp/home"),
+    /must be allow, confirm, or deny/,
   );
 });

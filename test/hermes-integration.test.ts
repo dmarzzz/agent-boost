@@ -119,7 +119,8 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.match(setupSkill, /`action: send` and `target: matrix`/u);
   assert.match(setupSkill, /final visible response exactly the server-provided funding[\s\S]*address/u);
   assert.match(setupSkill, /No label, prefix, suffix,[\s\S]*backticks, or[\s\S]*code fence/u);
-  assert.match(setupSkill, /reply[\s\S]*funded/u);
+  assert.match(setupSkill, /sent[\s\S]*done[\s\S]*funded[\s\S]*✅[\s\S]*👍/u);
+  assert.match(setupSkill, /Never require a magic[\s\S]*command syntax/u);
   assert.match(setupSkill, /`setupId` and `revision`/u);
   assert.match(setupSkill, /`wait_ms: 30000`/u);
   assert.match(setupSkill, /at most one[\s\S]*`onboarding_status`[\s\S]*`wait_ms: 90000`/u);
@@ -132,8 +133,13 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.match(setupSkill, /\/reload-skills.*\/reload-mcp/su);
   assert.match(operationalSkill, /testnet_delegated/u);
   assert.match(operationalSkill, /wallet_plan_private_payment/u);
-  assert.match(operationalSkill, /`hermes:<decision_id>`/u);
   assert.match(operationalSkill, /`user_confirmed: true`/u);
+  assert.match(operationalSkill, /agent operates every tool/iu);
+  assert.match(operationalSkill, /Never ask the user to type a tool name/iu);
+  assert.match(operationalSkill, /`yes`[\s\S]*`send it`[\s\S]*`✅`/u);
+  assert.match(operationalSkill, /Never claim an unresolved payment succeeded from a balance change/u);
+  assert.match(operationalSkill, /does not make the[\s\S]*address disappear/u);
+  assert.match(operationalSkill, /Never offer to reveal[\s\S]*private key/u);
   assert.doesNotMatch(
     operationalSkill,
     /mcp_agent_boost_|mcp__agent_boost__/u,

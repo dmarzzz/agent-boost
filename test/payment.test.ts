@@ -77,6 +77,10 @@ test("private payment is bounded, confirmation-gated, and idempotent", async () 
     amountWei: "20000000000000000",
   });
   assert.equal(plan.decision, "allow");
+  assert.deepEqual(plan.approval, {
+    action: "confirm",
+    userConfirmationRequired: true,
+  });
 
   await assert.rejects(
     controller.execute({
@@ -84,7 +88,7 @@ test("private payment is bounded, confirmation-gated, and idempotent", async () 
       clientRequestId: "message-1-payment",
       userConfirmed: false,
     }),
-    /verbally confirm/,
+    /confirm/,
   );
 
   const first = await controller.execute({
@@ -108,6 +112,44 @@ test("private payment is bounded, confirmation-gated, and idempotent", async () 
   assert.equal(laterPlan.decision, "deny");
   assert.ok(laterPlan.blockers.includes("DELEGATION_ALREADY_USED"));
   assert.ok(laterPlan.blockers.includes("INSUFFICIENT_PRIVATE_BALANCE"));
+});
+
+test("local security policy can allow or deny bounded execution", async () => {
+  const allowStore = await readyStore();
+  const allowWallet = new PaymentWallet();
+  const allowController = new PaymentController({
+    store: allowStore,
+    wallet: allowWallet,
+    clock: { now: () => new Date(1_000) },
+    paymentApproval: "allow",
+  });
+  const allowed = await allowController.plan({
+    recipient: "0x2222222222222222222222222222222222222222",
+    amountWei: "10000000000000000",
+  });
+  assert.deepEqual(allowed.approval, {
+    action: "allow",
+    userConfirmationRequired: false,
+  });
+  const executed = await allowController.execute({
+    decisionId: allowed.decisionId,
+    clientRequestId: "automatic-payment",
+    userConfirmed: false,
+  });
+  assert.equal(executed.phase, "confirmed");
+
+  const denyController = new PaymentController({
+    store: await readyStore(),
+    wallet: new PaymentWallet(),
+    clock: { now: () => new Date(1_000) },
+    paymentApproval: "deny",
+  });
+  const denied = await denyController.plan({
+    recipient: "0x3333333333333333333333333333333333333333",
+    amountWei: "10000000000000000",
+  });
+  assert.equal(denied.decision, "deny");
+  assert.ok(denied.blockers.includes("SECURITY_POLICY_DENIED"));
 });
 
 test("private payment planning denies an amount above the delegated limit", async () => {

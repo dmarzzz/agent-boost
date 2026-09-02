@@ -1,6 +1,6 @@
 ---
 name: agent-boost-setup
-description: Guide local Sepolia wallet setup and funding.
+description: Set up and fund a local Sepolia wallet conversationally.
 version: 0.2.0
 platforms: [macos, linux]
 metadata:
@@ -58,28 +58,30 @@ Tornado unless the user asks for technical detail. Never promise anonymity.
 
    1. Use `send_message` with `action: send` and `target: matrix` for one short
       instruction: send exactly the server-provided `remaining_amount_eth`
-      Sepolia ETH, Sepolia ETH has no real or redeemable value, and reply
-      **funded** after submitting the transfer. Do not include the address or
-      funding URI in this event.
+      Sepolia ETH, Sepolia ETH has no real or redeemable value, and reply with
+      **✅** or say **sent** after submitting the transfer. Do not include the
+      address or funding URI in this event.
    2. Make the final visible response exactly the server-provided funding
       address. No label, prefix, suffix, punctuation, Markdown, backticks, or
       code fence. The gateway will append the QR as its own image event.
 
    If `send_message` is unavailable, keep the final response compact: exact
-   amount and warning, the address on a line by itself, then “Reply funded after
-   you send it.” The QR still attaches automatically. The exact server-provided
-   `funding_uri` is the fallback only when the image is absent or the user asks
-   for a wallet link.
+   amount and warning, the address on a line by itself, then “Reply ✅ or say
+   sent after you send it.” The QR still attaches automatically. The exact
+   server-provided `funding_uri` is the fallback only when the image is absent
+   or the user asks for a wallet link.
 5. Do not begin a 90-second status loop while the participant still needs to
-   fund. End the turn after presenting the funding details. The participant's
-   **funded** reply is the explicit conversational handoff back to Hermes.
+   fund. End the turn after presenting the funding details. Any clear indication
+   that the transfer was sent—such as **sent**, **done**, **funded**, **✅**, or
+   **👍**—is the conversational handoff back to Hermes. Never require a magic
+   word or command syntax.
 6. On a resumed setup, branch on the returned state before sending funding
    instructions: `private_ready` goes directly to completion verification;
    `funded_public` or `shielding` goes to the private-balance status flow; and
    `failed` reports its public remediation and stops. Never show a zero-amount
    funding request or an old QR.
 
-## When the participant says funded or asks for status
+## When the participant indicates they sent funds or asks for status
 
 1. If the current conversation contains the latest `setupId` and `revision`,
    call `onboarding_status` with those exact values and `wait_ms: 30000`. If

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type {
   ChainClient,
+  PaymentApproval,
   PaymentPlan,
   PaymentRequest,
   WalletAdapter,
@@ -36,6 +37,7 @@ export class PaymentController {
   readonly #clock: PaymentClock;
   readonly #executeEnabled: boolean;
   readonly #executionLimitWei: bigint | undefined;
+  readonly #paymentApproval: PaymentApproval;
   #execution: Promise<PaymentRequest> | undefined;
   #acceptingExecutions = true;
 
@@ -46,6 +48,7 @@ export class PaymentController {
     clock?: PaymentClock;
     executeEnabled?: boolean;
     executionLimitWei?: bigint;
+    paymentApproval?: PaymentApproval;
   }) {
     this.#store = options.store;
     this.#wallet = options.wallet;
@@ -53,6 +56,7 @@ export class PaymentController {
     this.#clock = options.clock ?? SYSTEM_CLOCK;
     this.#executeEnabled = options.executeEnabled ?? true;
     this.#executionLimitWei = options.executionLimitWei;
+    this.#paymentApproval = options.paymentApproval ?? "confirm";
   }
 
   async recoverInterruptedRequests(): Promise<void> {
@@ -99,6 +103,7 @@ export class PaymentController {
     const onboarding = state.onboarding;
     const amount = BigInt(input.amountWei);
     if (!this.#executeEnabled) blockers.push("EXECUTION_DISABLED");
+    if (this.#paymentApproval === "deny") blockers.push("SECURITY_POLICY_DENIED");
     if (!onboarding || onboarding.phase !== "private_ready") {
       blockers.push("PRIVATE_BALANCE_NOT_READY");
     }
@@ -136,6 +141,10 @@ export class PaymentController {
       expiresAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
       decision: blockers.length === 0 ? "allow" : "deny",
       blockers,
+      approval: {
+        action: this.#paymentApproval,
+        userConfirmationRequired: this.#paymentApproval === "confirm",
+      },
     };
     await this.#store.update((draft) => {
       draft.plans[plan.decisionId] = plan;
@@ -149,8 +158,11 @@ export class PaymentController {
     userConfirmed: boolean;
   }): Promise<PaymentRequest> {
     if (!this.#acceptingExecutions) throw new Error("PAYMENT_RUNTIME_STOPPING");
-    if (!input.userConfirmed) {
-      throw new Error("The user must verbally confirm the exact test payment");
+    if (this.#paymentApproval === "deny") {
+      throw new Error("SECURITY_POLICY_DENIED");
+    }
+    if (this.#paymentApproval === "confirm" && !input.userConfirmed) {
+      throw new Error("The user must confirm the exact test payment");
     }
     if (!/^[A-Za-z0-9._:-]{8,200}$/.test(input.clientRequestId)) {
       throw new Error("client_request_id must be a stable 8-200 character identifier");

@@ -105,7 +105,9 @@ export class OnboardingController {
         lifetimeLimitWei: this.#config.paymentLimitWei.toString(),
         spentWei: "0",
         expiresAt: new Date(now.getTime() + 24 * 60 * 60_000).toISOString(),
-        enabled: this.#config.executeEnabled,
+        enabled:
+          this.#config.executeEnabled &&
+          this.#config.security.effective["payment.execute"] !== "deny",
       },
     };
     await this.#store.update((draft) => {

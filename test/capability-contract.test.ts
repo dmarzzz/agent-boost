@@ -48,12 +48,43 @@ test("checked-in example and runtime capabilities satisfy the v1 schema", async 
     { wallet, chain },
   );
   try {
+    const capabilities = await runtime.capabilities();
     assert.equal(
-      validate(await runtime.capabilities()),
+      validate(capabilities),
       true,
       JSON.stringify(validate.errors),
     );
+    assert.deepEqual((capabilities.security as { overrides: object }).overrides, {});
   } finally {
     await runtime.shutdown();
+  }
+
+  const overrideRoot = await mkdtemp(join(tmpdir(), "agent-boost-capability-"));
+  const overridden = await createLocalRuntime(
+    loadConfig(
+      {
+        AGENT_BOOST_STATE_DIR: overrideRoot,
+        AGENT_BOOST_PAYMENT_APPROVAL: "allow",
+      },
+      overrideRoot,
+    ),
+    { wallet, chain },
+  );
+  try {
+    const capabilities = await overridden.capabilities();
+    assert.equal(validate(capabilities), true, JSON.stringify(validate.errors));
+    const security = capabilities.security as {
+      default: Record<string, string>;
+      overrides: Record<string, string>;
+      effective: Record<string, string>;
+      hard_limits: Record<string, unknown>;
+    };
+    assert.equal(security.default["payment.execute"], "confirm");
+    assert.equal(security.overrides["payment.execute"], "allow");
+    assert.equal(security.effective["payment.execute"], "allow");
+    assert.equal(security.hard_limits.mainnet_available, false);
+    assert.equal(security.hard_limits.rpc_direct_fallback, false);
+  } finally {
+    await overridden.shutdown();
   }
 });

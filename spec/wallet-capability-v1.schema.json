@@ -13,12 +13,13 @@
     "privacy_protocol",
     "private_payment_operation",
     "authority",
+    "security",
     "privacy",
     "adapters",
     "readiness"
   ],
   "properties": {
-    "contract": {"const": "org.agentboost.wallet/1.1"},
+    "contract": {"const": "org.agentboost.wallet/1.2"},
     "chain_id": {"const": "eip155:11155111"},
     "network_name": {"const": "Sepolia"},
     "asset_type": {"const": "eip155:11155111/slip44:60"},
@@ -39,7 +40,8 @@
         "per_payment_limit_atomic",
         "lifetime_limit_atomic",
         "max_payments",
-        "requires_exact_verbal_confirmation"
+        "requires_exact_verbal_confirmation",
+        "requires_user_confirmation"
       ],
       "properties": {
         "mode": {"const": "testnet_delegated"},
@@ -48,7 +50,44 @@
         "per_payment_limit_atomic": {"$ref": "#/$defs/atomic"},
         "lifetime_limit_atomic": {"$ref": "#/$defs/atomic"},
         "max_payments": {"const": 1},
-        "requires_exact_verbal_confirmation": {"const": true}
+        "requires_exact_verbal_confirmation": {"const": false},
+        "requires_user_confirmation": {"type": "boolean"}
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default", "overrides", "effective", "hard_limits"],
+      "properties": {
+        "default": {"$ref": "#/$defs/securityDefaults"},
+        "overrides": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "payment.execute": {"$ref": "#/$defs/paymentApproval"}
+          }
+        },
+        "effective": {"$ref": "#/$defs/securityRules"},
+        "hard_limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "chain_id",
+            "mainnet_available",
+            "rpc_direct_fallback",
+            "per_payment_limit_atomic",
+            "lifetime_limit_atomic",
+            "max_payments"
+          ],
+          "properties": {
+            "chain_id": {"const": "eip155:11155111"},
+            "mainnet_available": {"const": false},
+            "rpc_direct_fallback": {"const": false},
+            "per_payment_limit_atomic": {"$ref": "#/$defs/atomic"},
+            "lifetime_limit_atomic": {"$ref": "#/$defs/atomic"},
+            "max_payments": {"const": 1}
+          }
+        }
       }
     },
     "privacy": {
@@ -166,6 +205,29 @@
     }
   },
   "$defs": {
+    "paymentApproval": {
+      "enum": ["allow", "confirm", "deny"]
+    },
+    "securityDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wallet.read", "payment.plan", "payment.execute"],
+      "properties": {
+        "wallet.read": {"const": "allow"},
+        "payment.plan": {"const": "allow"},
+        "payment.execute": {"const": "confirm"}
+      }
+    },
+    "securityRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wallet.read", "payment.plan", "payment.execute"],
+      "properties": {
+        "wallet.read": {"const": "allow"},
+        "payment.plan": {"const": "allow"},
+        "payment.execute": {"$ref": "#/$defs/paymentApproval"}
+      }
+    },
     "atomic": {
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)$"

@@ -1,7 +1,7 @@
 # Wallet capability contract
 
 Agent Boost exposes a wallet-first MCP contract named
-`org.agentboost.wallet/1.1`. It is Sepolia-only.
+`org.agentboost.wallet/1.2`. It is Sepolia-only.
 
 The capability document is available through the read-only `capabilities`
 tool and the resource:
@@ -21,7 +21,8 @@ Actual authority is enforced from durable local state.
 - shield protocol: Tornado through the pinned Kohaku adapter;
 - private operation: unshield to the next wallet account with an exact value
   tail call;
-- authority: one verbally confirmed, time-bounded Sepolia test payment;
+- authority: one time-bounded Sepolia test payment under the effective local
+  `allow`, `confirm`, or `deny` execution policy;
 - default maximum: `0.05` ETH;
 - mainnet: unavailable;
 - Ethereum JSON-RPC egress: Tor for Agent Boost and Kohaku, no direct fallback;
@@ -32,6 +33,18 @@ payment.” The capability document explicitly sets
 `guarantees_anonymity: false`, `funding_source_private: false`, and a scoped
 `rpc_egress` object. That object says Tor hides the origin IP from the RPC
 provider but does not hide methods, addresses, payloads, or timing from it.
+
+## Layered security
+
+The capability exposes `security.default`, `security.overrides`, and
+`security.effective`. Built-in rules allow wallet reads and payment planning,
+and require confirmation for payment execution. The local
+`AGENT_BOOST_PAYMENT_APPROVAL` override can set payment execution to `allow`,
+`confirm`, or `deny`.
+
+`security.hard_limits` is not mergeable: Sepolia-only operation, no mainnet,
+no direct RPC fallback, the amount caps, and the one-payment lifetime remain
+enforced regardless of an override.
 
 ## Identifiers and amounts
 
@@ -44,10 +57,9 @@ provider but does not hide methods, addresses, payloads, or timing from it.
 - Decision IDs begin `wd_`; request IDs begin `req_`; setup IDs begin
   `setup_`.
 
-## Result envelope
+## Result envelope and presentation
 
-Every expected result appears in both MCP `structuredContent` and a JSON text
-content block:
+Every expected result appears in MCP `structuredContent`:
 
 ```json
 {
@@ -63,6 +75,11 @@ content block:
   "data": {}
 }
 ```
+
+The MCP text content is deliberately not a second serialized copy. It is a
+short presentation hint with the human amount, status, and next action. Hermes
+uses the structured content for exact decisions while keeping raw wei, phases,
+digests, and identifiers out of ordinary replies.
 
 Known outcomes are `ready`, `blocked`, `awaiting_funding`, `executing`,
 `submitted`, `confirmed`, `failed`, and `indeterminate`. Retry advice is
@@ -127,7 +144,8 @@ transaction, RPC URL, or arbitrary adapter output.
 The tool refreshes private spendable balance and checks setup readiness,
 delegation enabled/expiry, one-payment lifetime use, per-payment and lifetime
 limits, and private balance. It returns a five-minute immutable decision with a
-SHA-256 digest over chain, recipient, asset, amount, and operation.
+SHA-256 digest over chain, recipient, asset, amount, and operation. The plan
+also reports whether the effective security policy requires user confirmation.
 
 Plans do not sign, submit, or reserve funds.
 
@@ -136,15 +154,18 @@ Plans do not sign, submit, or reserve funds.
 ```json
 {
   "decision_id": "wd_…",
-  "client_request_id": "hermes:wd_…",
   "user_confirmed": true
 }
 ```
 
 The recipient and amount are resolved from the decision rather than accepted
-again. Execution atomically consumes the one-payment/lifetime delegation before
-calling Kohaku. This is fail-safe: an adapter failure or uncertain submission
-does not restore authority for an automatic retry.
+again. `client_request_id` is optional; Agent Boost derives the stable
+`hermes:<decision_id>` value when omitted. The default `confirm` policy requires
+`user_confirmed: true`; an explicit local `allow` override does not, while
+`deny` blocks planning and execution. Execution atomically consumes the
+one-payment/lifetime delegation before calling Kohaku. This is fail-safe: an
+adapter failure or uncertain submission does not restore authority for an
+automatic retry.
 
 ### `wallet_get_request`
 
@@ -157,11 +178,13 @@ Returns one durable, redacted request in `executing`, `submitted`,
 
 ## Model-visible authority
 
-The agent may read wallet state, create plans, and—with exact verbal
-confirmation—cause one bounded Sepolia signature and broadcast. It cannot use
-the Agent Boost interface to export keys, sign arbitrary calldata, change
-chain, change protocol, change the fixed withdrawal behavior, bypass policy, or
-access mainnet.
+The agent may read wallet state and create plans. Its ability to cause one
+bounded Sepolia signature and broadcast is controlled by the effective local
+execution policy. The built-in default is `confirm`; ordinary language or an
+approval emoji can confirm the exact displayed plan. It cannot use the Agent
+Boost interface to export keys, sign arbitrary calldata, change chain, change
+protocol, change the fixed withdrawal behavior, bypass hard limits, or access
+mainnet.
 
 `user_confirmed` is Hermes's attestation about the conversation. Agent Boost
 does not independently hear or authenticate the user's speech, so this is a

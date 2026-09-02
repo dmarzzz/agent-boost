@@ -211,7 +211,7 @@ describe("onboarding UI server", () => {
     assert.match(script, /Tor unavailable — direct access disabled/);
     assert.match(html, /id="rpc-route-label">Checking Tor…/);
     assert.match(html, /id="hermes-handoff" role="status"/);
-    assert.match(script, /After you send, reply “funded”/);
+    assert.match(script, /After you send, reply ✅ or say “sent”/);
     assert.match(script, /Some Sepolia ETH arrived\. Send the remaining amount shown\./);
     assert.match(script, /Return to Hermes — Agent Boost is ready/);
     assert.match(css, /\.hermes-handoff\[data-state="ready"\]/);

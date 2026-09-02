@@ -89,12 +89,97 @@ function result(
   return {
     structuredContent: structured,
     content: [
-      { type: "text", text: JSON.stringify(structured) },
+      { type: "text", text: compactToolText(structured) },
       ...(qrPngBase64
         ? [{ type: "image" as const, data: qrPngBase64, mimeType: "image/png" }]
         : []),
     ],
   };
+}
+
+function compactToolText(structured: Record<string, unknown>): string {
+  const code = typeof structured.code === "string" ? structured.code : "RESULT";
+  const outcome = typeof structured.outcome === "string" ? structured.outcome : "unknown";
+  const data = asRecord(structured.data);
+
+  if (code === "REQUEST_BLOCKED") {
+    const message = stringField(data, "message") ?? "The request was blocked.";
+    return `Agent Boost blocked this request: ${message}`;
+  }
+
+  if (code === "CAPABILITIES") {
+    const security = asRecord(data.security);
+    const effective = asRecord(security.effective);
+    const approval = stringField(effective, "payment.execute") ?? "confirm";
+    return `Sepolia-only capabilities loaded. Payment execution policy: ${approval}. Use structuredContent for exact reasoning; keep the user-facing answer concise.`;
+  }
+
+  if (code === "ONBOARDING_STARTED" || code === "ONBOARDING_STATUS") {
+    const setup = asRecord(data.setup);
+    const funding = asRecord(data.funding);
+    const phase = stringField(setup, "phase") ?? outcome;
+    const remaining = stringField(funding, "remaining_amount_eth");
+    const address = stringField(funding, "address") ?? stringField(setup, "address");
+    if (remaining && remaining !== "0" && address) {
+      return `Funding needed: ${remaining} Sepolia ETH to ${address}. A QR is attached when available. After sending, the user can reply ✅ or say sent.`;
+    }
+    if (phase === "private_ready") {
+      const privateBalance = stringField(setup, "privateBalanceWei");
+      const amount = privateBalance ? formatEthWei(BigInt(privateBalance)) : "unknown";
+      return `Setup ready. Private spendable test balance: ${amount} Sepolia ETH. Reply with one concise confirmation.`;
+    }
+    return `Setup status: ${phase}. Use the structured status internally and give the user only the next action.`;
+  }
+
+  if (code === "WALLET_CONTEXT") {
+    const balances = asRecord(data.balances);
+    const privateBalance = stringField(balances, "private_payment_spendable_atomic");
+    const amount = privateBalance ? formatEthWei(BigInt(privateBalance)) : "unknown";
+    const phase = stringField(data, "setup_phase") ?? "unknown";
+    return `Wallet status: ${phase}. Private spendable test balance: ${amount} Sepolia ETH. Do not expose raw atomic values unless asked.`;
+  }
+
+  if (code === "PAYMENT_PLANNED" || code === "PAYMENT_DENIED") {
+    const plan = asRecord(data.plan);
+    const recipient = stringField(plan, "recipient") ?? "unknown recipient";
+    const amountWei = stringField(plan, "amountWei");
+    const amount = amountWei ? formatEthWei(BigInt(amountWei)) : "unknown";
+    const approval = asRecord(plan.approval);
+    const confirmationRequired = approval.userConfirmationRequired === true;
+    if (code === "PAYMENT_DENIED") {
+      return `Payment plan blocked for ${amount} Sepolia ETH to ${recipient}. Explain the blocker concisely; do not show internal IDs.`;
+    }
+    return confirmationRequired
+      ? `Payment ready for approval: ${amount} Sepolia ETH to ${recipient}. Ask the user to reply ✅, yes, or send it. The agent—not the user—must call the execution tool after approval.`
+      : `Payment approved by the active local policy: ${amount} Sepolia ETH to ${recipient}. The agent may execute it now within the hard delegation limits.`;
+  }
+
+  if (code === "PAYMENT_REQUEST" || code === "PAYMENT_STATUS") {
+    const request = asRecord(data.request);
+    const phase = stringField(request, "phase") ?? outcome;
+    const recipient = stringField(request, "recipient") ?? "the recipient";
+    const amountWei = stringField(request, "amountWei");
+    const amount = amountWei ? formatEthWei(BigInt(amountWei)) : "unknown";
+    if (phase === "confirmed") {
+      return `Payment confirmed: ${amount} Sepolia ETH to ${recipient}. Keep the receipt concise.`;
+    }
+    if (phase === "failed") {
+      return `Payment failed: ${amount} Sepolia ETH to ${recipient}. Do not retry without a new user request.`;
+    }
+    return `Payment is not confirmed (${phase}). Call wallet_get_request with the structured requestId. Never infer success from balances and never retry execution with a new ID.`;
+  }
+
+  return `Agent Boost result: ${outcome}. Use structuredContent internally and show only the user's next action.`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  return typeof record[key] === "string" ? record[key] : undefined;
 }
 
 function domainError(digest: string, error: unknown): CallToolResult {
@@ -277,7 +362,7 @@ export async function createMcpServer(
     {
       title: "Read wallet context",
       description:
-        "Read the disposable Sepolia wallet address, public/private balances, setup state, and bounded delegated-spend policy. Returns no seed, key, password, or raw note material.",
+        "Read the disposable Sepolia wallet address, public/private balances, setup state, active security policy, and bounded delegated-spend policy. The agent calls this silently for reasoning and keeps the user response concise. Returns no seed, key, password, or raw note material.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -297,7 +382,7 @@ export async function createMcpServer(
     {
       title: "Plan a shielded Sepolia test payment",
       description:
-        "Evaluate one exact native-ETH payment from the prepared private balance. amount_atomic is wei. Planning never executes or reserves a payment. Read exact terms and limitations back to the user before execution.",
+        "The agent—not the user—calls this to prepare one exact native-ETH payment from the private test balance. amount_atomic is wei. Planning never executes. Return a short human readback and, when the active policy requires it, accept ordinary approval such as yes, send it, or ✅. Never ask the user to type an MCP command or identifier.",
       inputSchema: z.object({
         recipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
         amount_atomic: z.string().regex(/^(0|[1-9][0-9]*)$/),
@@ -332,11 +417,15 @@ export async function createMcpServer(
     {
       title: "Execute a bounded shielded Sepolia test payment",
       description:
-        "Execute one unexpired allow decision under the setup-time Sepolia-only delegation. Call only after reading back recipient, amount, fee limitations, privacy limitations, and receiving explicit verbal confirmation. This tool can cause signing and broadcast within the reported testnet limits.",
+        "The agent—not the user—calls this for one unexpired allow decision. Under the default confirm policy, call after the user approves the exact displayed plan using ordinary language or an approval emoji. Under an allow override, confirmation is not required. Hard Sepolia delegation limits always apply. Never ask the user to supply tool syntax, IDs, or booleans.",
       inputSchema: z.object({
         decision_id: z.string().startsWith("wd_"),
-        client_request_id: z.string().min(8).max(200),
-        user_confirmed: z.boolean(),
+        client_request_id: z.string().min(8).max(200).optional().describe(
+          "Optional stable idempotency key. Omit to derive one from decision_id; the user never supplies this.",
+        ),
+        user_confirmed: z.boolean().optional().describe(
+          "Set true after the user approves the exact displayed plan. Omit under a local allow override.",
+        ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
@@ -344,8 +433,8 @@ export async function createMcpServer(
       try {
         const request = await runtime.executePrivatePayment({
           decisionId: decision_id,
-          clientRequestId: client_request_id,
-          userConfirmed: user_confirmed,
+          clientRequestId: client_request_id ?? `hermes:${decision_id}`,
+          userConfirmed: user_confirmed ?? false,
         });
         return result(
           envelope(

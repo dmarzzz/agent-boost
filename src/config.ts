@@ -5,6 +5,7 @@ import {
   DEFAULT_FUNDING_WEI,
   DEFAULT_PAYMENT_LIMIT_WEI,
   DEFAULT_SHIELD_WEI,
+  type PaymentApproval,
 } from "./contracts.js";
 import { AGENT_BOOST_RUNTIME_LOCK_PORT } from "./state/runtime-lock.js";
 
@@ -27,10 +28,31 @@ export interface AgentBoostConfig {
   autoOpenUi: boolean;
   autoShield: boolean;
   executeEnabled: boolean;
+  security: {
+    default: {
+      "wallet.read": "allow";
+      "payment.plan": "allow";
+      "payment.execute": "confirm";
+    };
+    overrides: {
+      "payment.execute"?: PaymentApproval;
+    };
+    effective: {
+      "wallet.read": "allow";
+      "payment.plan": "allow";
+      "payment.execute": PaymentApproval;
+    };
+  };
   fundingPollMs: number;
   privateBalancePollMs: number;
   setupTimeoutMs: number;
 }
+
+const DEFAULT_SECURITY = {
+  "wallet.read": "allow",
+  "payment.plan": "allow",
+  "payment.execute": "confirm",
+} as const;
 
 function booleanEnv(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback;
@@ -62,6 +84,12 @@ function unsignedBigIntEnv(
   return BigInt(value);
 }
 
+function paymentApprovalEnv(value: string | undefined): PaymentApproval | undefined {
+  if (value === undefined) return undefined;
+  if (value === "allow" || value === "confirm" || value === "deny") return value;
+  throw new Error("AGENT_BOOST_PAYMENT_APPROVAL must be allow, confirm, or deny");
+}
+
 export function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
   home = homedir(),
@@ -74,6 +102,9 @@ export function loadConfig(
   const kohakuInstallDir = resolve(
     env.AGENT_BOOST_KOHAKU_INSTALL_DIR ??
       `${stateDir}/dependencies/kohaku-cli`,
+  );
+  const paymentApprovalOverride = paymentApprovalEnv(
+    env.AGENT_BOOST_PAYMENT_APPROVAL,
   );
 
   let parsedRpc: URL;
@@ -156,6 +187,18 @@ export function loadConfig(
     autoOpenUi: booleanEnv(env.AGENT_BOOST_OPEN_UI, true),
     autoShield: booleanEnv(env.AGENT_BOOST_AUTO_SHIELD, true),
     executeEnabled: booleanEnv(env.AGENT_BOOST_EXECUTE, true),
+    security: {
+      default: { ...DEFAULT_SECURITY },
+      overrides: paymentApprovalOverride === undefined
+        ? {}
+        : { "payment.execute": paymentApprovalOverride },
+      effective: {
+        ...DEFAULT_SECURITY,
+        ...(paymentApprovalOverride === undefined
+          ? {}
+          : { "payment.execute": paymentApprovalOverride }),
+      },
+    },
     fundingPollMs: positiveIntegerEnv(
       env.AGENT_BOOST_FUNDING_POLL_MS,
       4_000,

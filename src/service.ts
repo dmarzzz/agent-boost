@@ -105,6 +105,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       chain: this.#chain,
       executeEnabled: config.executeEnabled,
       executionLimitWei: config.paymentLimitWei,
+      paymentApproval: config.security.effective["payment.execute"],
     });
     this.#ui = new OnboardingUiServer({
       getSnapshot: () => this.#getPublicSnapshot(),
@@ -150,7 +151,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     const state = await this.#store.read();
     const setup = state.onboarding;
     return {
-      contract: "org.agentboost.wallet/1.1",
+      contract: "org.agentboost.wallet/1.2",
       chain_id: "eip155:11155111",
       network_name: "Sepolia",
       asset_type: "eip155:11155111/slip44:60",
@@ -164,7 +165,22 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         per_payment_limit_atomic: this.#config.paymentLimitWei.toString(),
         lifetime_limit_atomic: this.#config.paymentLimitWei.toString(),
         max_payments: 1,
-        requires_exact_verbal_confirmation: true,
+        requires_exact_verbal_confirmation: false,
+        requires_user_confirmation:
+          this.#config.security.effective["payment.execute"] === "confirm",
+      },
+      security: {
+        default: this.#config.security.default,
+        overrides: this.#config.security.overrides,
+        effective: this.#config.security.effective,
+        hard_limits: {
+          chain_id: "eip155:11155111",
+          mainnet_available: false,
+          rpc_direct_fallback: false,
+          per_payment_limit_atomic: this.#config.paymentLimitWei.toString(),
+          lifetime_limit_atomic: this.#config.paymentLimitWei.toString(),
+          max_payments: 1,
+        },
       },
       privacy: {
         claim: "privacy-improving shielded Sepolia test payment",
@@ -309,6 +325,9 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         private_payment_spendable_atomic: record.privateBalanceWei,
       },
       delegation: record.delegation,
+      security: {
+        payment_execute: this.#config.security.effective["payment.execute"],
+      },
       freshness: { observed_at: record.updatedAt, revision: record.revision },
       rpc_route: {
         mode: "tor",

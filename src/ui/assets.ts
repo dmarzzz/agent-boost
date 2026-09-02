@@ -81,7 +81,7 @@ export const INDEX_HTML = `<!doctype html>
           <p class="testnet-warning"><span aria-hidden="true">◇</span> Sepolia ETH has no monetary value. Do not send mainnet assets.</p>
           <div class="hermes-handoff" id="hermes-handoff" role="status" aria-live="polite" aria-atomic="true">
             <span class="handoff-mark" aria-hidden="true">↗</span>
-            <span><span class="fact-label" id="handoff-label">Next in Hermes</span><strong id="handoff-message">After you send, reply “funded”</strong></span>
+            <span><span class="fact-label" id="handoff-label">Next in Hermes</span><strong id="handoff-message">After you send, reply ✅ or say “sent”</strong></span>
           </div>
         </div>
       </section>
@@ -422,7 +422,7 @@ function render(snapshot) {
       : ['funded_public', 'shielding'].includes(snapshot.phase)
         ? ['working', 'In progress', 'Hermes is preparing your private balance']
         : ['awaiting_funding', 'funding_pending'].includes(snapshot.phase)
-          ? ['funding', 'Next in Hermes', 'After you send, reply “funded”']
+          ? ['funding', 'Next in Hermes', 'After you send, reply ✅ or say “sent”']
           : ['working', 'In progress', 'Hermes is creating your test wallet'];
   elements.handoff.dataset.state = handoff[0];
   elements.handoffLabel.textContent = handoff[1];
@@ -449,7 +449,7 @@ function render(snapshot) {
     : snapshot.phase === 'private_ready'
       ? 'Setup is paused. Return to Hermes and check the Tor RPC route.'
       : ['awaiting_funding', 'funding_pending'].includes(snapshot.phase)
-        ? 'After sending, return to Hermes and reply “funded.” This window updates automatically.'
+        ? 'After sending, return to Hermes and reply ✅ or say “sent.” This window updates automatically.'
         : 'Keep this window open. Setup continues automatically.';
 }
 

@@ -1,5 +1,5 @@
 {
-  "contract": "org.agentboost.wallet/1.1",
+  "contract": "org.agentboost.wallet/1.2",
   "chain_id": "eip155:11155111",
   "network_name": "Sepolia",
   "asset_type": "eip155:11155111/slip44:60",
@@ -13,7 +13,29 @@
     "per_payment_limit_atomic": "50000000000000000",
     "lifetime_limit_atomic": "50000000000000000",
     "max_payments": 1,
-    "requires_exact_verbal_confirmation": true
+    "requires_exact_verbal_confirmation": false,
+    "requires_user_confirmation": true
+  },
+  "security": {
+    "default": {
+      "wallet.read": "allow",
+      "payment.plan": "allow",
+      "payment.execute": "confirm"
+    },
+    "overrides": {},
+    "effective": {
+      "wallet.read": "allow",
+      "payment.plan": "allow",
+      "payment.execute": "confirm"
+    },
+    "hard_limits": {
+      "chain_id": "eip155:11155111",
+      "mainnet_available": false,
+      "rpc_direct_fallback": false,
+      "per_payment_limit_atomic": "50000000000000000",
+      "lifetime_limit_atomic": "50000000000000000",
+      "max_payments": 1
+    }
   },
   "privacy": {
     "claim": "privacy-improving shielded Sepolia test payment",

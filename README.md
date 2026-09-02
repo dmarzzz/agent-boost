@@ -76,8 +76,8 @@ then tell it:
 > Set up Agent Boost for me.
 
 Hermes creates the wallet, presents the exact address and QR, and asks you to
-reply `funded` after sending the displayed Sepolia ETH. No terminal is needed
-after installation.
+reply with ✅ or say `sent` after sending the displayed Sepolia ETH. No terminal
+or MCP command is needed after installation.
 
 To run an optional host diagnostic before the demo:
 
@@ -123,12 +123,12 @@ conversation, Agent Boost returns it in a branded dark-sidecar card while
 preserving a conventional high-contrast scan field.
 
 Scan the QR and send the amount shown—normally `0.2` Sepolia ETH. Then reply
-`funded` to Hermes. Partial funding is supported: the funding page and a
-resumed QR automatically use the remaining amount. Do not send ETH on mainnet
-or another network.
+with ✅ or tell Hermes you sent it. Partial funding is supported: the funding
+page and a resumed QR automatically use the remaining amount. Do not send ETH
+on mainnet or another network.
 
-After the `funded` reply, Hermes uses bounded status checks without flooding or
-holding the conversation in an open-ended loop:
+After your acknowledgement, Hermes uses bounded status checks without flooding
+or holding the conversation in an open-ended loop:
 
 ```text
 creating_wallet
@@ -151,12 +151,11 @@ Tell Hermes, for example:
 > Send 0.02 Sepolia ETH privately to
 > 0x2222222222222222222222222222222222222222.
 
-Hermes first reads current wallet context and creates a short-lived plan. It
-must read back the recipient, exact ETH and wei amount, Sepolia network,
-remaining delegation, expiry, and privacy limitations. It must say that Tor
-hides this machine's origin IP from the RPC provider, while the provider still
-sees RPC requests, wallet addresses, payloads, and timing. Nothing is sent
-until the user verbally confirms those exact terms.
+Hermes reads current wallet context and creates a short-lived plan itself. It
+shows the exact Sepolia ETH amount, full recipient address, and a short testnet
+privacy warning. Under the default security policy, reply ✅, `yes`, or `send
+it` to approve. Hermes owns the MCP calls, decision IDs, atomic units, and
+idempotency key; the user never types them.
 
 Agent Boost does not listen to the conversation itself. Hermes reports the
 user's confirmation with `user_confirmed: true`; this is a conversational demo
@@ -178,6 +177,22 @@ call. Kohaku waits for UserOperation inclusion. Agent Boost additionally checks
 that the recipient's public balance increased by at least the requested amount
 before reporting `confirmed`; otherwise the durable result remains `submitted`
 or unresolved rather than guessing.
+
+### Layered security policy
+
+Agent Boost ships with built-in defaults and merges explicit local overrides
+on top:
+
+```text
+default:  wallet.read=allow, payment.plan=allow, payment.execute=confirm
+override: AGENT_BOOST_PAYMENT_APPROVAL=allow|confirm|deny
+effective: reported by the capabilities and payment-plan tools
+```
+
+`confirm` is the default. `allow` permits automatic execution only inside the
+existing Sepolia delegation; `deny` locks payment execution. No override can
+enable mainnet, direct RPC fallback, exceed the per-payment or lifetime caps,
+extend an expired delegation, or bypass adapter readiness.
 
 ## What Hermes can see
 

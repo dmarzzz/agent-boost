@@ -27,7 +27,14 @@ execute = true
 payment_limit_wei = "50000000000000000"
 maximum_payments = 1
 expires_after_hours = 24
-requires_exact_verbal_confirmation = true
+
+[security]
+# Built-in defaults are merged with explicit local overrides. The current POC
+# maps payment_execute to AGENT_BOOST_PAYMENT_APPROVAL=allow|confirm|deny.
+default = "confirm"
+
+[security.overrides]
+# payment_execute = "allow"
 
 [rpc]
 network = "sepolia"
