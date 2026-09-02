@@ -21,6 +21,7 @@
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/cli.ts",
+    "eval": "node --import tsx --test --test-concurrency=1 --test-reporter=spec test/conversation-evals.test.ts",
     "install:kohaku": "node scripts/install-kohaku.mjs",
     "install:local": "node scripts/install.mjs",
     "release:gate": "node scripts/release-gate.mjs",

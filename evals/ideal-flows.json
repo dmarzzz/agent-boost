@@ -1,0 +1,338 @@
+{
+  "schema": "org.agentboost.conversation-evals",
+  "schema_version": "1.0",
+  "flows": [
+    {
+      "id": "setup-funding-qr",
+      "title": "New participant receives one clear funding action",
+      "scenario": "setup-awaiting-funding",
+      "steps": [
+        {
+          "actor": "user",
+          "text": "Set up Agent Boost for me."
+        },
+        {
+          "actor": "tool",
+          "name": "onboarding_start",
+          "arguments": {},
+          "expect": {
+            "code": "ONBOARDING_STARTED",
+            "outcome": "awaiting_funding",
+            "text_includes": ["0.2 Sepolia ETH", "reply ✅ or say sent"],
+            "image": true
+          }
+        },
+        {
+          "actor": "assistant",
+          "surface": "instruction_event",
+          "max_lines": 3,
+          "text": "Fund your test wallet\nSend 0.2 Sepolia ETH on Sepolia. It has no monetary value.\nAfter sending, reply ✅ or say “sent”."
+        },
+        {
+          "actor": "assistant",
+          "surface": "qr_caption",
+          "max_lines": 1,
+          "text": "0x1111111111111111111111111111111111111111"
+        }
+      ]
+    },
+    {
+      "id": "ambiguous-amount-clarification",
+      "title": "Hermes never invents an amount",
+      "scenario": "payment-confirmed",
+      "steps": [
+        {
+          "actor": "user",
+          "text": "Send a small private payment to 0x2222222222222222222222222222222222222222."
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 1,
+          "text": "What exact amount of Sepolia ETH should I send to 0x2222222222222222222222222222222222222222?"
+        }
+      ]
+    },
+    {
+      "id": "confirmed-payment-with-emoji",
+      "title": "Exact payment, compact approval, confirmed receipt",
+      "scenario": "payment-confirmed",
+      "steps": [
+        {
+          "actor": "user",
+          "text": "Send 0.01 Sepolia ETH privately to 0x2222222222222222222222222222222222222222."
+        },
+        {
+          "actor": "tool",
+          "name": "capabilities",
+          "arguments": {},
+          "expect": {
+            "code": "CAPABILITIES",
+            "outcome": "ready",
+            "text_includes": ["Payment execution policy: confirm"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_get_context",
+          "arguments": {},
+          "expect": {
+            "code": "WALLET_CONTEXT",
+            "outcome": "ready",
+            "text_includes": ["Private spendable test balance: 0.1 Sepolia ETH"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_plan_private_payment",
+          "arguments": {
+            "recipient": "0x2222222222222222222222222222222222222222",
+            "amount_atomic": "10000000000000000"
+          },
+          "expect": {
+            "code": "PAYMENT_PLANNED",
+            "outcome": "ready",
+            "text_includes": ["0.01 Sepolia ETH", "reply ✅, yes, or send it"],
+            "image": false
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 4,
+          "text": "Send 0.01 Sepolia ETH\nTo 0x2222222222222222222222222222222222222222\nTestnet only · on-chain activity remains visible\nReply ✅ or say yes to approve."
+        },
+        {
+          "actor": "user",
+          "text": "✅"
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_execute_private_payment",
+          "arguments": {
+            "decision_id": "wd_eval_12345678",
+            "user_confirmed": true
+          },
+          "expect": {
+            "code": "PAYMENT_REQUEST",
+            "outcome": "submitted",
+            "text_includes": ["not confirmed", "wallet_get_request", "Never infer success"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_get_request",
+          "arguments": {
+            "request_id": "req_eval_12345678"
+          },
+          "expect": {
+            "code": "PAYMENT_STATUS",
+            "outcome": "confirmed",
+            "text_includes": ["Payment confirmed", "0.01 Sepolia ETH"],
+            "image": false
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 3,
+          "text": "✅ Sent\n0.01 Sepolia ETH to 0x2222222222222222222222222222222222222222\nSepolia testnet · on-chain activity remains visible"
+        }
+      ]
+    },
+    {
+      "id": "indeterminate-payment-stays-unresolved",
+      "title": "Uncertain submission is never guessed or retried",
+      "scenario": "payment-indeterminate",
+      "steps": [
+        {
+          "actor": "user",
+          "text": "Send 0.01 Sepolia ETH privately to 0x2222222222222222222222222222222222222222."
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_get_context",
+          "arguments": {},
+          "expect": {
+            "code": "WALLET_CONTEXT",
+            "outcome": "ready",
+            "text_includes": ["Private spendable test balance: 0.1 Sepolia ETH"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_plan_private_payment",
+          "arguments": {
+            "recipient": "0x2222222222222222222222222222222222222222",
+            "amount_atomic": "10000000000000000"
+          },
+          "expect": {
+            "code": "PAYMENT_PLANNED",
+            "outcome": "ready",
+            "text_includes": ["0.01 Sepolia ETH"],
+            "image": false
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 4,
+          "text": "Send 0.01 Sepolia ETH\nTo 0x2222222222222222222222222222222222222222\nTestnet only · on-chain activity remains visible\nReply ✅ or say yes to approve."
+        },
+        {
+          "actor": "user",
+          "text": "Yes, send it."
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_execute_private_payment",
+          "arguments": {
+            "decision_id": "wd_eval_12345678",
+            "user_confirmed": true
+          },
+          "expect": {
+            "code": "PAYMENT_REQUEST",
+            "outcome": "indeterminate",
+            "text_includes": ["not confirmed", "Never infer success", "never retry execution"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_get_request",
+          "arguments": {
+            "request_id": "req_eval_12345678"
+          },
+          "expect": {
+            "code": "PAYMENT_STATUS",
+            "outcome": "indeterminate",
+            "text_includes": ["not confirmed", "Never infer success", "never retry execution"],
+            "image": false
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 3,
+          "text": "⏳ Not confirmed yet\n0.01 Sepolia ETH may have been submitted.\nI won’t retry it automatically."
+        }
+      ]
+    },
+    {
+      "id": "local-deny-override",
+      "title": "A deny override blocks execution without an approval prompt",
+      "scenario": "payment-denied",
+      "steps": [
+        {
+          "actor": "user",
+          "text": "Send 0.01 Sepolia ETH privately to 0x2222222222222222222222222222222222222222."
+        },
+        {
+          "actor": "tool",
+          "name": "capabilities",
+          "arguments": {},
+          "expect": {
+            "code": "CAPABILITIES",
+            "outcome": "ready",
+            "text_includes": ["Payment execution policy: deny"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_get_context",
+          "arguments": {},
+          "expect": {
+            "code": "WALLET_CONTEXT",
+            "outcome": "ready",
+            "text_includes": ["Private spendable test balance: 0.1 Sepolia ETH"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_plan_private_payment",
+          "arguments": {
+            "recipient": "0x2222222222222222222222222222222222222222",
+            "amount_atomic": "10000000000000000"
+          },
+          "expect": {
+            "code": "PAYMENT_DENIED",
+            "outcome": "blocked",
+            "text_includes": ["Payment plan blocked", "0.01 Sepolia ETH"],
+            "image": false
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 2,
+          "text": "✕ Payment blocked\nYour local security policy has payment execution disabled."
+        }
+      ]
+    },
+    {
+      "id": "local-allow-override",
+      "title": "An allow override executes an exact request inside hard limits",
+      "scenario": "payment-allowed",
+      "steps": [
+        {
+          "actor": "user",
+          "text": "Send 0.01 Sepolia ETH privately to 0x2222222222222222222222222222222222222222."
+        },
+        {
+          "actor": "tool",
+          "name": "capabilities",
+          "arguments": {},
+          "expect": {
+            "code": "CAPABILITIES",
+            "outcome": "ready",
+            "text_includes": ["Payment execution policy: allow"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_get_context",
+          "arguments": {},
+          "expect": {
+            "code": "WALLET_CONTEXT",
+            "outcome": "ready",
+            "text_includes": ["Private spendable test balance: 0.1 Sepolia ETH"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_plan_private_payment",
+          "arguments": {
+            "recipient": "0x2222222222222222222222222222222222222222",
+            "amount_atomic": "10000000000000000"
+          },
+          "expect": {
+            "code": "PAYMENT_PLANNED",
+            "outcome": "ready",
+            "text_includes": ["approved by the active local policy", "0.01 Sepolia ETH"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_execute_private_payment",
+          "arguments": {
+            "decision_id": "wd_eval_12345678"
+          },
+          "expect": {
+            "code": "PAYMENT_REQUEST",
+            "outcome": "confirmed",
+            "text_includes": ["Payment confirmed", "0.01 Sepolia ETH"],
+            "image": false
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 3,
+          "text": "✅ Sent\n0.01 Sepolia ETH to 0x2222222222222222222222222222222222222222\nExecuted under your local allow policy."
+        }
+      ]
+    }
+  ]
+}

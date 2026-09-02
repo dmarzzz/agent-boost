@@ -194,6 +194,24 @@ existing Sepolia delegation; `deny` locks payment execution. No override can
 enable mainnet, direct RPC fallback, exceed the per-payment or lifetime caps,
 extend an expired delegation, or bypass adapter readiness.
 
+### Conversation evals
+
+The reviewable golden flows in [`evals/ideal-flows.json`](evals/ideal-flows.json)
+cover setup and QR funding, ambiguous-amount clarification, natural approval,
+confirmed and indeterminate outcomes, and the local `allow`/`deny` overrides.
+Run them without a wallet, network call, or model invocation:
+
+```sh
+npm run eval
+```
+
+The eval runner replays each ideal tool trace through the real MCP server using
+an in-memory fake wallet. It checks structured outcomes, compact MCP hints,
+maximum visible response length, QR presence, and forbidden leakage such as
+tool names, internal IDs, booleans, wei, or signing material. See
+[`evals/README.md`](evals/README.md) for the boundary between this deterministic
+contract eval and a live Hermes model eval.
+
 ## What Hermes can see
 
 The agent needs state to make decisions, so address and balance visibility is
