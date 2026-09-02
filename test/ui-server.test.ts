@@ -198,14 +198,23 @@ describe("onboarding UI server", () => {
     assert.match(html, /aria-label="Copy wallet address"/);
     assert.match(html, /id="copy-status" role="status" aria-live="polite"/);
     assert.match(css, /\.address-row \{[^}]*min-width: 0/);
+    assert.match(css, /\.funding-facts > \* \{ min-width: 0; \}/);
+    assert.match(css, /\.narrative, \.aperture-panel \{ min-width: 0/);
+    assert.match(css, /grid-template-columns: minmax\(0, 1fr\)/);
     assert.match(css, /\.address-row code \{[^}]*flex: 1 1 0/);
     assert.match(css, /\.address-row button \{[^}]*flex: 0 0 auto/);
+    assert.match(css, /\[hidden\] \{ display: none !important; \}/);
     assert.match(css, /@media \(max-width: 420px\)/);
     assert.match(script, /setAttribute\('aria-current', 'step'\)/);
     assert.match(script, /Still needed on Sepolia/);
     assert.match(script, /Wallet address copied\./);
     assert.match(script, /Tor unavailable — direct access disabled/);
     assert.match(html, /id="rpc-route-label">Checking Tor…/);
+    assert.match(html, /id="hermes-handoff" role="status"/);
+    assert.match(script, /After you send, reply “funded”/);
+    assert.match(script, /Some Sepolia ETH arrived\. Send the remaining amount shown\./);
+    assert.match(script, /Return to Hermes — Agent Boost is ready/);
+    assert.match(css, /\.hermes-handoff\[data-state="ready"\]/);
   });
 
   it("supports every onboarding phase without adding privileged actions", async () => {

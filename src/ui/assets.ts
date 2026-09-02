@@ -79,6 +79,10 @@ export const INDEX_HTML = `<!doctype html>
             <span><span class="fact-label">RPC route</span><strong id="rpc-route-label">Checking Tor…</strong></span>
           </div>
           <p class="testnet-warning"><span aria-hidden="true">◇</span> Sepolia ETH has no monetary value. Do not send mainnet assets.</p>
+          <div class="hermes-handoff" id="hermes-handoff" role="status" aria-live="polite" aria-atomic="true">
+            <span class="handoff-mark" aria-hidden="true">↗</span>
+            <span><span class="fact-label" id="handoff-label">Next in Hermes</span><strong id="handoff-message">After you send, reply “funded”</strong></span>
+          </div>
         </div>
       </section>
     </main>
@@ -104,6 +108,7 @@ export const STYLES_CSS = `
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 .sr-only {
   position: absolute;
@@ -143,7 +148,7 @@ button, code { font: inherit; }
   box-shadow: 0 32px 100px rgba(0, 0, 0, 0.42);
 }
 
-.narrative, .aperture-panel { padding: clamp(32px, 5vw, 68px); }
+.narrative, .aperture-panel { min-width: 0; padding: clamp(32px, 5vw, 68px); }
 .narrative { display: flex; flex-direction: column; }
 .aperture-panel {
   display: flex;
@@ -201,6 +206,7 @@ h1 { max-width: 630px; margin: 0; font-family: "Arial Narrow", "Roboto Condensed
 .ready-mark { z-index: 2; width: 110px; height: 110px; display: grid; place-items: center; border: 1px solid rgba(201,255,87,.65); border-radius: 50%; color: var(--volt); background: rgba(201,255,87,.06); font-size: 46px; box-shadow: 0 0 50px rgba(201,255,87,.12); }
 
 .funding-facts { display: grid; min-width: 0; gap: 24px; }
+.funding-facts > * { min-width: 0; }
 .primary-fact, .fact-row { padding-bottom: 20px; border-bottom: 1px solid var(--line); }
 .fact-label { display: block; margin-bottom: 8px; color: var(--muted); font: 600 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
 .primary-fact strong { color: var(--amber); font: 650 clamp(23px, 4vw, 32px)/1.1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: -.04em; }
@@ -219,13 +225,36 @@ button:focus-visible { outline: 3px solid var(--volt); outline-offset: 3px; }
 .route-row[data-status="ready"] .route-dot { background: var(--volt); box-shadow: 0 0 14px rgba(201,255,87,.34); }
 .route-row[data-status="failed"] strong, .route-row[data-status="closed"] strong { color: var(--amber); }
 .testnet-warning { margin: 0; padding: 12px 14px; border: 1px solid rgba(255,184,77,.2); border-radius: 10px; color: var(--amber); background: rgba(255,184,77,.04); font-size: 12px; line-height: 1.45; }
+.hermes-handoff { display: flex; align-items: center; gap: 13px; padding: 15px 16px; border: 1px solid rgba(130,104,255,.32); border-radius: 12px; background: rgba(130,104,255,.07); }
+.handoff-mark { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid rgba(130,104,255,.46); border-radius: 50%; color: var(--ultraviolet); font: 650 16px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.hermes-handoff .fact-label { margin-bottom: 4px; color: #aaa3b5; }
+.hermes-handoff strong { color: var(--bone); font-size: 13px; line-height: 1.35; }
+.hermes-handoff[data-state="ready"] { border-color: rgba(201,255,87,.3); background: rgba(201,255,87,.055); }
+.hermes-handoff[data-state="ready"] .handoff-mark { border-color: rgba(201,255,87,.45); color: var(--volt); }
+.hermes-handoff[data-state="error"] { border-color: rgba(255,184,77,.32); background: rgba(255,184,77,.055); }
+.hermes-handoff[data-state="error"] .handoff-mark { border-color: rgba(255,184,77,.45); color: var(--amber); }
 .connection-status { position: fixed; right: 18px; bottom: 14px; margin: 0; color: #716a78; font: 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .connection-status[data-offline="true"] { color: var(--amber); }
 
 @keyframes pulse { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-4px); } }
 
+@media (max-height: 820px) and (min-width: 761px) {
+  .shell { min-height: calc(100vh - 16px); margin: 8px auto; }
+  .narrative, .aperture-panel { padding: 26px 34px; }
+  .state-copy { margin: 46px 0 28px; }
+  .description { margin-top: 16px; }
+  .return-note { padding-top: 20px; }
+  .aperture { width: min(100%, 245px); margin-bottom: 8px; }
+  .qr-stage { width: min(62%, 172px); padding: 8px; border-radius: 13px; }
+  .ready-mark { width: 76px; height: 76px; font-size: 32px; }
+  .funding-facts { gap: 10px; }
+  .primary-fact, .fact-row { padding-bottom: 8px; }
+  .testnet-warning { padding: 7px 9px; font-size: 11px; }
+  .hermes-handoff { padding: 9px 11px; }
+}
+
 @media (max-width: 760px) {
-  .shell { width: min(100% - 24px, 620px); margin: 12px auto 40px; grid-template-columns: 1fr; }
+  .shell { width: min(100% - 24px, 620px); margin: 12px auto 40px; grid-template-columns: minmax(0, 1fr); }
   .narrative { grid-row: 1; padding: 88px 24px 36px; }
   .aperture-panel { grid-row: 2; padding: 28px 24px; border-top: 1px solid var(--line); border-left: 0; }
   body[data-has-address="true"] .aperture-panel { grid-row: 1; border-top: 0; border-bottom: 1px solid var(--line); }
@@ -268,6 +297,9 @@ const elements = {
   privateBalance: document.querySelector('#private-balance'),
   rpcRoute: document.querySelector('#rpc-route'),
   rpcRouteLabel: document.querySelector('#rpc-route-label'),
+  handoff: document.querySelector('#hermes-handoff'),
+  handoffLabel: document.querySelector('#handoff-label'),
+  handoffMessage: document.querySelector('#handoff-message'),
   errorPanel: document.querySelector('#error-panel'),
   errorMessage: document.querySelector('#error-message'),
   returnNote: document.querySelector('#return-note'),
@@ -276,14 +308,14 @@ const elements = {
 };
 
 const viewByPhase = {
-  not_started: ['Creating your wallet', 'Hermes is preparing a private test wallet on this device.', 0, 0],
-  creating_wallet: ['Creating your wallet', 'A new local Sepolia wallet is being prepared for this demo.', 0, 0],
-  preparing_privacy: ['Preparing privacy', 'Agent Boost is warming up the local privacy system before funding.', 1, 1],
+  not_started: ['Creating your test wallet', 'Hermes is preparing a local Sepolia wallet on this device.', 0, 0],
+  creating_wallet: ['Creating your test wallet', 'A new local Sepolia wallet is being prepared for this demo.', 0, 0],
+  preparing_privacy: ['Creating your test wallet', 'Agent Boost is finishing the wallet before funding.', 1, 1],
   awaiting_funding: ['Fund your test wallet', 'Scan the QR code or copy the address. Send only Sepolia ETH.', 1, 1],
-  funding_pending: ['Funding detected', 'Waiting for the Sepolia network to confirm your test ETH.', 2, 2],
-  funded_public: ['Funding confirmed', 'Your test ETH arrived. Agent Boost is about to prepare a private balance.', 2, 2],
-  shielding: ['Preparing your private balance', 'Agent Boost is shielding part of your Sepolia test balance. Keep this window open.', 3, 3],
-  private_ready: ['Your agent is ready', 'Your private test balance and Tor-routed Sepolia RPC are ready. Return to Hermes.', 4, 4],
+  funding_pending: ['More funding needed', 'Some Sepolia ETH arrived. Send the remaining amount shown.', 2, 2],
+  funded_public: ['Funding found', 'Your test ETH arrived. Agent Boost is preparing the private balance.', 2, 2],
+  shielding: ['Preparing your private balance', 'This can take a few minutes. No action is needed.', 3, 3],
+  private_ready: ['Ready', 'Your private test balance and Tor-routed Sepolia access are ready.', 4, 4],
   failed: ['Setup needs attention', 'Agent Boost could not finish setup automatically.', 0, 0],
 };
 
@@ -383,6 +415,19 @@ function render(snapshot) {
       ? 'Tor unavailable — direct access disabled'
       : 'Checking Tor…';
 
+  const handoff = snapshot.phase === 'private_ready'
+    ? ['ready', 'Setup complete', 'Return to Hermes — Agent Boost is ready']
+    : snapshot.phase === 'failed'
+      ? ['error', 'Next in Hermes', 'Ask Hermes to check Agent Boost']
+      : ['funded_public', 'shielding'].includes(snapshot.phase)
+        ? ['working', 'In progress', 'Hermes is preparing your private balance']
+        : ['awaiting_funding', 'funding_pending'].includes(snapshot.phase)
+          ? ['funding', 'Next in Hermes', 'After you send, reply “funded”']
+          : ['working', 'In progress', 'Hermes is creating your test wallet'];
+  elements.handoff.dataset.state = handoff[0];
+  elements.handoffLabel.textContent = handoff[1];
+  elements.handoffMessage.textContent = handoff[2];
+
   const showReady = fullyReady;
   const showQr = hasAddress && typeof snapshot.qrDataUrl === 'string' && !showReady;
   elements.qrStage.hidden = !showQr;
@@ -403,7 +448,9 @@ function render(snapshot) {
     ? 'Setup complete. You can close this window and return to Hermes.'
     : snapshot.phase === 'private_ready'
       ? 'Setup is paused. Return to Hermes and check the Tor RPC route.'
-    : 'Keep this window open. Setup continues automatically.';
+      : ['awaiting_funding', 'funding_pending'].includes(snapshot.phase)
+        ? 'After sending, return to Hermes and reply “funded.” This window updates automatically.'
+        : 'Keep this window open. Setup continues automatically.';
 }
 
 async function refresh() {

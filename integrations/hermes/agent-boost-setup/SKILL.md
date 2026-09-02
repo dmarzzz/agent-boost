@@ -1,7 +1,7 @@
 ---
 name: agent-boost-setup
 description: Guide local Sepolia wallet setup and funding.
-version: 0.1.1
+version: 0.2.0
 platforms: [macos, linux]
 metadata:
   hermes:
@@ -20,65 +20,89 @@ This setup skill is intentionally unconditional. It remains discoverable when
 the Agent Boost MCP toolset has not loaded, so it can give accurate reload
 guidance instead of trying to bootstrap through an unavailable tool.
 
-## Procedure
+## Conversation contract
 
-1. Call `capabilities` with no arguments. If it is unavailable, explain that
-   the files are installed but this Hermes session has not loaded them. Ask the
-   user to enter `/reload-skills` and then `/reload-mcp` in the local CLI, or
-   `!reload-skills` and then `!reload-mcp` over Matrix, or restart Hermes once.
-   Do not edit config, invoke a shell, or ask the user to open a terminal.
-2. Confirm that the capability reports Sepolia (`eip155:11155111`),
-   `testnet_delegated` authority, `mainnet_available: false`, and a ready Tor
-   RPC route with `direct_fallback: false`. Then call
-   `onboarding_start` with no arguments. Repeated calls resume the same durable
-   setup; they never create or replace another wallet.
-3. Read `data.setup` and `data.funding` from the structured result. Preserve
-   `setupId` and `revision` exactly. Treat `data.ui_opened` only as a fact about
-   a browser on the Agent Boost host, never as evidence the participant can see
-   a page.
-4. When funding remains, immediately present the QR image returned by the tool,
-   regardless of `ui_opened`; do not ask whether the participant wants it.
-   Never mention or offer a loopback URL, `localhost`, or `127.0.0.1` over
-   Matrix or from a headless/remote host.
+Use four participant-facing states and no implementation vocabulary:
 
-   On the reference Matrix flow, produce three separate events in this order:
+1. **Fund your test wallet** — show the exact remaining amount, address, and QR.
+2. **Funding found** — the full amount is visible on Sepolia.
+3. **Preparing the private balance** — automatic privacy preparation is still
+   running.
+4. **Ready** — the private balance and Tor-routed Sepolia access both passed
+   verification.
 
-   1. Use `send_message` with `action: send` and `target: matrix` to send a
-      concise funding instruction containing only the server-provided
-      `data.funding.network`, `remaining_amount_eth`, and
-      `remaining_amount_wei`, plus the valueless-testnet warning. The Matrix
-      home channel is the participant conversation for this flow. Do not put
-      the address or funding URI in this instruction.
-   2. Use `send_message` again with `action: send`, `target: matrix`, and the
-      exact server-provided `data.funding.address` as the entire `message`.
-      No label, prefix, suffix, punctuation, Markdown, backticks, or code fence.
-      An address must always be a message of its own so a mobile user can copy
-      the whole bubble.
-   3. When the tool result contains a `MEDIA:` tag, use `send_message` a third
-      time with `action: send`, `target: matrix`, and that exact tag as the
-      entire `message`. The gateway sends the QR as its own image event.
+Never say MCP, toolset, process lock, loopback, shielding transaction, or
+Tornado unless the user asks for technical detail. Never promise anonymity.
 
-   After successful sends, do not emit a redundant final prose message; proceed
-   directly to status monitoring. Never repeat the address in the instruction,
-   phase updates, or another prose message. When the image is absent or its
-   upload fails, use `send_message` to send the exact server-provided
-   `funding_uri` as another standalone message. If `send_message` itself is
-   unavailable, preserve the priority of an address-only visible response and
-   put the exact `MEDIA:` tag on a new line; do not fold the instruction,
-   address, and URI back into one message.
-5. The instruction event in step 4 must ask the event operator to send only the
-   exact remaining Sepolia ETH returned in `data.funding` and state plainly
-   that Sepolia ETH has no real or redeemable value. Do not append this prose
-   to the address-only response. Do not ask for a seed, key, password, or
-   wallet approval.
-6. Long-poll `onboarding_status` with the exact `setup_id`, the latest
-   `since_revision`, and `wait_ms: 90000`. After every response, retain the
-   newest revision for the next call. Continue through funding and automatic
-   shielding, but narrate only meaningful phase changes.
-7. Setup is complete only when the phase is `private_ready` and
-   `privateBalanceWei` is at least `shieldAmountWei`, with the Tor RPC route
-   still ready in a fresh `capabilities` result. `funding_pending`,
-   `funded_public`, and `shielding` are intermediate states.
+## Start, resume, or resend
+
+1. Call `capabilities` with no arguments. If it is unavailable, say that Hermes
+   needs one refresh, then give only the commands appropriate to this channel:
+   `/reload-skills` followed by `/reload-mcp` locally, or `!reload-skills`
+   followed by `!reload-mcp` over Matrix. A single Hermes restart is the
+   alternative. Do not edit config, invoke a shell, or ask the user to open a
+   terminal.
+2. Require Sepolia (`eip155:11155111`), `testnet_delegated` authority,
+   `mainnet_available: false`, and a ready Tor RPC route with
+   `direct_fallback: false`. Then call `onboarding_start` with no arguments.
+   Repeated calls resume the same durable setup and address.
+3. Preserve `data.setup.setupId` and `data.setup.revision` exactly. Treat
+   `data.ui_opened` only as a fact about a browser on the Agent Boost host. If
+   true, you may say that the local funding window opened. Never mention or
+   offer `localhost`, `127.0.0.1`, a loopback URL, or a local filesystem path.
+4. When `data.funding.remaining_amount_wei` is greater than zero, immediately
+   present the tool-returned QR. The gateway owns MCP image delivery; never
+   copy, repeat, transform, or manually send a `MEDIA:` tag.
+
+   On Matrix, create this mobile-friendly sequence:
+
+   1. Use `send_message` with `action: send` and `target: matrix` for one short
+      instruction: send exactly the server-provided `remaining_amount_eth`
+      Sepolia ETH, Sepolia ETH has no real or redeemable value, and reply
+      **funded** after submitting the transfer. Do not include the address or
+      funding URI in this event.
+   2. Make the final visible response exactly the server-provided funding
+      address. No label, prefix, suffix, punctuation, Markdown, backticks, or
+      code fence. The gateway will append the QR as its own image event.
+
+   If `send_message` is unavailable, keep the final response compact: exact
+   amount and warning, the address on a line by itself, then “Reply funded after
+   you send it.” The QR still attaches automatically. The exact server-provided
+   `funding_uri` is the fallback only when the image is absent or the user asks
+   for a wallet link.
+5. Do not begin a 90-second status loop while the participant still needs to
+   fund. End the turn after presenting the funding details. The participant's
+   **funded** reply is the explicit conversational handoff back to Hermes.
+6. On a resumed setup, branch on the returned state before sending funding
+   instructions: `private_ready` goes directly to completion verification;
+   `funded_public` or `shielding` goes to the private-balance status flow; and
+   `failed` reports its public remediation and stops. Never show a zero-amount
+   funding request or an old QR.
+
+## When the participant says funded or asks for status
+
+1. If the current conversation contains the latest `setupId` and `revision`,
+   call `onboarding_status` with those exact values and `wait_ms: 30000`. If
+   either value is unavailable, call `onboarding_start` once to resume and
+   recover them.
+2. If the phase remains `awaiting_funding` or `funding_pending`, report only the
+   exact server-provided remaining Sepolia ETH and say that it is not fully
+   visible yet. Ask the participant to wait briefly and reply **check again**.
+   Do not resend the QR unless they ask to see it again.
+3. When the phase becomes `funded_public` or `shielding`, say **Funding found.
+   Preparing the private balance now.** Then make at most one
+   `onboarding_status` call with the latest revision and `wait_ms: 90000` in
+   this turn. If it is still running afterward, say so and ask the participant
+   to reply **check again**; do not hold the conversation in an unbounded loop.
+4. Setup is complete only when the phase is `private_ready`,
+   `privateBalanceWei` is at least `shieldAmountWei`, and a fresh
+   `capabilities` call reports `readiness.rpc_egress: ready`. Then say that
+   Agent Boost is ready for Sepolia test payments and state the spendable
+   private test balance. `funding_pending`, `funded_public`, and `shielding`
+   are never success.
+5. Preserve the newest revision after every status result. Narrate only the four
+   participant-facing states above; do not print raw phase names or wei unless
+   the user asks.
 
 ## Safety
 

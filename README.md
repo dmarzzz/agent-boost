@@ -70,7 +70,16 @@ The default executables and state paths are:
 ```
 
 If the installer says `~/.local/bin` is not on `PATH`, add it before continuing.
-Then verify the host:
+The installer prints the exact conversational handoff. Restart Hermes once,
+then tell it:
+
+> Set up Agent Boost for me.
+
+Hermes creates the wallet, presents the exact address and QR, and asks you to
+reply `funded` after sending the displayed Sepolia ETH. No terminal is needed
+after installation.
+
+To run an optional host diagnostic before the demo:
 
 ```console
 agent-boost doctor
@@ -82,9 +91,9 @@ If Hermes was not available during installation, configure it later with:
 agent-boost install-hermes
 ```
 
-Restart Hermes once. In an already-running Hermes conversation, the no-restart
-alternative is `/reload-skills` followed by `/reload-mcp` locally, or
-`!reload-skills` followed by `!reload-mcp` over Matrix.
+In an already-running Hermes conversation, the no-restart alternative is
+`/reload-skills` followed by `/reload-mcp` locally, or `!reload-skills`
+followed by `!reload-mcp` over Matrix.
 
 The installer pins Kohaku to commit
 [`fcf9defa4d5ff7f63222f1b3bbe2d30e631ceffd`](https://github.com/kassandraoftroy/kohaku-cli/commit/fcf9defa4d5ff7f63222f1b3bbe2d30e631ceffd)
@@ -104,7 +113,7 @@ strictly disposable-testnet software.
 
 Tell Hermes:
 
-> Set up Agent Boost.
+> Set up Agent Boost for me.
 
 Hermes calls `onboarding_start`. Agent Boost creates or resumes one durable
 Sepolia setup and opens the funding page. The page shows an EIP-681 QR code for
@@ -113,11 +122,13 @@ private-balance progress. When Hermes needs to carry the QR into the
 conversation, Agent Boost returns it in a branded dark-sidecar card while
 preserving a conventional high-contrast scan field.
 
-Ask the event operator to scan the QR and send the amount shown—normally `0.2`
-Sepolia ETH. Partial funding is supported: the QR automatically updates to the
-remaining amount. Do not send ETH on mainnet or another network.
+Scan the QR and send the amount shown—normally `0.2` Sepolia ETH. Then reply
+`funded` to Hermes. Partial funding is supported: the funding page and a
+resumed QR automatically use the remaining amount. Do not send ETH on mainnet
+or another network.
 
-Hermes long-polls durable setup state without flooding the conversation:
+After the `funded` reply, Hermes uses bounded status checks without flooding or
+holding the conversation in an open-ended loop:
 
 ```text
 creating_wallet

@@ -102,9 +102,13 @@ try {
         kohaku,
         hermes,
         path_configured: pathConfigured,
-        next: pathConfigured
-          ? "Run agent-boost doctor"
-          : `Add ${binDir} to PATH, then run agent-boost doctor`,
+        setup_prompt: "Set up Agent Boost for me.",
+        next: hermes.status === "configured"
+          ? 'Restart Hermes once, then say: "Set up Agent Boost for me."'
+          : hermes.next,
+        diagnostics: pathConfigured
+          ? "agent-boost doctor"
+          : `Add ${binDir} to PATH before running agent-boost doctor`,
       },
       null,
       2,
