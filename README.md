@@ -17,41 +17,19 @@
 [Covered egress](docs/COVERED-EGRESS.md) · [Security](SECURITY.md) ·
 [Contributing](CONTRIBUTING.md)
 
-Agent Boost is a local, wallet-first privacy sidecar for AI agents. This proof
-of concept gives a Hermes agent the public wallet facts it needs to reason—its
-Sepolia address, live balances, setup state, and remaining allowance—while
-keeping seed phrases, private keys, wallet passwords, and raw privacy notes out
-of MCP results and the model conversation. Its Sepolia JSON-RPC path is routed
-through embedded Tor for both Agent Boost and Kohaku, with no direct fallback.
+Agent Boost is a local sidecar that gives a Hermes agent a private wallet and a
+covered lane to the web without ever handing it a key.
 
-The current build demonstrates one complete wallet path and adds a separately
-enrolled covered-egress module:
-
-1. Hermes asks Agent Boost to create a disposable Sepolia wallet.
-2. Agent Boost bootstraps Tor, verifies Sepolia through it, and opens a local
-   funding page with an exact QR code and address.
-3. An event operator sends approximately `0.2` valueless Sepolia ETH.
-4. Agent Boost automatically shields `0.1` Sepolia ETH through Kohaku.
-5. The user asks Hermes to send one shielded test payment.
-6. Hermes reads the live balance, plans the exact transfer, reads the terms
-   back, and waits for verbal confirmation.
-7. Agent Boost signs and submits within a Sepolia-only, one-payment delegation.
-
-When a Grove operator has enrolled the installation, Hermes can also make an
-explicit public HTTPS GET or HEAD request through Shade Tree. That path is
-independent of wallet RPC: it uses an authenticated loopback Proxy, embedded
-Arti, and a fresh RLN proof per CONNECT tunnel. It never falls back to a direct
-connection and never blanket-routes Hermes or its model/Matrix traffic.
-
-No terminal is needed after the one-time installation. On a graphical local
-machine, the funding page opens in the browser. On a headless host, Agent Boost
-returns the QR image through MCP so Hermes can present it in chat.
+- **Private payment**: a disposable Sepolia wallet shielded through Kohaku, one
+  bounded payment per verbal confirmation, RPC over Tor with no direct fallback.
+- **Private search**: explicit public HTTPS reads through Shade Tree after
+  operator enrollment, never a direct connection.
+- **Nothing else leaves the sidecar**: seeds, keys, wallet passwords, raw notes,
+  and route credentials never enter MCP results or the conversation.
 
 > [!WARNING]
-> Agent Boost, Kohaku, and the embedded `tor-js` client are unaudited research software. This release is
-> Sepolia-only and intended for disposable test funds. Sepolia ETH has no
-> monetary or redeemable value. Never send mainnet assets, real value, or a
-> wallet you care about.
+> Unaudited research software. Sepolia-only, disposable test funds. Never send
+> mainnet assets, real value, or a wallet you care about.
 
 ## Install
 
