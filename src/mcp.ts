@@ -724,11 +724,20 @@ function walletTreeBalance(
 ): string {
   if (balanceWei !== undefined) {
     const age = freshness === "last_known" ? " · last known" : " · live";
-    return `${formatEthWei(BigInt(balanceWei))} Sepolia ETH${age}`;
+    return `${formatTreeEthWei(BigInt(balanceWei))} Sepolia ETH${age}`;
   }
   if (status === "not_created") return "not created";
   if (status === "preparing") return "preparing...";
   return "unavailable";
+}
+
+function formatTreeEthWei(wei: bigint): string {
+  if (wei === 0n) return "0";
+  const sixDecimalWei = 1_000_000_000_000n;
+  if (wei < sixDecimalWei) return "<0.000001";
+  if (wei % sixDecimalWei === 0n) return formatEthWei(wei);
+  const rounded = ((wei + sixDecimalWei / 2n) / sixDecimalWei) * sixDecimalWei;
+  return `≈${formatEthWei(rounded)}`;
 }
 
 function publicWalletTree(snapshot: WalletTreeSnapshot): Record<string, unknown> {

@@ -88,7 +88,7 @@ function fakeRuntime(): AgentBoostRuntime {
             main: {
               shortName: "main",
               role: "main_funding_source",
-              balanceWei: "1500000000000000000",
+              balanceWei: "68899000000000000100",
               status: "ready",
               freshness: "live",
             },
@@ -578,7 +578,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
     [
       "🗂 wallets/",
       "|-- 💼 agent-boost/ [active]",
-      "|   |-- 🌐 main/      1.5 Sepolia ETH · live",
+      "|   |-- 🌐 main/      ≈68.899 Sepolia ETH · live",
       "|   `-- 🥷 private/   0.25 Sepolia ETH · live",
       "`-- 💼 travel/",
       "    |-- 🌐 main/      0.75 Sepolia ETH · live",
@@ -606,7 +606,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
         short_name: "agent-boost",
         active: true,
         accounts: [
-          { short_name: "main", balance_native: "1.5", freshness: "live" },
+          { short_name: "main", balance_native: "68.8990000000000001", freshness: "live" },
           { short_name: "private", balance_native: "0.25", freshness: "live" },
         ],
       },
@@ -623,7 +623,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   assert.doesNotMatch(JSON.stringify(walletTree), new RegExp(WALLET_ADDRESS, "u"));
   assert.doesNotMatch(
     JSON.stringify(walletTree),
-    /1500000000000000000|250000000000000000|750000000000000000|100000000000000000/u,
+    /68899000000000000100|250000000000000000|750000000000000000|100000000000000000/u,
   );
 
   const policy = await client.callTool({ name: "wallet_get_policy", arguments: {} });
