@@ -651,6 +651,10 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return this.#policy.getPlan(decisionId);
   }
 
+  getLatestPolicyUpdatePlan(): Promise<PolicyUpdatePlan> {
+    return this.#policy.getLatestPlan();
+  }
+
   applyPolicyUpdate(input: {
     decisionId: string;
     userConfirmed: boolean;

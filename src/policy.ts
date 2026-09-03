@@ -91,6 +91,21 @@ export class WalletPolicyController {
     return plan;
   }
 
+  async getLatestPlan(): Promise<PolicyUpdatePlan> {
+    const plans = Object.values((await this.#store.read()).policyPlans);
+    let latest: PolicyUpdatePlan | undefined;
+    for (const plan of plans) {
+      if (
+        latest === undefined ||
+        new Date(plan.createdAt).getTime() >= new Date(latest.createdAt).getTime()
+      ) {
+        latest = plan;
+      }
+    }
+    if (!latest) throw new Error("POLICY_DECISION_NOT_FOUND");
+    return latest;
+  }
+
   async plan(input: {
     perPaymentLimitWei?: string;
     lifetimeLimitWei?: string;

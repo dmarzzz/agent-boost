@@ -1,4 +1,4 @@
-import { appendFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 
 import type {
   OnboardingRecord,
@@ -20,6 +20,7 @@ type Scenario =
   | "payment-denied"
   | "payment-allowed"
   | "policy-update"
+  | "affordability-check"
   | "payment-expired"
   | "egress-ready"
   | "egress-needs-enrollment";
@@ -37,18 +38,23 @@ const scenarios = new Set<Scenario>([
   "payment-denied",
   "payment-allowed",
   "policy-update",
+  "affordability-check",
   "payment-expired",
   "egress-ready",
   "egress-needs-enrollment",
 ]);
 if (!scenarios.has(scenario)) throw new Error("Unknown Agent Boost eval scenario");
 if (!tracePath) throw new Error("AGENT_BOOST_EVAL_TRACE is required");
+const policyStatePath = `${tracePath}.policy.json`;
 
 const WALLET = "0x1111111111111111111111111111111111111111";
 const RECIPIENT = "0x2222222222222222222222222222222222222222";
 const DECISION_ID = "wd_eval_12345678";
 const REQUEST_ID = "req_eval_12345678";
-const NOW = "2026-09-01T00:00:00.000Z";
+const nowMs = Date.now();
+const NOW = new Date(nowMs).toISOString();
+const DEFAULT_EXPIRY = new Date(nowMs + 7 * 24 * 60 * 60_000).toISOString();
+const PLAN_EXPIRY = new Date(nowMs + 5 * 60_000).toISOString();
 
 function approval(): PaymentApproval {
   if (scenario === "payment-denied" || scenario === "payment-expired") return "deny";
@@ -80,7 +86,7 @@ function onboarding(phase: OnboardingRecord["phase"]): OnboardingRecord {
       lifetimeLimitWei: "50000000000000000",
       spentWei: "0",
       maxPayments: 1,
-      expiresAt: "2026-09-02T00:00:00.000Z",
+      expiresAt: DEFAULT_EXPIRY,
       enabled: true,
     },
     ...(phase === "failed"
@@ -129,6 +135,23 @@ async function trace(name: string, argumentsValue: Record<string, unknown>): Pro
     `${JSON.stringify({ name, arguments: argumentsValue })}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
+}
+
+async function persistPolicyPlan(plan: PolicyUpdatePlan): Promise<void> {
+  await writeFile(policyStatePath, `${JSON.stringify(plan)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+}
+
+async function loadPolicyPlan(): Promise<PolicyUpdatePlan> {
+  if (lastPolicyPlan) return lastPolicyPlan;
+  try {
+    lastPolicyPlan = JSON.parse(await readFile(policyStatePath, "utf8")) as PolicyUpdatePlan;
+    return lastPolicyPlan;
+  } catch {
+    throw new Error("Eval policy plan is missing");
+  }
 }
 
 const ready = onboarding("private_ready");
@@ -266,7 +289,7 @@ const runtime: AgentBoostRuntime = {
       },
       authorizationId: "auth_eval_12345678",
       createdAt: NOW,
-      expiresAt: "2026-09-01T00:05:00.000Z",
+      expiresAt: PLAN_EXPIRY,
       current,
       proposed: {
         ...current,
@@ -280,13 +303,18 @@ const runtime: AgentBoostRuntime = {
       approval: { action: "confirm" as const, userConfirmationRequired: true as const },
     };
     lastPolicyPlan = plan;
+    await persistPolicyPlan(plan);
     return plan;
   },
   async getPolicyUpdatePlan(decisionId) {
-    if (decisionId !== lastPolicyPlan?.decisionId) {
+    const plan = await loadPolicyPlan();
+    if (decisionId !== plan.decisionId) {
       throw new Error("Eval policy decision ID changed");
     }
-    return lastPolicyPlan;
+    return plan;
+  },
+  async getLatestPolicyUpdatePlan() {
+    return loadPolicyPlan();
   },
   async applyPolicyUpdate(input) {
     await trace("wallet_apply_policy_update", input);
@@ -321,7 +349,7 @@ const runtime: AgentBoostRuntime = {
       amountWei: input.amountWei,
       intentDigest: `sha256:${"0".repeat(64)}`,
       createdAt: NOW,
-      expiresAt: "2026-09-01T00:05:00.000Z",
+      expiresAt: PLAN_EXPIRY,
       decision: denied ? "deny" : "allow",
       blockers: scenario === "payment-expired"
         ? ["DELEGATION_EXPIRED"]
@@ -345,7 +373,7 @@ const runtime: AgentBoostRuntime = {
       amountWei: "10000000000000000",
       intentDigest: `sha256:${"0".repeat(64)}`,
       createdAt: NOW,
-      expiresAt: "2026-09-01T00:05:00.000Z",
+      expiresAt: PLAN_EXPIRY,
       decision: denied ? "deny" : "allow",
       blockers: scenario === "payment-expired"
         ? ["DELEGATION_EXPIRED"]

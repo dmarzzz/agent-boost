@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed multi-turn Hermes wallet actions without changing Hermes: exact
+  continuation IDs now survive compact-result rendering in private MCP
+  metadata, user-entered ETH amounts are converted server-side, and
+  affordability checks no longer confuse the main balance with private-payment
+  spendability.
 - Added a deterministic, privacy-safe wallet tree for Hermes: friendly profile
   names with sibling main/private balances, explicit live/last-known freshness,
   and no addresses, wallet IDs, raw atomic values, or aggregate total.

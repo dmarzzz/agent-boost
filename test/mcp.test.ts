@@ -3,12 +3,16 @@ import test from "node:test";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  ElicitRequestSchema,
+  type CallToolResult,
+} from "@modelcontextprotocol/sdk/types.js";
 
 import type { AgentBoostRuntime } from "../src/mcp.js";
 import { createMcpServer } from "../src/mcp.js";
 
 const WALLET_ADDRESS = "0x1111111111111111111111111111111111111111";
+const HERMES_MODEL_CONTEXT_KEY = "org.agentboost/model-context";
 const AUTHORIZATION = {
   walletId: "wallet_12345678",
   walletName: "agent-boost",
@@ -20,6 +24,21 @@ const WALLET_SELECTION = {
   walletName: AUTHORIZATION.walletName,
   selectionEpoch: AUTHORIZATION.selectionEpoch,
 };
+
+function simulateHermesContentArbitration(result: CallToolResult): {
+  result: string;
+  _meta?: Record<string, unknown>;
+} {
+  const rendered = result.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .filter((text) => text.trim().length > 0)
+    .join("\n");
+  return {
+    result: rendered,
+    ...(result._meta ? { _meta: result._meta } : {}),
+  };
+}
 
 function fakeRuntime(): AgentBoostRuntime {
   const setup = {
@@ -186,6 +205,9 @@ function fakeRuntime(): AgentBoostRuntime {
         blockers: [],
         approval: { action: "confirm", userConfirmationRequired: true },
       };
+    },
+    async getLatestPolicyUpdatePlan() {
+      return this.getPolicyUpdatePlan("wpd_12345678");
     },
     async applyPolicyUpdate(input) {
       assert.equal(input.decisionId, "wpd_12345678");
@@ -440,6 +462,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
     walletContextTool?.description ?? "",
     /without converting balance_atomic/u,
   );
+  assert.match(walletContextTool?.description ?? "", /pass it as amount_native/u);
   const walletTreeTool = tools.tools.find(
     (tool) => tool.name === "wallet_get_tree",
   );
@@ -557,6 +580,38 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
     walletText?.type === "text" ? walletText.text : "",
     /funding address|public \+|private balance|spendable total/u,
   );
+  assert.match(
+    walletText?.type === "text" ? walletText.text : "",
+    /Never use this balance alone to claim a private payment can be sent/u,
+  );
+
+  const affordabilityContext = await client.callTool({
+    name: "wallet_get_context",
+    arguments: { amount_native: "2" },
+  });
+  const affordabilityData = (affordabilityContext.structuredContent as {
+    data: {
+      affordability_check: {
+        requested_amount_native: string;
+        main_account_covers_requested: boolean;
+        private_payment_spendability: string;
+        can_send_private_payment: string;
+      };
+    };
+  }).data.affordability_check;
+  assert.deepEqual(affordabilityData, {
+    requested_amount_native: "2",
+    main_account_covers_requested: false,
+    private_payment_spendability: "not_checked_requires_recipient_and_plan",
+    can_send_private_payment: "unknown",
+  });
+  const affordabilityText = affordabilityContext.content.find(
+    (block) => block.type === "text",
+  );
+  assert.match(
+    affordabilityText?.type === "text" ? affordabilityText.text : "",
+    /requested 2 Sepolia ETH exceeds the main account balance/u,
+  );
 
   const walletTree = await client.callTool({
     name: "wallet_get_tree",
@@ -641,6 +696,19 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   );
   assert.doesNotMatch(JSON.stringify(policy), new RegExp(WALLET_ADDRESS, "u"));
 
+  const policyPlanTool = tools.tools.find(
+    (tool) => tool.name === "wallet_plan_policy_update",
+  );
+  const policyApplyTool = tools.tools.find(
+    (tool) => tool.name === "wallet_apply_policy_update",
+  );
+  assert.match(policyPlanTool?.description ?? "", /REQUEST-TURN TOOL ONLY/u);
+  assert.match(policyApplyTool?.title ?? "", /after yes or ✅/u);
+  const policyApplyRequired = (policyApplyTool?.inputSchema as {
+    required?: string[];
+  }).required ?? [];
+  assert.ok(!policyApplyRequired.includes("decision_id"));
+
   const policyPlan = await client.callTool({
     name: "wallet_plan_policy_update",
     arguments: {
@@ -653,14 +721,56 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   }).data.plan.proposed;
   assert.equal(plannedPolicy.perPaymentLimitWei, "1000000000000000000");
   const policyPlanText = policyPlan.content.find((block) => block.type === "text");
+  const policyPlanEnvelope = policyPlan.structuredContent as {
+    data: { applied: boolean; requires_new_user_confirmation: boolean };
+    presentation: { kind: string; state: string };
+  };
+  assert.equal(policyPlanEnvelope.data.applied, false);
+  assert.equal(policyPlanEnvelope.data.requires_new_user_confirmation, true);
+  assert.equal(policyPlanEnvelope.presentation.kind, "confirmation");
+  assert.equal(policyPlanEnvelope.presentation.state, "pending");
   assert.match(
     policyPlanText?.type === "text" ? policyPlanText.text : "",
     /permission only(?:—|-)it does not move funds/u,
   );
+  assert.match(
+    policyPlanText?.type === "text" ? policyPlanText.text : "",
+    /PREVIEW ONLY (?:—|-) NOT APPLIED/u,
+  );
+  assert.match(
+    policyPlanText?.type === "text" ? policyPlanText.text : "",
+    /end this turn[\s\S]*new user message/u,
+  );
+  assert.doesNotMatch(
+    policyPlanText?.type === "text" ? policyPlanText.text : "",
+    /wpd_/u,
+  );
+  const hermesPolicyResult = simulateHermesContentArbitration(policyPlan);
+  assert.doesNotMatch(hermesPolicyResult.result, /wpd_/u);
+  const hermesPolicyContext = hermesPolicyResult._meta?.[HERMES_MODEL_CONTEXT_KEY] as {
+    data: { plan: { decisionId: string } };
+  };
+  assert.equal(hermesPolicyContext.data.plan.decisionId, "wpd_12345678");
+
+  const policyStillNeedsChatConfirmation = await client.callTool({
+    name: "wallet_apply_policy_update",
+    arguments: { decision_id: "wpd_12345678" },
+  });
+  assert.equal(
+    (policyStillNeedsChatConfirmation.structuredContent as { code: string }).code,
+    "POLICY_UPDATE_CONFIRMATION_REQUIRED",
+  );
+  const policyConfirmationText = policyStillNeedsChatConfirmation.content.find(
+    (block) => block.type === "text",
+  );
+  assert.match(
+    policyConfirmationText?.type === "text" ? policyConfirmationText.text : "",
+    /new user message[\s\S]*Do not plan again/u,
+  );
 
   const policyApplied = await client.callTool({
     name: "wallet_apply_policy_update",
-    arguments: { decision_id: "wpd_12345678", user_confirmed: true },
+    arguments: { user_confirmed: true },
   });
   assert.equal(
     (policyApplied.structuredContent as { code: string }).code,
@@ -671,13 +781,19 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
     name: "wallet_plan_private_payment",
     arguments: {
       recipient: "0x2222222222222222222222222222222222222222",
-      amount_atomic: "10000000000000000",
+      amount_native: "0.01",
     },
   });
   const planText = plan.content.find((block) => block.type === "text");
   assert.equal(planText?.type, "text");
   assert.match(planText?.type === "text" ? planText.text : "", /native approval/u);
   assert.doesNotMatch(planText?.type === "text" ? planText.text : "", /wd_|amountWei|intentDigest/u);
+  const hermesPaymentResult = simulateHermesContentArbitration(plan);
+  const hermesPaymentContext = hermesPaymentResult._meta?.[HERMES_MODEL_CONTEXT_KEY] as {
+    data: { plan: { decisionId: string; amountWei: string } };
+  };
+  assert.equal(hermesPaymentContext.data.plan.decisionId, "wd_12345678");
+  assert.equal(hermesPaymentContext.data.plan.amountWei, "10000000000000000");
   const planPresentation = (plan.structuredContent as {
     presentation: {
       kind: string;
@@ -697,6 +813,14 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   const executeTool = tools.tools.find(
     (tool) => tool.name === "wallet_execute_private_payment",
   );
+  const planTool = tools.tools.find(
+    (tool) => tool.name === "wallet_plan_private_payment",
+  );
+  const planProperties = (planTool?.inputSchema as {
+    properties?: Record<string, unknown>;
+  }).properties ?? {};
+  assert.ok("amount_native" in planProperties);
+  assert.ok(!("amount_atomic" in planProperties));
   assert.match(executeTool?.description ?? "", /agent—not the user/u);
   assert.match(executeTool?.description ?? "", /Never ask the user to supply tool syntax/u);
 
@@ -723,6 +847,11 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
     executedText?.type === "text" ? executedText.text : "",
     /not confirmed[\s\S]*wallet_get_request[\s\S]*Never infer success/u,
   );
+  const hermesRequestResult = simulateHermesContentArbitration(executed);
+  const hermesRequestContext = hermesRequestResult._meta?.[HERMES_MODEL_CONTEXT_KEY] as {
+    data: { request: { requestId: string } };
+  };
+  assert.equal(hermesRequestContext.data.request.requestId, "req_12345678");
 
   await client.close();
   await server.close();
