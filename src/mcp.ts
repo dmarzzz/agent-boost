@@ -589,7 +589,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     if (code === "POLICY_UPDATE_DENIED") {
       return `Wallet policy change blocked: ${formatPolicyText(proposed)}.${formatBlockers(plan)} Explain the blocker in plain language and do not show internal IDs.`;
     }
-    return `PREVIEW ONLY — NOT APPLIED. Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes, then end this turn. Do not call wallet_apply_policy_update until a new user message confirms the preview. After that approval, call wallet_apply_policy_update with user_confirmed true and omit decision_id so Agent Boost binds the latest preview safely. Never invent an ID.`;
+    return `PREVIEW ONLY — NOT APPLIED. First inspect the current user message. If it is yes, ✅, or another confirmation of a policy preview already shown in the preceding assistant turn, call wallet_apply_policy_update with user_confirmed true and omit decision_id NOW; do not reply or show another preview. Otherwise, this wallet policy change is ready for approval: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes, then end this turn and wait for a new user message. Never invent an ID.`;
   }
 
   if (code === "POLICY_UPDATED") {
@@ -1643,7 +1643,7 @@ export async function createMcpServer(
     {
       title: "Preview a wallet permission change",
       description:
-        "The agent calls this after the user asks to change the private-payment policy. Inputs use ordinary native-token decimals, never wei. Any subset may change. If max_payments or per_payment_limit_native changes and lifetime_limit_native is omitted, the total becomes their product. Expired permissions renew for the default seven days unless a duration is supplied. Planning changes nothing. Show one plain-English permission card and request ordinary confirmation. Explain that policy changes do not move funds between the main account and private payment pocket.",
+        "The agent calls this after the user asks to change the private-payment policy, never when the current user message confirms an already displayed preview. If it is accidentally called on a confirmation turn, follow the returned recovery instruction and apply the latest preview without displaying another card. Inputs use ordinary native-token decimals, never wei. Any subset may change. If max_payments or per_payment_limit_native changes and lifetime_limit_native is omitted, the total becomes their product. Expired permissions renew for the default seven days unless a duration is supplied. Planning changes nothing. Show one plain-English permission card and request ordinary confirmation. Explain that policy changes do not move funds between the main account and private payment pocket.",
       inputSchema: z.object({
         max_payments: z.number().int().positive().max(100).optional(),
         per_payment_limit_native: z.string().regex(

@@ -154,6 +154,9 @@ Tor fail-closed routing, delegation limits, expiry, or adapter readiness.
    recent preview and still rejects denied, expired, or stale state. Do not
    replan and never invent an ID. Then report `✅ Permission updated` plus the
    new count and limits. Never imply that a payment happened.
+   If you accidentally call `wallet_plan_policy_update` on the approval turn,
+   do not show another preview: immediately call `wallet_apply_policy_update`
+   with `user_confirmed: true` and no `decision_id`.
 5. A changed amount, count, total, expiry, or enabled state requires a new
    preview and confirmation. Policy previews expire; plan again instead of
    reusing one. Policy update confirmation never doubles as payment
