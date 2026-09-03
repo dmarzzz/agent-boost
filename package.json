@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
-    "check": "tsc -p tsconfig.json --noEmit",
+    "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "dev": "tsx src/cli.ts",
     "eval": "node --import tsx --test --test-concurrency=1 --test-reporter=spec test/conversation-evals.test.ts",
     "eval:live": "node scripts/live-hermes-eval.mjs",

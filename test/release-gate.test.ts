@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-const gate = await import("../scripts/lib/release-gate.mjs") as {
+const gate = await import("../scripts/lib/release-gate.mjs") as unknown as {
   assertNoPublicLeaks(value: unknown): void;
   buildIsolatedEnvironment(
     environment: NodeJS.ProcessEnv,
@@ -246,7 +246,7 @@ test("isolated environment scrubs inherited Agent Boost and Node overrides", () 
   assert.equal(environment.AGENT_BOOST_RPC_URL, undefined);
   assert.equal(environment.HERMES_HOME, "/gate/hermes");
   assert.equal(environment.SAFE_VALUE, "preserved");
-  assert.match(environment.PATH, /^\/gate\/commands/u);
+  assert.match(environment.PATH ?? "", /^\/gate\/commands/u);
 });
 
 test("release gate verifies isolated Hermes config and exact packaged skills", async () => {
