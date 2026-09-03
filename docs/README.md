@@ -2,6 +2,7 @@
 
 | Doc | What it covers |
 | --- | --- |
+| [Product philosophy](PRODUCT-PHILOSOPHY.md) | Weak-model-safe correctness, privacy-first presentation, and the definition of shipped |
 | [Install](INSTALL.md) | Supported hosts, what the installer pins and verifies, state paths, Hermes hookup |
 | [Run the demo](DEMO.md) | Wallet setup, one private payment, fresh demo, covered fetch, security policy, evals |
 | [Tools](TOOLS.md) | The eleven MCP tools, in call order, with inputs and returns |

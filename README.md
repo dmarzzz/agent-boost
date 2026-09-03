@@ -12,7 +12,8 @@
 [![license][license-badge]][license-url]
 
 **[Install](#install)** · [Demo](docs/DEMO.md) · [Tools](docs/TOOLS.md) ·
-[Docs](docs/README.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+[Philosophy](docs/PRODUCT-PHILOSOPHY.md) · [Docs](docs/README.md) ·
+[Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
 Agent Boost is a local sidecar that gives a Hermes agent private money, a
 private identity, and anonymous egress without ever handing it a key.
@@ -75,6 +76,7 @@ are in [docs/TOOLS.md](docs/TOOLS.md).
 
 | Doc | What it covers |
 | --- | --- |
+| [Product philosophy](docs/PRODUCT-PHILOSOPHY.md) | Weak-model-safe correctness and the definition of shipped |
 | [Tools](docs/TOOLS.md) | The MCP tools in call order, with inputs and returns |
 | [Architecture](docs/ARCHITECTURE.md) | Components, loopback surfaces, hardening |
 | [Threat model](docs/THREAT-MODEL.md) | Protected data, goals, non-goals, attacks |
