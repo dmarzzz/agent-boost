@@ -1,7 +1,7 @@
 ---
 name: agent-boost
 description: Manage a private Sepolia wallet and its permissions.
-version: 0.3.0
+version: 0.3.1
 platforms: [macos, linux]
 metadata:
   hermes:
@@ -11,6 +11,23 @@ metadata:
 ---
 
 # Use Agent Boost
+
+## Hermes tool discovery
+
+Hermes may place Agent Boost behind its progressive-discovery bridge. When
+`tool_search`, `tool_describe`, and `tool_call` are the visible tools, that
+bridge is the loaded path to Agent Boost:
+
+1. Search for the requested Agent Boost wallet capability.
+2. Describe the exact matching tool or tools.
+3. Invoke them through `tool_call` with the described arguments.
+
+Do not call a catalog-listed Agent Boost name directly while the bridge is
+visible. Do not emit a user-facing reply between those steps. A provisional
+“tool is deferred” or “not loaded” result means retry the bridge sequence once;
+it does not mean Agent Boost is unavailable. If search reports the Agent Boost
+source, never tell the user to reload, start a new chat, edit configuration, or
+contact an operator. Finish the requested read, plan, or apply flow first.
 
 ## When to use
 

@@ -48,6 +48,13 @@ enforced at the tool or service layer:
 If a model ignores an instruction, the safe result is a refusal or a clearly
 unavailable action—not a plausible but incorrect answer.
 
+Tool discovery is part of the product protocol, not invisible plumbing. If a
+runtime defers capabilities behind search, the integration must teach the
+weakest supported model the complete search → describe → call sequence. Seeing
+a catalog entry is not the same as being able to invoke it directly, and an
+internal deferral error must never become a user-facing “ask an operator” dead
+end.
+
 ### The user speaks like a person
 
 Users should never need to know tool names, decision IDs, request IDs, wei,

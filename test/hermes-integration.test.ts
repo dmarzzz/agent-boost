@@ -146,6 +146,14 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.match(operationalSkill, /`user_confirmed: true`/u);
   assert.match(operationalSkill, /agent operates every tool/iu);
   assert.match(operationalSkill, /Never ask the user to type a tool name/iu);
+  assert.match(
+    operationalSkill,
+    /tool_search[\s\S]*tool_describe[\s\S]*tool_call[\s\S]*loaded path/u,
+  );
+  assert.match(
+    operationalSkill,
+    /never tell the user to reload[\s\S]*contact an operator/iu,
+  );
   assert.match(operationalSkill, /Every balance is a live read/u);
   assert.match(
     operationalSkill,
