@@ -430,6 +430,8 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
     (tool) => tool.name === "wallet_get_context",
   );
   assert.match(walletContextTool?.description ?? "", /same turn/u);
+  assert.match(walletContextTool?.description ?? "", /wallet_get_tree instead/u);
+  assert.match(walletContextTool?.description ?? "", /do not call this first/u);
   assert.match(
     walletContextTool?.description ?? "",
     /History, memory, onboarding state, and prior tool results are not current-balance sources/u,
@@ -443,6 +445,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   );
   assert.match(walletTreeTool?.description ?? "", /all wallets/u);
   assert.match(walletTreeTool?.description ?? "", /folders organize views only/u);
+  assert.match(walletTreeTool?.description ?? "", /entire final answer is data\.rendered exactly/u);
   const egressStatus = await client.callTool({ name: "egress_status", arguments: {} });
   assert.equal(
     (egressStatus.structuredContent as { data: { status: string } }).data.status,
@@ -536,7 +539,11 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   const walletText = walletContext.content.find((block) => block.type === "text");
   assert.match(
     walletText?.type === "text" ? walletText.text : "",
-    /Quote exactly: Main account balance: 1\.5 Sepolia ETH/u,
+    /quote exactly: Main account balance: 1\.5 Sepolia ETH/iu,
+  );
+  assert.match(
+    walletText?.type === "text" ? walletText.text : "",
+    /wallets plural[\s\S]*call wallet_get_tree now/u,
   );
   assert.doesNotMatch(
     walletText?.type === "text" ? walletText.text : "",
