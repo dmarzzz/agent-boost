@@ -1,4 +1,4 @@
-import { appendFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 
 import type {
   OnboardingRecord,
@@ -45,6 +45,7 @@ const scenarios = new Set<Scenario>([
 ]);
 if (!scenarios.has(scenario)) throw new Error("Unknown Agent Boost eval scenario");
 if (!tracePath) throw new Error("AGENT_BOOST_EVAL_TRACE is required");
+const policyStatePath = `${tracePath}.policy.json`;
 
 const WALLET = "0x1111111111111111111111111111111111111111";
 const RECIPIENT = "0x2222222222222222222222222222222222222222";
@@ -134,6 +135,23 @@ async function trace(name: string, argumentsValue: Record<string, unknown>): Pro
     `${JSON.stringify({ name, arguments: argumentsValue })}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
+}
+
+async function persistPolicyPlan(plan: PolicyUpdatePlan): Promise<void> {
+  await writeFile(policyStatePath, `${JSON.stringify(plan)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+}
+
+async function loadPolicyPlan(): Promise<PolicyUpdatePlan> {
+  if (lastPolicyPlan) return lastPolicyPlan;
+  try {
+    lastPolicyPlan = JSON.parse(await readFile(policyStatePath, "utf8")) as PolicyUpdatePlan;
+    return lastPolicyPlan;
+  } catch {
+    throw new Error("Eval policy plan is missing");
+  }
 }
 
 const ready = onboarding("private_ready");
@@ -285,17 +303,18 @@ const runtime: AgentBoostRuntime = {
       approval: { action: "confirm" as const, userConfirmationRequired: true as const },
     };
     lastPolicyPlan = plan;
+    await persistPolicyPlan(plan);
     return plan;
   },
   async getPolicyUpdatePlan(decisionId) {
-    if (decisionId !== lastPolicyPlan?.decisionId) {
+    const plan = await loadPolicyPlan();
+    if (decisionId !== plan.decisionId) {
       throw new Error("Eval policy decision ID changed");
     }
-    return lastPolicyPlan;
+    return plan;
   },
   async getLatestPolicyUpdatePlan() {
-    if (!lastPolicyPlan) throw new Error("Eval policy plan is missing");
-    return lastPolicyPlan;
+    return loadPolicyPlan();
   },
   async applyPolicyUpdate(input) {
     await trace("wallet_apply_policy_update", input);
