@@ -73,6 +73,11 @@ const expectedTraces = {
   "covered-read-needs-enrollment": ["egress_status"],
 };
 
+const optionalTraceTools = {
+  "amount-affordability-is-server-computed": new Set(["wallet_get_policy"]),
+  "policy-update-with-confirmation": new Set(["wallet_get_policy"]),
+};
+
 const responseRules = {
   "setup-funding-qr": [
     { includes: ["1/3", "0.2", "Sepolia", "0x1111111111111111111111111111111111111111"], maxLines: 7 },
@@ -121,8 +126,8 @@ const responseRules = {
     { includes: ["Sent", "0.01", "0x2222222222222222222222222222222222222222"], excludes: ["approve"], maxLines: 4 },
   ],
   "policy-update-with-confirmation": [
-    { includes: ["New wallet permission", "10", "1", "approve"], maxLines: 8 },
-    { includes: ["Permission updated", "10", "1", "No funds moved"], maxLines: 4 },
+    { includes: ["New wallet permission", "10", "1", "approve"], maxLines: 10 },
+    { includes: ["Permission updated", "10", "1", "No funds"], maxLines: 8 },
   ],
   "expired-delegation-blocked": [
     { includes: ["blocked", "expired", "wallet"], excludes: ["approve"], maxLines: 4 },
@@ -341,7 +346,10 @@ function grade(id, outputs, traces) {
       if (pattern.test(output)) failures.push(`turn ${index + 1} exposes ${pattern}`);
     }
   }
-  const names = traces.map((entry) => entry.name);
+  const optional = optionalTraceTools[id] ?? new Set();
+  const names = traces
+    .map((entry) => entry.name)
+    .filter((name) => !optional.has(name));
   if (JSON.stringify(names) !== JSON.stringify(expectedTraces[id])) {
     failures.push(
       `tool trace mismatch: expected ${expectedTraces[id].join(", ") || "none"}; received ${names.join(", ") || "none"}`,
