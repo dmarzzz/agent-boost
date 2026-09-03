@@ -215,10 +215,16 @@ export class PaymentController {
       }
       return existing;
     }
+    if (Object.values(state.requests).some(
+      (request) => request.decisionId === input.decisionId,
+    )) {
+      throw new Error("DECISION_ALREADY_CONSUMED");
+    }
     if (this.#execution) throw new Error("PAYMENT_ALREADY_EXECUTING");
 
     const plan = state.plans[input.decisionId];
     if (!plan) throw new Error("DECISION_NOT_FOUND");
+    if (plan.blockers.includes("USER_CANCELLED")) throw new Error("DECISION_CANCELLED");
     if (plan.decision !== "allow") throw new Error("DECISION_DENIED");
     if (new Date(plan.expiresAt).getTime() <= this.#clock.now().getTime()) {
       throw new Error("DECISION_EXPIRED");
@@ -240,6 +246,21 @@ export class PaymentController {
     const plan = (await this.#store.read()).plans[decisionId];
     if (!plan) throw new Error("DECISION_NOT_FOUND");
     return plan;
+  }
+
+  async cancel(decisionId: string): Promise<PaymentPlan> {
+    const state = await this.#store.update((draft) => {
+      const plan = draft.plans[decisionId];
+      if (!plan) throw new Error("DECISION_NOT_FOUND");
+      if (Object.values(draft.requests).some(
+        (request) => request.decisionId === decisionId,
+      )) {
+        throw new Error("DECISION_ALREADY_CONSUMED");
+      }
+      plan.decision = "deny";
+      if (!plan.blockers.includes("USER_CANCELLED")) plan.blockers.push("USER_CANCELLED");
+    });
+    return state.plans[decisionId]!;
   }
 
   async getRequest(requestId: string): Promise<PaymentRequest> {
@@ -376,6 +397,11 @@ export class PaymentController {
       const onboarding = draft.onboarding;
       const storedPlan = draft.plans[plan.decisionId];
       const active = activeAuthorization(draft);
+      if (Object.values(draft.requests).some(
+        (existing) => existing.decisionId === plan.decisionId,
+      )) {
+        throw new Error("DECISION_ALREADY_CONSUMED");
+      }
       if (
         !storedPlan ||
         storedPlan.decision !== "allow" ||

@@ -1,5 +1,5 @@
 {
-  "contract": "org.agentboost.wallet/1.6",
+  "contract": "org.agentboost.wallet/1.7",
   "chain_id": "eip155:11155111",
   "network_name": "Sepolia",
   "asset_type": "eip155:11155111/slip44:60",

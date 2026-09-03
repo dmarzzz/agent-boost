@@ -85,7 +85,7 @@ diagnosis rather than an automatic retry.
 
 ```text
 wallet_list
-  → select registered wallet ID or adopt a local Sepolia name
+  → select a registered friendly wallet name or adopt a local Sepolia name
   → confirmation → restore durable wallet state + disable stale authority
   → wallet_plan_reauthorization
   → separate confirmation → wallet_reauthorize
@@ -95,10 +95,10 @@ wallet_get_context
   → wallet_get_policy / wallet_plan_policy_update
   → separate confirmation → wallet_apply_policy_update
   → wallet_plan_regular_transfer(recipient, amount)
-    → confirmation → public main-account transfer → durable status
+    → exact chat preview → new user confirmation → public main-account transfer → durable status
   → wallet_plan_private_payment(recipient, amount)
-  → native one-shot confirmation of immutable plan
-    ↳ structured readback + verbal confirmation only if elicitation is unavailable
+  → exact chat preview of immutable plan
+    ↳ new user confirmation is passed as a Hermes chat attestation
   → wallet_execute_private_payment(decision_id, stable client ID)
   → Kohaku unshield --next + exact value tail call
   → submitted

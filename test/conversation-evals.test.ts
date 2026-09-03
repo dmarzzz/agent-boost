@@ -59,15 +59,6 @@ interface AssistantStep {
   surface?: string;
 }
 
-interface ClientStep {
-  actor: "client";
-  surface: "native_confirmation";
-  title: string;
-  approve_label: string;
-  decline_label: string;
-  decision: "accept" | "decline";
-}
-
 interface ToolStep {
   actor: "tool";
   name: string;
@@ -89,7 +80,7 @@ interface EvalFlow {
   id: string;
   title: string;
   scenario: Scenario;
-  steps: Array<UserStep | AssistantStep | ClientStep | ToolStep>;
+  steps: Array<UserStep | AssistantStep | ToolStep>;
 }
 
 interface EvalCatalog {
@@ -134,9 +125,11 @@ const expectedToolTraces: Record<string, string[]> = {
   "setup-ready": ["onboarding_status", "capabilities", "wallet_get_tree"],
   "setup-failed": ["onboarding_status"],
   "start-new-demo-wallet": ["wallet_start_new_demo"],
+  "cancel-new-demo-wallet": ["wallet_start_new_demo"],
   "advanced-setup-shows-live-policy": ["wallet_get_policy"],
   "wallet-tree-without-identifiers": ["wallet_get_tree"],
   "saved-wallet-inventory": ["wallet_list"],
+  "already-active-wallet-needs-no-switch": ["wallet_list"],
   "ambiguous-old-wallet": ["wallet_list"],
   "load-and-reauthorize-previous-wallet": [
     "wallet_list",
@@ -144,7 +137,7 @@ const expectedToolTraces: Record<string, string[]> = {
     "wallet_plan_reauthorization",
     "wallet_reauthorize",
   ],
-  "cancel-wallet-switch": ["wallet_list", "wallet_select"],
+  "cancel-wallet-switch": ["wallet_list"],
   "adopt-local-wallet": ["wallet_list", "wallet_adopt_existing"],
   "create-named-wallet": ["wallet_create"],
   "archive-inactive-wallet": ["wallet_list", "wallet_archive"],
@@ -167,7 +160,7 @@ const expectedToolTraces: Record<string, string[]> = {
     "wallet_get_context",
     "wallet_plan_regular_transfer",
   ],
-  "native-regular-transfer-cancelled": [
+  "chat-regular-transfer-cancelled": [
     "wallet_get_context",
     "wallet_plan_regular_transfer",
     "wallet_execute_regular_transfer",
@@ -178,7 +171,7 @@ const expectedToolTraces: Record<string, string[]> = {
     "wallet_execute_private_payment",
     "wallet_get_request",
   ],
-  "native-payment-cancelled": [
+  "chat-payment-cancelled": [
     "wallet_get_context",
     "wallet_plan_private_payment",
     "wallet_execute_private_payment",
@@ -200,6 +193,10 @@ const expectedToolTraces: Record<string, string[]> = {
     "wallet_plan_policy_update",
     "wallet_apply_policy_update",
   ],
+  "policy-update-cancelled": [
+    "wallet_plan_policy_update",
+    "wallet_apply_policy_update",
+  ],
   "expired-delegation-blocked": [
     "wallet_get_context",
     "wallet_plan_private_payment",
@@ -216,11 +213,31 @@ const expectedToolTraces: Record<string, string[]> = {
 const forbiddenVisiblePatterns = [
   /\bmcp\b/iu,
   /\bwei\b/iu,
+  /(?:native|external)[^\n]*(?:approval|confirmation|interface|surface|UI)/iu,
   /\b(?:decision_id|request_id|client_request_id|user_confirmed|amount_atomic|amount_native|manifest_digest|setupId)\b/iu,
   /\b(?:wallet_get_context|wallet_list|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_start_new_demo|wallet_create|wallet_adopt_existing|wallet_select|wallet_archive|wallet_plan_reauthorization|wallet_reauthorize|wallet_plan_regular_transfer|wallet_execute_regular_transfer|wallet_get_regular_transfer_request|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|wallet_plan_recovery_transfer|wallet_execute_recovery_transfer|wallet_get_recovery_request|egress_status|egress_fetch)\b/iu,
   /\b(?:private key|seed phrase|wallet password)\b/iu,
   /\b(?:wallet_|wra_|wr_|wrr_|rwd_|rreq_|wd_|wpd_|req_|sha256:)[A-Za-z0-9._:-]*/u,
 ];
+
+const forbiddenToolSurfacePatterns = [
+  /(?<!never )\b(?:ready for|requires?|request|use|open|through|via|look for|go to)\b[^\n]{0,80}(?:native|external)[^\n]{0,80}(?:approval|confirmation|interface|surface|UI)/iu,
+  /mcp_elicitation/iu,
+  /\b(?:wra|wr|wrr|rwd|rreq|wd|wpd|req)_[A-Za-z0-9][A-Za-z0-9._:-]*\b|\bwallet_(?:[0-9a-f]{8}|saved_|eval_|[0-9])[A-Za-z0-9._:-]*\b/iu,
+];
+
+const chatConfirmedTools = new Set([
+  "wallet_create",
+  "wallet_adopt_existing",
+  "wallet_select",
+  "wallet_archive",
+  "wallet_reauthorize",
+  "wallet_apply_policy_update",
+  "wallet_execute_regular_transfer",
+  "wallet_execute_private_payment",
+  "wallet_execute_recovery_transfer",
+  "wallet_start_new_demo",
+]);
 
 function approvalFor(scenario: Scenario): PaymentApproval {
   if (scenario === "payment-denied" || scenario === "payment-expired") return "deny";
@@ -461,7 +478,7 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
   return {
     async capabilities() {
       return {
-        contract: "org.agentboost.wallet/1.6",
+        contract: "org.agentboost.wallet/1.7",
         chain_id: "eip155:11155111",
         security: {
           default: {
@@ -580,6 +597,10 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
     async getLatestPolicyUpdatePlan() {
       return this.getPolicyUpdatePlan("wpd_eval_12345678");
     },
+    async cancelPolicyUpdatePlan() {
+      const plan = await this.getPolicyUpdatePlan("wpd_eval_12345678");
+      return { ...plan, decision: "deny", blockers: [...plan.blockers, "USER_CANCELLED"] };
+    },
     async applyPolicyUpdate(input): Promise<PolicyUpdateReceipt> {
       assert.equal(input.decisionId, "wpd_eval_12345678");
       assert.equal(input.userConfirmed, true);
@@ -696,6 +717,10 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
     async getWalletReauthorizationPlan() {
       return walletReauthorizationPlan();
     },
+    async cancelWalletReauthorizationPlan() {
+      const plan = walletReauthorizationPlan();
+      return { ...plan, decision: "deny", blockers: [...plan.blockers, "USER_CANCELLED"] };
+    },
     async reauthorizeWallet(input) {
       assert.equal(input.decisionId, REAUTHORIZATION_ID);
       assert.equal(input.userConfirmed, true);
@@ -715,6 +740,13 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
         recipient: RECIPIENT,
         amountWei: "10000000000000000",
       });
+    },
+    async cancelRegularTransferPlan() {
+      const plan = regularTransferPlan({
+          recipient: RECIPIENT,
+          amountWei: "10000000000000000",
+      });
+      return { ...plan, decision: "deny", blockers: [...plan.blockers, "USER_CANCELLED"] };
     },
     async executeRegularTransfer(input) {
       assert.equal(scenario, "regular-transfer");
@@ -741,6 +773,13 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
         approval,
       );
     },
+    async cancelPrivatePaymentPlan() {
+      const plan = paymentPlan(
+          { recipient: RECIPIENT, amountWei: "10000000000000000" },
+          approval,
+      );
+      return { ...plan, decision: "deny", blockers: [...plan.blockers, "USER_CANCELLED"] };
+    },
     async executePrivatePayment(input) {
       assert.equal(input.decisionId, DECISION_ID);
       assert.equal(input.clientRequestId, `hermes:${DECISION_ID}`);
@@ -766,6 +805,10 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
     },
     async getRecoveryPlan() {
       return recoveryPlan({ recipient: RECIPIENT, amountWei: "10000000000000000" });
+    },
+    async cancelRecoveryPlan() {
+      const plan = recoveryPlan({ recipient: RECIPIENT, amountWei: "10000000000000000" });
+      return { ...plan, decision: "deny", blockers: [...plan.blockers, "USER_CANCELLED"] };
     },
     async executeRecoveryTransfer(input) {
       assert.equal(scenario, "recovery-confirmed");
@@ -837,21 +880,6 @@ function assertIdealVisibleResponse(step: AssistantStep, flow: EvalFlow): void {
   }
 }
 
-function assertClientInteraction(step: ClientStep, flow: EvalFlow): void {
-  assert.ok(
-    [
-      "Confirm private test payment",
-      "Confirm regular testnet transfer",
-      "Switch to the saved Sepolia wallet",
-      "Authorize bounded regular and private Sepolia transfers",
-      "Recover exactly 0.01 Sepolia ETH",
-    ].includes(step.title),
-    `${flow.id}: native title drifted`,
-  );
-  assert.equal(step.approve_label, "Approve", `${flow.id}: native approve label drifted`);
-  assert.equal(step.decline_label, "Cancel", `${flow.id}: native cancel label drifted`);
-}
-
 test("ideal conversation flows replay through the real MCP contract", async (t) => {
   const catalog = JSON.parse(
     await readFile(new URL("../evals/ideal-flows.json", import.meta.url), "utf8"),
@@ -879,46 +907,36 @@ test("ideal conversation flows replay through the real MCP contract", async (t) 
         `${flow.id}: unexpected tool trace`,
       );
 
-      for (const step of flow.steps) {
+      for (const [index, step] of flow.steps.entries()) {
         if (step.actor === "assistant") assertIdealVisibleResponse(step, flow);
-        if (step.actor === "client") assertClientInteraction(step, flow);
+        if (
+          step.actor === "tool" &&
+          chatConfirmedTools.has(step.name) &&
+          flow.scenario !== "payment-allowed" &&
+          step.expect.outcome !== "blocked"
+        ) {
+          assert.equal(
+            step.arguments.user_confirmed,
+            true,
+            `${flow.id}: ${step.name} must carry the preceding chat confirmation`,
+          );
+          assert.equal(
+            flow.steps[index - 1]?.actor,
+            "user",
+            `${flow.id}: ${step.name} must follow a new user confirmation message`,
+          );
+        }
       }
 
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       const server = await createMcpServer(evalRuntime(flow.scenario));
-      const interactions = flow.steps.filter(
-        (step): step is ClientStep => step.actor === "client",
-      );
       const client = testMcpClient(new Client(
         { name: "agent-boost-eval", version: "1.0.0" },
-        interactions.length > 0
-          ? { capabilities: { elicitation: { form: {} } } }
-          : undefined,
+        { capabilities: { elicitation: { form: {} } } },
       ));
-      let interactionIndex = 0;
-      if (interactions.length > 0) {
-        client.setRequestHandler(ElicitRequestSchema, async (request) => {
-          const interaction = interactions[interactionIndex++];
-          assert.ok(interaction, `${flow.id}: unexpected native confirmation`);
-          assert.match(request.params.message, new RegExp(interaction.title, "u"));
-          if (
-            interaction.title.startsWith("Switch") ||
-            interaction.title.startsWith("Authorize")
-          ) {
-            assert.match(request.params.message, /saved-wallet/u);
-          } else {
-            assert.match(request.params.message, /0\.01 Sepolia ETH/u);
-          }
-          if (
-            interaction.title.startsWith("Confirm private") ||
-            interaction.title.startsWith("Confirm regular") ||
-            interaction.title.startsWith("Recover")
-          ) {
-            assert.match(request.params.message, new RegExp(RECIPIENT, "u"));
-          }
-          return { action: interaction.decision };
-        });
-      }
+      client.setRequestHandler(ElicitRequestSchema, async () => {
+        assert.fail(`${flow.id}: Agent Boost must keep confirmation in chat`);
+      });
       await Promise.all([
         server.connect(serverTransport),
         client.connect(clientTransport),
@@ -956,6 +974,19 @@ test("ideal conversation flows replay through the real MCP contract", async (t) 
           const textBlock = response.content.find((block) => block.type === "text");
           assert.equal(textBlock?.type, "text");
           const visibleHint = textBlock?.type === "text" ? textBlock.text : "";
+          const visiblePresentation = (response.structuredContent as {
+            presentation?: Record<string, unknown>;
+          }).presentation;
+          const visibleToolSurface = `${visibleHint}\n${
+            visiblePresentation ? JSON.stringify(visiblePresentation) : ""
+          }`;
+          for (const pattern of forbiddenToolSurfacePatterns) {
+            assert.doesNotMatch(
+              visibleToolSurface,
+              pattern,
+              `${flow.id}: ${step.name} exposes an internal handle or unusable UI`,
+            );
+          }
           for (const expectedText of step.expect.text_includes) {
             assert.match(
               visibleHint,
@@ -969,11 +1000,6 @@ test("ideal conversation flows replay through the real MCP contract", async (t) 
             `${flow.id}: ${step.name} image mismatch`,
           );
         }
-        assert.equal(
-          interactionIndex,
-          interactions.length,
-          `${flow.id}: native confirmation count drifted`,
-        );
       } finally {
         await client.close();
         await server.close();

@@ -578,6 +578,17 @@ export class StateStore {
     });
   }
 
+  async cancelReauthorizationPlan(decisionId: string): Promise<WalletReauthorizationPlan> {
+    const state = await this.update((draft) => {
+      const plan = draft.reauthorizationPlans[decisionId];
+      if (!plan) throw new Error("REAUTHORIZATION_DECISION_NOT_FOUND");
+      if (plan.appliedAt) throw new Error("REAUTHORIZATION_DECISION_ALREADY_APPLIED");
+      plan.decision = "deny";
+      if (!plan.blockers.includes("USER_CANCELLED")) plan.blockers.push("USER_CANCELLED");
+    });
+    return state.reauthorizationPlans[decisionId]!;
+  }
+
   async applyReauthorizationPlan(
     decisionId: string,
   ): Promise<{ profile: WalletProfileRecord; onboarding: OnboardingRecord }> {
@@ -587,6 +598,9 @@ export class StateStore {
       const profile = draft.wallet.profiles[draft.wallet.activeWalletId];
       const plan = draft.reauthorizationPlans[decisionId];
       if (!profile || !plan) throw new Error("REAUTHORIZATION_DECISION_NOT_FOUND");
+      if (plan.blockers.includes("USER_CANCELLED")) {
+        throw new Error("REAUTHORIZATION_DECISION_CANCELLED");
+      }
       if (plan.appliedAt) {
         if (!plan.appliedAuthorizationId ||
           profile.authorizationId !== plan.appliedAuthorizationId) {

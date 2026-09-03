@@ -25,10 +25,21 @@ const expectedTraces = {
   "setup-funding-qr": ["onboarding_start"],
   "setup-partial-funding": ["onboarding_status"],
   "setup-preparing-private-balance": ["onboarding_status"],
-  "setup-ready": ["onboarding_status", "capabilities"],
+  "setup-ready": ["onboarding_status", "capabilities", "wallet_get_tree"],
   "setup-failed": ["onboarding_status"],
   "start-new-demo-wallet": ["wallet_start_new_demo"],
   "advanced-setup-shows-live-policy": ["wallet_get_policy"],
+  "wallet-tree-without-identifiers": ["wallet_get_tree"],
+  "saved-wallet-inventory": ["wallet_list"],
+  "already-active-wallet-needs-no-switch": ["wallet_list"],
+  "ambiguous-old-wallet": ["wallet_list"],
+  "load-and-reauthorize-previous-wallet": [
+    "wallet_list",
+    "wallet_select",
+    "wallet_plan_reauthorization",
+    "wallet_reauthorize",
+  ],
+  "cancel-wallet-switch": ["wallet_list"],
   "ambiguous-amount-clarification": [],
   "confirmed-payment-with-emoji": [
     "capabilities",
@@ -37,13 +48,28 @@ const expectedTraces = {
     "wallet_execute_private_payment",
     "wallet_get_request",
   ],
+  "confirmed-regular-transfer": [
+    "wallet_get_context",
+    "wallet_plan_regular_transfer",
+    "wallet_execute_regular_transfer",
+    "wallet_get_regular_transfer_request",
+  ],
+  "regular-transfer-gas-reserve-blocked": [
+    "wallet_get_context",
+    "wallet_plan_regular_transfer",
+  ],
+  "chat-regular-transfer-cancelled": [
+    "wallet_get_context",
+    "wallet_plan_regular_transfer",
+    "wallet_execute_regular_transfer",
+  ],
   "indeterminate-payment-stays-unresolved": [
     "wallet_get_context",
     "wallet_plan_private_payment",
     "wallet_execute_private_payment",
     "wallet_get_request",
   ],
-  "native-payment-cancelled": [
+  "chat-payment-cancelled": [
     "wallet_get_context",
     "wallet_plan_private_payment",
     "wallet_execute_private_payment",
@@ -65,9 +91,18 @@ const expectedTraces = {
     "wallet_plan_policy_update",
     "wallet_apply_policy_update",
   ],
+  "policy-update-cancelled": [
+    "wallet_plan_policy_update",
+    "wallet_apply_policy_update",
+  ],
   "expired-delegation-blocked": [
     "wallet_get_context",
     "wallet_plan_private_payment",
+  ],
+  "confirmed-exact-recovery": [
+    "wallet_plan_recovery_transfer",
+    "wallet_execute_recovery_transfer",
+    "wallet_get_recovery_request",
   ],
   "covered-public-read": ["egress_status", "egress_fetch"],
   "covered-read-needs-enrollment": ["egress_status"],
@@ -101,17 +136,62 @@ const responseRules = {
   "advanced-setup-shows-live-policy": [
     { includes: ["Current wallet permission", "1 send", "0.05", "expiry"], maxLines: 4 },
   ],
+  "wallet-tree-without-identifiers": [
+    { includes: ["wallets/", "agent-boost/", "main/", "private/", "do not imply custody or control"], maxLines: 6 },
+  ],
+  "saved-wallet-inventory": [
+    { includes: ["agent-boost", "active", "saved-wallet", "imported-wallet", "adopt"], maxLines: 6 },
+  ],
+  "already-active-wallet-needs-no-switch": [
+    { includes: ["agent-boost", "already", "active"], excludes: ["confirm", "authorize"], maxLines: 3 },
+  ],
+  "ambiguous-old-wallet": [
+    { includes: ["saved-wallet", "travel-wallet", "which"], excludes: ["wallet_"], maxLines: 3 },
+  ],
+  "load-and-reauthorize-previous-wallet": [
+    { includes: ["saved-wallet", "switch", "signing", "cancel"], maxLines: 5 },
+    { includes: ["saved-wallet", "authorize", "0.05", "No funds"], maxLines: 8 },
+    { includes: ["saved-wallet", "authorized", "No funds"], maxLines: 4 },
+  ],
+  "cancel-wallet-switch": [
+    { includes: ["saved-wallet", "switch", "signing", "cancel"], maxLines: 5 },
+    { includes: ["cancelled", "Nothing changed"], maxLines: 3 },
+  ],
   "ambiguous-amount-clarification": [
     { includes: ["exact amount", "0x2222222222222222222222222222222222222222"], maxLines: 2 },
   ],
   "confirmed-payment-with-emoji": [
     { includes: ["Sent", "0.01", "0x2222222222222222222222222222222222222222"], maxLines: 16 },
   ],
+  "confirmed-regular-transfer": [
+    { includes: ["regular", "0.01", "0x2222222222222222222222222222222222222222", "public", "approve"], maxLines: 9 },
+    { includes: ["regular", "0.01", "0x2222222222222222222222222222222222222222", "confirmed"], maxLines: 6 },
+  ],
+  "regular-transfer-gas-reserve-blocked": [
+    {
+      includes: ["regular", "blocked", "gas"],
+      includesAny: [["Nothing was sent", "No funds sent"]],
+      excludes: ["private"],
+      maxLines: 6,
+    },
+  ],
+  "chat-regular-transfer-cancelled": [
+    { includes: ["regular", "0.01", "0x2222222222222222222222222222222222222222", "public", "cancel"], maxLines: 8 },
+    {
+      includes: ["cancelled"],
+      includesAny: [["Nothing was sent", "No transfer was sent", "No funds were sent"]],
+      maxLines: 3,
+    },
+  ],
   "indeterminate-payment-stays-unresolved": [
     { includes: ["Not confirmed", "won’t retry"], maxLines: 16 },
   ],
-  "native-payment-cancelled": [
-    { includes: ["cancelled", "Nothing was sent"], maxLines: 14 },
+  "chat-payment-cancelled": [
+    {
+      includes: ["cancelled"],
+      includesAny: [["Nothing was sent", "No payment was sent", "No funds were sent"]],
+      maxLines: 14,
+    },
   ],
   "main-balance-read": [
     { includes: ["Main account balance", "0.1 Sepolia ETH"], maxLines: 3 },
@@ -129,8 +209,20 @@ const responseRules = {
     { includes: ["New wallet permission", "10", "1", "approve"], maxLines: 10 },
     { includes: ["Permission updated", "10", "1", "not move"], maxLines: 8 },
   ],
+  "policy-update-cancelled": [
+    { includes: ["New wallet permission", "10", "1", "approve"], maxLines: 10 },
+    {
+      includes: ["cancelled", "no funds"],
+      includesAny: [["unchanged", "not changed"]],
+      maxLines: 3,
+    },
+  ],
   "expired-delegation-blocked": [
     { includes: ["blocked", "expired", "wallet"], excludes: ["approve"], maxLines: 4 },
+  ],
+  "confirmed-exact-recovery": [
+    { includes: ["recovery", "0.01", "0x2222222222222222222222222222222222222222", "public", "approve"], maxLines: 8 },
+    { includes: ["recovery", "0.01", "confirmed", "remaining private balance"], maxLines: 4 },
   ],
   "covered-public-read": [
     { includes: ["status", "ok", "no direct fallback"], maxLines: 4 },
@@ -143,10 +235,13 @@ const responseRules = {
 const forbidden = [
   /\bmcp\b/iu,
   /\bwei\b/iu,
-  /\b(?:decision_id|request_id|client_request_id|user_confirmed|amount_atomic|amount_native)\b/iu,
-  /\b(?:wallet_get_context|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|egress_status|egress_fetch)\b/iu,
+  /\b(?:decision_id|request_id|client_request_id|user_confirmed|wallet_id|wallet_name|amount_atomic|amount_native)\b/iu,
+  /\b(?:wallet_get_context|wallet_get_tree|wallet_list|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_start_new_demo|wallet_create|wallet_adopt_existing|wallet_select|wallet_archive|wallet_plan_reauthorization|wallet_reauthorize|wallet_plan_regular_transfer|wallet_execute_regular_transfer|wallet_get_regular_transfer_request|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|wallet_plan_recovery_transfer|wallet_execute_recovery_transfer|wallet_get_recovery_request|egress_status|egress_fetch)\b/iu,
+  /\borg\.agentboost\/model-context\b/iu,
+  /\b(?:native|external)\s+(?:approval|confirmation|interface|prompt)\b/iu,
+  /\b(?:plan|decision|request|wallet)\s+id\b/iu,
   /\b(?:seed phrase|private key|wallet password)\b/iu,
-  /\b(?:wd_|wpd_|req_|sha256:)[A-Za-z0-9._:-]*/u,
+  /\b(?:(?:wd|wpd|req|rwd|rreq|wra|wr|wrr|wallet|auth|setup|archive)_|sha256:)[A-Za-z0-9._:-]*/u,
 ];
 
 async function main() {
@@ -209,6 +304,7 @@ async function runFlow(flow, hermes, options) {
         args: [join(root, "evals", "fake-mcp.ts")],
         env: {
           AGENT_BOOST_EVAL_SCENARIO: flow.scenario,
+          AGENT_BOOST_EVAL_CASE: flow.id,
           AGENT_BOOST_EVAL_TRACE: tracePath,
         },
         enabled: true,
@@ -220,13 +316,27 @@ async function runFlow(flow, hermes, options) {
             "onboarding_start",
             "onboarding_status",
             "wallet_get_context",
+            "wallet_get_tree",
+            "wallet_list",
             "wallet_get_policy",
             "wallet_plan_policy_update",
             "wallet_apply_policy_update",
             "wallet_start_new_demo",
+            "wallet_create",
+            "wallet_adopt_existing",
+            "wallet_select",
+            "wallet_archive",
+            "wallet_plan_reauthorization",
+            "wallet_reauthorize",
+            "wallet_plan_regular_transfer",
+            "wallet_execute_regular_transfer",
+            "wallet_get_regular_transfer_request",
             "wallet_plan_private_payment",
             "wallet_execute_private_payment",
             "wallet_get_request",
+            "wallet_plan_recovery_transfer",
+            "wallet_execute_recovery_transfer",
+            "wallet_get_recovery_request",
             "egress_capabilities",
             "egress_status",
             "egress_fetch",
@@ -243,6 +353,7 @@ async function runFlow(flow, hermes, options) {
   const environment = { ...process.env };
   environment.HERMES_HOME = home;
   environment.AGENT_BOOST_EVAL_SCENARIO = flow.scenario;
+  environment.AGENT_BOOST_EVAL_CASE = flow.id;
   environment.AGENT_BOOST_EVAL_TRACE = tracePath;
   environment.HERMES_SKIP_UPDATE_CHECK = "1";
   delete environment.HERMES_SESSION_ID;
@@ -250,8 +361,6 @@ async function runFlow(flow, hermes, options) {
   const outputs = [];
   let sessionId;
   try {
-    const nativeInteraction = flow.steps.find((entry) => entry.actor === "client");
-    let nativeInputSent = false;
     for (const step of flow.steps.filter((entry) => entry.actor === "user")) {
       const usesSetupSkill = flow.id.startsWith("setup-") || [
         "start-new-demo-wallet",
@@ -278,13 +387,11 @@ async function runFlow(flow, hermes, options) {
         cwd: sandbox,
         env: environment,
         timeoutMs: options.timeoutMs,
-        stdin: nativeInteraction && !nativeInputSent
-          ? nativeInteraction.decision === "accept" ? "o\n" : "d\n"
-          : "",
+        stdin: "",
       });
-      if (nativeInteraction && !nativeInputSent) nativeInputSent = true;
       if (result.exitCode !== 0) {
-        throw new Error(`Hermes exited ${result.exitCode}: ${publicDiagnostic(result.stderr)}`);
+        const diagnostic = result.stderr.trim() || result.stdout.trim();
+        throw new Error(`Hermes exited ${result.exitCode}: ${publicDiagnostic(diagnostic)}`);
       }
       sessionId = parseSessionId(result.stderr) ?? sessionId;
       if (!sessionId) throw new Error("Hermes quiet output did not include a session ID");
@@ -329,12 +436,22 @@ function grade(id, outputs, traces) {
   for (let index = 0; index < Math.min(outputs.length, rules.length); index += 1) {
     const output = outputs[index];
     const rule = rules[index];
-    if (output.split("\n").length > rule.maxLines) {
+    const visibleLines = output.split("\n").filter((line) => line.trim().length > 0).length;
+    if (visibleLines > rule.maxLines) {
       failures.push(`turn ${index + 1} exceeds ${rule.maxLines} lines`);
     }
     for (const required of rule.includes) {
       if (!output.toLocaleLowerCase().includes(required.toLocaleLowerCase())) {
         failures.push(`turn ${index + 1} is missing ${JSON.stringify(required)}`);
+      }
+    }
+    for (const alternatives of rule.includesAny ?? []) {
+      if (!alternatives.some((value) =>
+        output.toLocaleLowerCase().includes(value.toLocaleLowerCase())
+      )) {
+        failures.push(
+          `turn ${index + 1} is missing one of ${alternatives.map(JSON.stringify).join(", ")}`,
+        );
       }
     }
     for (const excluded of rule.excludes ?? []) {
@@ -406,6 +523,7 @@ function publicDiagnostic(stderr) {
   return stderr
     .replace(/https?:\/\/[^\s"'<>]+/giu, "[redacted-url]")
     .replace(/\/(?:Users|home|private|tmp|var|etc|opt|root)\/[^\s"'<>]*/giu, "[redacted-path]")
+    .replace(/\b(?:gh[opsu]|sk|key|token)_[A-Za-z0-9_-]{8,}\b/giu, "[redacted-secret]")
     .slice(0, 1_000);
 }
 

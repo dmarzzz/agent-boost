@@ -212,6 +212,18 @@
       ]
     },
     {
+      "id": "cancel-new-demo-wallet",
+      "title": "Cancelling a new demo keeps the current wallet unchanged",
+      "scenario": "setup-awaiting-funding",
+      "steps": [
+        {"actor": "user", "text": "Start a new demo wallet."},
+        {"actor": "assistant", "max_lines": 2, "text": "Your current demo and unresolved requests will be archived locally; the old wallet will remain on this device.\nCreate a fresh wallet that needs new Sepolia funding?"},
+        {"actor": "user", "text": "No, cancel."},
+        {"actor": "tool", "name": "wallet_start_new_demo", "arguments": {"user_confirmed": false}, "expect": {"code": "DEMO_RESET_CONFIRMATION_REQUIRED", "outcome": "blocked", "text_includes": ["New demo wallet cancelled", "were not changed"], "image": false, "presentation": {"kind": "status", "state": "cancelled"}}},
+        {"actor": "assistant", "max_lines": 2, "text": "**✕ New demo cancelled**\nYour current wallet and workflow are unchanged."}
+      ]
+    },
+    {
       "id": "advanced-setup-shows-live-policy",
       "title": "Advanced setup starts with the live wallet permission",
       "scenario": "setup-ready",
@@ -271,6 +283,16 @@
       ]
     },
     {
+      "id": "already-active-wallet-needs-no-switch",
+      "title": "Loading the already-active authorized wallet is a no-op",
+      "scenario": "wallet-lifecycle",
+      "steps": [
+        {"actor": "user", "text": "Load agent-boost."},
+        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["agent-boost (active; active)"], "image": false, "presentation": {"kind": "status", "state": "complete"}}},
+        {"actor": "assistant", "max_lines": 2, "text": "**agent-boost is already loaded**\nIts current bounded Sepolia transfer permission remains active."}
+      ]
+    },
+    {
       "id": "ambiguous-old-wallet",
       "title": "An ambiguous old-wallet request asks using names only",
       "scenario": "wallet-ambiguous",
@@ -287,11 +309,13 @@
       "steps": [
         {"actor": "user", "text": "Load my old wallet."},
         {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet", "inactive"], "image": false}},
-        {"actor": "client", "surface": "native_confirmation", "title": "Switch to the saved Sepolia wallet", "approve_label": "Approve", "decline_label": "Cancel", "decision": "accept"},
-        {"actor": "tool", "name": "wallet_select", "arguments": {"wallet_id": "wallet_saved_12345678"}, "expect": {"code": "WALLET_SELECTED", "outcome": "ready", "text_includes": ["saved-wallet is now selected", "signing remains disabled"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
+        {"actor": "assistant", "max_lines": 3, "text": "**Confirm wallet switch**\nSwitch to **saved-wallet**? The current workflow will be archived and signing will stay disabled.\n**Next:** Reply ✅ to switch or ✕ to cancel."},
+        {"actor": "user", "text": "Yes, switch wallets."},
+        {"actor": "tool", "name": "wallet_select", "arguments": {"wallet_name": "saved-wallet", "user_confirmed": true}, "expect": {"code": "WALLET_SELECTED", "outcome": "ready", "text_includes": ["saved-wallet is now selected", "signing remains disabled"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
         {"actor": "tool", "name": "wallet_plan_reauthorization", "arguments": {}, "expect": {"code": "WALLET_REAUTHORIZATION_PLANNED", "outcome": "ready", "text_includes": ["separate approval", "saved-wallet", "0.05 Sepolia ETH each", "does not move funds"], "image": false, "presentation": {"kind": "confirmation", "state": "pending"}}},
-        {"actor": "client", "surface": "native_confirmation", "title": "Authorize bounded regular and private Sepolia transfers", "approve_label": "Approve", "decline_label": "Cancel", "decision": "accept"},
-        {"actor": "tool", "name": "wallet_reauthorize", "arguments": {"decision_id": "wra_eval_12345678"}, "expect": {"code": "WALLET_REAUTHORIZED", "outcome": "ready", "text_includes": ["saved-wallet has a fresh", "No funds moved"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
+        {"actor": "assistant", "max_lines": 6, "text": "**Authorize wallet transfers**\n**Wallet:** saved-wallet\n**Permission:** 1 regular or private send\n**Limits:** 0.05 Sepolia ETH each · 0.05 Sepolia ETH total\nNo funds will move.\n**Next:** Reply ✅ to authorize or ✕ to cancel."},
+        {"actor": "user", "text": "✅"},
+        {"actor": "tool", "name": "wallet_reauthorize", "arguments": {"decision_id": "wra_eval_12345678", "user_confirmed": true}, "expect": {"code": "WALLET_REAUTHORIZED", "outcome": "ready", "text_includes": ["saved-wallet has a fresh", "No funds moved"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
         {"actor": "assistant", "max_lines": 3, "text": "**✓ Wallet loaded and authorized**\n**saved-wallet** is active with fresh bounded Sepolia transfer permission.\nNo funds moved."}
       ]
     },
@@ -302,8 +326,8 @@
       "steps": [
         {"actor": "user", "text": "Load saved-wallet."},
         {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet"], "image": false}},
-        {"actor": "client", "surface": "native_confirmation", "title": "Switch to the saved Sepolia wallet", "approve_label": "Approve", "decline_label": "Cancel", "decision": "decline"},
-        {"actor": "tool", "name": "wallet_select", "arguments": {"wallet_id": "wallet_saved_12345678"}, "expect": {"code": "WALLET_SELECT_CONFIRMATION_REQUIRED", "outcome": "blocked", "text_includes": ["cancelled", "No wallet state changed"], "image": false, "presentation": {"kind": "status", "state": "cancelled"}}},
+        {"actor": "assistant", "max_lines": 3, "text": "**Confirm wallet switch**\nSwitch to **saved-wallet**? The current workflow will be archived and signing will stay disabled.\n**Next:** Reply ✅ to switch or ✕ to cancel."},
+        {"actor": "user", "text": "Cancel."},
         {"actor": "assistant", "max_lines": 2, "text": "**✕ Wallet switch cancelled**\nNothing changed."}
       ]
     },
@@ -341,7 +365,7 @@
         {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet"], "image": false}},
         {"actor": "assistant", "max_lines": 3, "text": "**Confirm wallet archive**\nArchive **saved-wallet**? Its encrypted data and history will stay on this device.\n**Next:** Reply ✅ to archive or ✕ to cancel."},
         {"actor": "user", "text": "✅"},
-        {"actor": "tool", "name": "wallet_archive", "arguments": {"wallet_id": "wallet_saved_12345678", "user_confirmed": true}, "expect": {"code": "WALLET_ARCHIVED", "outcome": "ready", "text_includes": ["archived locally", "not deleted"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
+        {"actor": "tool", "name": "wallet_archive", "arguments": {"wallet_name": "saved-wallet", "user_confirmed": true}, "expect": {"code": "WALLET_ARCHIVED", "outcome": "ready", "text_includes": ["archived locally", "not deleted"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
         {"actor": "assistant", "max_lines": 2, "text": "**✓ Wallet archived**\nThe encrypted wallet and its history were retained."}
       ]
     },
@@ -363,7 +387,7 @@
     },
     {
       "id": "confirmed-payment-with-emoji",
-      "title": "Exact payment, native approval, confirmed receipt",
+      "title": "Exact payment, chat approval, confirmed receipt",
       "scenario": "payment-confirmed",
       "steps": [
         {
@@ -402,24 +426,23 @@
           "expect": {
             "code": "PAYMENT_PLANNED",
             "outcome": "ready",
-            "text_includes": ["0.01 Sepolia ETH", "native approval"],
+            "text_includes": ["0.01 Sepolia ETH"],
             "image": false,
             "presentation": {"kind": "confirmation", "state": "pending"}
           }
         },
         {
-          "actor": "client",
-          "surface": "native_confirmation",
-          "title": "Confirm private test payment",
-          "approve_label": "Approve",
-          "decline_label": "Cancel",
-          "decision": "accept"
+          "actor": "assistant",
+          "max_lines": 6,
+          "text": "**Confirm private test payment**\n**Amount:** 0.01 Sepolia ETH\n**To:** 0x2222222222222222222222222222222222222222\n**Network:** Sepolia testnet · no monetary value\n**Visibility:** On-chain activity remains visible\n**Next:** Reply ✅ to approve or ✕ to cancel."
         },
+        {"actor": "user", "text": "✅"},
         {
           "actor": "tool",
           "name": "wallet_execute_private_payment",
           "arguments": {
-            "decision_id": "wd_eval_12345678"
+            "decision_id": "wd_eval_12345678",
+            "user_confirmed": true
           },
           "expect": {
             "code": "PAYMENT_REQUEST",
@@ -478,23 +501,21 @@
           "expect": {
             "code": "REGULAR_TRANSFER_PLANNED",
             "outcome": "ready",
-            "text_includes": ["Regular public transfer ready for native approval", "selected main account"],
+            "text_includes": ["Regular public transfer ready", "selected main account"],
             "image": false,
             "presentation": {"kind": "confirmation", "state": "pending"}
           }
         },
         {
-          "actor": "client",
-          "surface": "native_confirmation",
-          "title": "Confirm regular testnet transfer",
-          "approve_label": "Approve",
-          "decline_label": "Cancel",
-          "decision": "accept"
+          "actor": "assistant",
+          "max_lines": 7,
+          "text": "**Confirm regular testnet transfer**\n**Amount:** 0.01 Sepolia ETH\n**To:** 0x2222222222222222222222222222222222222222\n**From:** Main public account\n**Network:** Sepolia testnet · no monetary value\n**Privacy:** Public on-chain transfer\n**Next:** Reply ✅ to approve or ✕ to cancel."
         },
+        {"actor": "user", "text": "Confirm yes send."},
         {
           "actor": "tool",
           "name": "wallet_execute_regular_transfer",
-          "arguments": {"decision_id": "rwd_eval_12345678"},
+          "arguments": {"decision_id": "rwd_eval_12345678", "user_confirmed": true},
           "expect": {
             "code": "REGULAR_TRANSFER_REQUEST",
             "outcome": "submitted",
@@ -579,8 +600,8 @@
       ]
     },
     {
-      "id": "native-regular-transfer-cancelled",
-      "title": "Cancelling a regular transfer never invokes either send path",
+      "id": "chat-regular-transfer-cancelled",
+      "title": "Cancelling a regular transfer in chat never invokes either send path",
       "scenario": "regular-transfer",
       "steps": [
         {
@@ -608,23 +629,21 @@
           "expect": {
             "code": "REGULAR_TRANSFER_PLANNED",
             "outcome": "ready",
-            "text_includes": ["Regular public transfer ready for native approval"],
+            "text_includes": ["Regular public transfer ready"],
             "image": false,
             "presentation": {"kind": "confirmation", "state": "pending"}
           }
         },
         {
-          "actor": "client",
-          "surface": "native_confirmation",
-          "title": "Confirm regular testnet transfer",
-          "approve_label": "Approve",
-          "decline_label": "Cancel",
-          "decision": "decline"
+          "actor": "assistant",
+          "max_lines": 6,
+          "text": "**Confirm regular testnet transfer**\n**Amount:** 0.01 Sepolia ETH\n**To:** 0x2222222222222222222222222222222222222222\n**From:** Selected main public account\n**Network:** Sepolia testnet · public transfer\n**Next:** Reply ✅ to approve or ✕ to cancel."
         },
+        {"actor": "user", "text": "Cancel."},
         {
           "actor": "tool",
           "name": "wallet_execute_regular_transfer",
-          "arguments": {"decision_id": "rwd_eval_12345678"},
+          "arguments": {"decision_id": "rwd_eval_12345678", "user_confirmed": false},
           "expect": {
             "code": "REGULAR_TRANSFER_CANCELLED",
             "outcome": "blocked",
@@ -670,24 +689,23 @@
           "expect": {
             "code": "PAYMENT_PLANNED",
             "outcome": "ready",
-            "text_includes": ["0.01 Sepolia ETH", "native approval"],
+            "text_includes": ["0.01 Sepolia ETH"],
             "image": false,
             "presentation": {"kind": "confirmation", "state": "pending"}
           }
         },
         {
-          "actor": "client",
-          "surface": "native_confirmation",
-          "title": "Confirm private test payment",
-          "approve_label": "Approve",
-          "decline_label": "Cancel",
-          "decision": "accept"
+          "actor": "assistant",
+          "max_lines": 6,
+          "text": "**Confirm private test payment**\n**Amount:** 0.01 Sepolia ETH\n**To:** 0x2222222222222222222222222222222222222222\n**Network:** Sepolia testnet · no monetary value\n**Visibility:** On-chain activity remains visible\n**Next:** Reply ✅ to approve or ✕ to cancel."
         },
+        {"actor": "user", "text": "Yes, send it."},
         {
           "actor": "tool",
           "name": "wallet_execute_private_payment",
           "arguments": {
-            "decision_id": "wd_eval_12345678"
+            "decision_id": "wd_eval_12345678",
+            "user_confirmed": true
           },
           "expect": {
             "code": "PAYMENT_REQUEST",
@@ -717,15 +735,16 @@
       ]
     },
     {
-      "id": "native-payment-cancelled",
-      "title": "Cancelling a native confirmation never executes",
+      "id": "chat-payment-cancelled",
+      "title": "Cancelling a private payment in chat never executes",
       "scenario": "payment-confirmed",
       "steps": [
         {"actor": "user", "text": "Send 0.01 Sepolia ETH privately to 0x2222222222222222222222222222222222222222."},
         {"actor": "tool", "name": "wallet_get_context", "arguments": {}, "expect": {"code": "WALLET_CONTEXT", "outcome": "ready", "text_includes": ["Main account balance: 0.1 Sepolia ETH"], "image": false}},
-        {"actor": "tool", "name": "wallet_plan_private_payment", "arguments": {"recipient": "0x2222222222222222222222222222222222222222", "amount_native": "0.01"}, "expect": {"code": "PAYMENT_PLANNED", "outcome": "ready", "text_includes": ["native approval"], "image": false, "presentation": {"kind": "confirmation", "state": "pending"}}},
-        {"actor": "client", "surface": "native_confirmation", "title": "Confirm private test payment", "approve_label": "Approve", "decline_label": "Cancel", "decision": "decline"},
-        {"actor": "tool", "name": "wallet_execute_private_payment", "arguments": {"decision_id": "wd_eval_12345678"}, "expect": {"code": "PAYMENT_CANCELLED", "outcome": "blocked", "text_includes": ["Payment cancelled", "Nothing was sent"], "image": false, "presentation": {"kind": "status", "state": "cancelled"}}},
+        {"actor": "tool", "name": "wallet_plan_private_payment", "arguments": {"recipient": "0x2222222222222222222222222222222222222222", "amount_native": "0.01"}, "expect": {"code": "PAYMENT_PLANNED", "outcome": "ready", "text_includes": ["0.01 Sepolia ETH"], "image": false, "presentation": {"kind": "confirmation", "state": "pending"}}},
+        {"actor": "assistant", "max_lines": 6, "text": "**Confirm private test payment**\n**Amount:** 0.01 Sepolia ETH\n**To:** 0x2222222222222222222222222222222222222222\n**Network:** Sepolia testnet · no monetary value\n**Visibility:** On-chain activity remains visible\n**Next:** Reply ✅ to approve or ✕ to cancel."},
+        {"actor": "user", "text": "No, cancel it."},
+        {"actor": "tool", "name": "wallet_execute_private_payment", "arguments": {"decision_id": "wd_eval_12345678", "user_confirmed": false}, "expect": {"code": "PAYMENT_CANCELLED", "outcome": "blocked", "text_includes": ["Payment cancelled", "Nothing was sent"], "image": false, "presentation": {"kind": "status", "state": "cancelled"}}},
         {"actor": "assistant", "max_lines": 2, "text": "**✕ Payment cancelled**\nNothing was sent."}
       ]
     },
@@ -903,6 +922,7 @@
           "actor": "tool",
           "name": "wallet_apply_policy_update",
           "arguments": {
+            "decision_id": "wpd_eval_12345678",
             "user_confirmed": true
           },
           "expect": {
@@ -917,6 +937,19 @@
           "max_lines": 3,
           "text": "✅ Permission updated\n10 sends · 1 Sepolia ETH max each · 10 Sepolia ETH total\nNo funds moved."
         }
+      ]
+    },
+    {
+      "id": "policy-update-cancelled",
+      "title": "Cancelling a wallet-limit preview leaves permission unchanged",
+      "scenario": "policy-update",
+      "steps": [
+        {"actor": "user", "text": "Change my wallet to 10 sends of up to 1 Sepolia ETH each."},
+        {"actor": "tool", "name": "wallet_plan_policy_update", "arguments": {"max_payments": 10, "per_payment_limit_native": 1}, "expect": {"code": "POLICY_UPDATE_PLANNED", "outcome": "ready", "text_includes": ["up to 10 payments", "1 Sepolia ETH each", "permission only"], "image": false, "presentation": {"kind": "confirmation", "state": "pending"}}},
+        {"actor": "assistant", "max_lines": 7, "text": "🔐 New wallet permission\nUp to 10 sends (regular or private)\n1 Sepolia ETH max each · 10 Sepolia ETH total\nFor the next 7 days\n\nThis changes the guardrails—not where funds live.\nReply ✅ or say yes to approve."},
+        {"actor": "user", "text": "No, keep it as-is."},
+        {"actor": "tool", "name": "wallet_apply_policy_update", "arguments": {"decision_id": "wpd_eval_12345678", "user_confirmed": false}, "expect": {"code": "POLICY_UPDATE_CANCELLED", "outcome": "blocked", "text_includes": ["permission change cancelled", "not changed", "no funds moved"], "image": false, "presentation": {"kind": "status", "state": "cancelled"}}},
+        {"actor": "assistant", "max_lines": 2, "text": "**✕ Permission change cancelled**\nYour existing wallet limits are unchanged; no funds moved."}
       ]
     },
     {
@@ -937,8 +970,9 @@
       "steps": [
         {"actor": "user", "text": "Recover 0.01 Sepolia ETH privately held in my wallet to 0x2222222222222222222222222222222222222222."},
         {"actor": "tool", "name": "wallet_plan_recovery_transfer", "arguments": {"recipient": "0x2222222222222222222222222222222222222222", "amount_native": "0.01"}, "expect": {"code": "RECOVERY_PLANNED", "outcome": "ready", "text_includes": ["exactly 0.01 Sepolia ETH", "become public", "remaining private balance stays"], "image": false, "presentation": {"kind": "confirmation", "state": "pending"}}},
-        {"actor": "client", "surface": "native_confirmation", "title": "Recover exactly 0.01 Sepolia ETH", "approve_label": "Approve", "decline_label": "Cancel", "decision": "accept"},
-        {"actor": "tool", "name": "wallet_execute_recovery_transfer", "arguments": {"decision_id": "wr_eval_12345678"}, "expect": {"code": "RECOVERY_REQUEST", "outcome": "submitted", "text_includes": ["Recovery transfer is submitted", "never submit a replacement"], "image": false, "presentation": {"kind": "receipt", "state": "attention"}}},
+        {"actor": "assistant", "max_lines": 6, "text": "**Confirm recovery transfer**\n**Amount:** 0.01 Sepolia ETH\n**To:** 0x2222222222222222222222222222222222222222\n**Network:** Sepolia testnet · no monetary value\n**Visibility:** The recovered amount becomes public on-chain\n**Next:** Reply ✅ to approve or ✕ to cancel."},
+        {"actor": "user", "text": "Proceed."},
+        {"actor": "tool", "name": "wallet_execute_recovery_transfer", "arguments": {"decision_id": "wr_eval_12345678", "user_confirmed": true}, "expect": {"code": "RECOVERY_REQUEST", "outcome": "submitted", "text_includes": ["Recovery transfer is submitted", "never submit a replacement"], "image": false, "presentation": {"kind": "receipt", "state": "attention"}}},
         {"actor": "tool", "name": "wallet_get_recovery_request", "arguments": {"request_id": "wrr_eval_12345678"}, "expect": {"code": "RECOVERY_STATUS", "outcome": "confirmed", "text_includes": ["Recovery transfer confirmed"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
         {"actor": "assistant", "max_lines": 3, "text": "**✓ Recovery transfer sent**\n0.01 Sepolia ETH to 0x2222222222222222222222222222222222222222\nPublicly confirmed on Sepolia; the remaining private balance stayed in place."}
       ]

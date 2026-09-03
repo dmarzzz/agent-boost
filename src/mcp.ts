@@ -17,6 +17,7 @@ import type {
   WalletPolicySnapshot,
   RecoveryTransferPlan,
   RecoveryTransferRequest,
+  WalletReauthorizationPlan,
   WalletTreeSnapshot,
 } from "./contracts.js";
 import type { CoveredFetchResult } from "./shade-tree/index.js";
@@ -26,6 +27,32 @@ import {
   tradeNotConfigured,
 } from "./trade.js";
 import { buildSepoliaFundingUri } from "./ui/index.js";
+
+const NATIVE_AMOUNT_PATTERN = /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/u;
+
+// Tool-calling models commonly serialize whole-number amounts as JSON numbers
+// even when a decimal string is requested. JSON parsing discards the original
+// lexical precision of fractional numbers, so fractions must remain strings.
+const nativeAmountSchema = z.union([
+  z.string().regex(NATIVE_AMOUNT_PATTERN),
+  z.number().int().safe().nonnegative(),
+]).transform((value) => String(value));
+
+const walletReferenceSchema = z.object({
+  wallet_name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u).optional()
+    .describe("Preferred friendly wallet name, such as agent-boost."),
+  name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u).optional()
+    .describe("Friendly-name alias accepted for model compatibility; prefer wallet_name."),
+  wallet_id: z.string().min(1).max(128).optional().describe(
+    "Backward-compatible wallet reference. An exact internal wallet ID or friendly wallet name is accepted; never ask the user to supply it.",
+  ),
+  user_confirmed: z.boolean().optional().describe(
+    "Set true only when the current user chat message explicitly approves the wallet action shown in the immediately preceding turn.",
+  ),
+}).refine(
+  (value) => value.wallet_name !== undefined || value.name !== undefined || value.wallet_id !== undefined,
+  { message: "Provide wallet_name, name, or wallet_id" },
+);
 
 export interface AgentBoostRuntime {
   capabilities(): Promise<Record<string, unknown>>;
@@ -52,6 +79,7 @@ export interface AgentBoostRuntime {
   }): Promise<PolicyUpdatePlan>;
   getPolicyUpdatePlan(decisionId: string): Promise<PolicyUpdatePlan>;
   getLatestPolicyUpdatePlan(): Promise<PolicyUpdatePlan>;
+  cancelPolicyUpdatePlan(decisionId: string): Promise<PolicyUpdatePlan>;
   applyPolicyUpdate(input: {
     decisionId: string;
     userConfirmed: boolean;
@@ -61,14 +89,16 @@ export interface AgentBoostRuntime {
   adoptWallet(input: { name: string; userConfirmed: boolean }): Promise<Record<string, unknown>>;
   selectWallet(input: { walletId: string; userConfirmed: boolean }): Promise<Record<string, unknown>>;
   archiveWallet(input: { walletId: string; userConfirmed: boolean }): Promise<Record<string, unknown>>;
-  planWalletReauthorization(): Promise<import("./contracts.js").WalletReauthorizationPlan>;
-  getWalletReauthorizationPlan(decisionId: string): Promise<import("./contracts.js").WalletReauthorizationPlan>;
+  planWalletReauthorization(): Promise<WalletReauthorizationPlan>;
+  getWalletReauthorizationPlan(decisionId: string): Promise<WalletReauthorizationPlan>;
+  cancelWalletReauthorizationPlan(decisionId: string): Promise<WalletReauthorizationPlan>;
   reauthorizeWallet(input: { decisionId: string; userConfirmed: boolean }): Promise<Record<string, unknown>>;
   planPrivatePayment(input: {
     recipient: string;
     amountWei: string;
   }): Promise<PaymentPlan>;
   getPaymentPlan(decisionId: string): Promise<PaymentPlan>;
+  cancelPrivatePaymentPlan(decisionId: string): Promise<PaymentPlan>;
   executePrivatePayment(input: {
     decisionId: string;
     clientRequestId: string;
@@ -80,6 +110,7 @@ export interface AgentBoostRuntime {
     amountWei: string;
   }): Promise<RegularTransferPlan>;
   getRegularTransferPlan(decisionId: string): Promise<RegularTransferPlan>;
+  cancelRegularTransferPlan(decisionId: string): Promise<RegularTransferPlan>;
   executeRegularTransfer(input: {
     decisionId: string;
     clientRequestId: string;
@@ -88,6 +119,7 @@ export interface AgentBoostRuntime {
   getRegularTransferRequest(requestId: string): Promise<RegularTransferRequest>;
   planRecoveryTransfer(input: { recipient: string; amountWei: string }): Promise<RecoveryTransferPlan>;
   getRecoveryPlan(decisionId: string): Promise<RecoveryTransferPlan>;
+  cancelRecoveryPlan(decisionId: string): Promise<RecoveryTransferPlan>;
   executeRecoveryTransfer(input: {
     decisionId: string;
     clientRequestId: string;
@@ -152,12 +184,6 @@ interface Presentation {
     text: string;
   };
   next_action?: string;
-  interaction?: {
-    kind: "confirmation";
-    transport: "mcp_elicitation";
-    approve_label: string;
-    decline_label: string;
-  };
 }
 
 function manifestDigest(capabilities: Record<string, unknown>): string {
@@ -226,6 +252,27 @@ function buildPresentation(
             : "Regular and private Sepolia swaps are not configured.",
       },
       next_action: "No quote was requested and nothing was signed or submitted.",
+    };
+  }
+
+  if (
+    code === "DEMO_RESET_CONFIRMATION_REQUIRED"
+  ) {
+    const cancelled = data.reason === "decline" || data.reason === "cancel";
+    return {
+      version: "1.0",
+      kind: cancelled ? "status" : "confirmation",
+      title: cancelled ? "New demo cancelled" : "Start a new demo wallet",
+      state: cancelled ? "cancelled" : "pending",
+      notice: {
+        tone: cancelled ? "info" : "warning",
+        text: cancelled
+          ? "The current wallet and workflow were not changed."
+          : "The current workflow will be archived; unresolved transfers will not be retried.",
+      },
+      next_action: cancelled
+        ? "No wallet state changed."
+        : "Show this action, end the turn, and wait for a new user chat confirmation.",
     };
   }
 
@@ -339,19 +386,8 @@ function buildPresentation(
         tone: "warning",
         text: "This is a public Sepolia transfer from the main account, not a private payment.",
       },
-      next_action: code === "REGULAR_TRANSFER_CONFIRMATION_REQUIRED"
-        ? "Show the receipt and wait for explicit approval."
-        : "Request approval through the client’s native confirmation surface.",
-      ...(code === "REGULAR_TRANSFER_CONFIRMATION_REQUIRED"
-        ? {}
-        : {
-            interaction: {
-              kind: "confirmation" as const,
-              transport: "mcp_elicitation" as const,
-              approve_label: "Approve",
-              decline_label: "Cancel",
-            },
-          }),
+      next_action:
+        "Show this exact plan, end the turn, and wait for a new user chat confirmation. On yes, send it, confirm, do it, proceed, ✅, or 👍, the agent calls wallet_execute_regular_transfer with user_confirmed true. Never direct the user to another interface.",
     };
   }
 
@@ -395,19 +431,8 @@ function buildPresentation(
         tone: "warning",
         text: "Testnet only. On-chain activity remains visible.",
       },
-      next_action: code === "PAYMENT_CONFIRMATION_REQUIRED"
-        ? "Show the receipt and wait for an explicit approval."
-        : "Request approval through the client’s native confirmation surface.",
-      ...(code === "PAYMENT_CONFIRMATION_REQUIRED"
-        ? {}
-        : {
-            interaction: {
-              kind: "confirmation" as const,
-              transport: "mcp_elicitation" as const,
-              approve_label: "Approve",
-              decline_label: "Cancel",
-            },
-          }),
+      next_action:
+        "Show this exact plan, end the turn, and wait for a new user chat confirmation. On yes, send it, confirm, do it, proceed, ✅, or 👍, the agent calls wallet_execute_private_payment with user_confirmed true. Never direct the user to another interface.",
     };
   }
 
@@ -415,30 +440,51 @@ function buildPresentation(
     code === "POLICY_UPDATE_PLANNED" ||
     code === "POLICY_UPDATE_DENIED" ||
     code === "POLICY_UPDATE_CONFIRMATION_REQUIRED" ||
+    code === "POLICY_UPDATE_CANCELLED" ||
     code === "POLICY_UPDATED"
   ) {
     const applied = code === "POLICY_UPDATED";
     const denied = code === "POLICY_UPDATE_DENIED";
+    const cancelled = code === "POLICY_UPDATE_CANCELLED";
+    const superseded = cancelled && stringField(data, "reason") === "superseded";
     return {
       version: "1.0",
-      kind: applied ? "receipt" : denied ? "status" : "confirmation",
+      kind: applied ? "receipt" : denied || cancelled ? "status" : "confirmation",
       title: applied
         ? "Permission updated"
-        : denied
+        : cancelled
+          ? superseded
+            ? "Permission preview superseded"
+            : "Permission change cancelled"
+          : denied
           ? "Permission change blocked"
           : "New wallet permission",
-      state: applied ? "complete" : denied ? "attention" : "pending",
+      state: applied
+        ? "complete"
+        : superseded
+          ? "attention"
+          : cancelled
+            ? "cancelled"
+            : denied
+              ? "attention"
+              : "pending",
       notice: {
-        tone: denied ? "warning" : "info",
+        tone: denied || cancelled ? "warning" : "info",
         text: applied
           ? "The permission changed. No funds moved."
-          : denied
+          : superseded
+            ? "A newer preview replaced this one. No permission changed."
+          : denied || cancelled
             ? "The permission was not changed."
             : "Preview only—not applied. No funds will move.",
       },
       next_action: applied
         ? "Report the applied permission receipt."
-        : denied
+        : superseded
+          ? "Use only the newest permission preview; do not apply this one."
+        : cancelled
+          ? "No wallet permission changed."
+          : denied
           ? "Explain the blocker; do not request approval."
           : "Show the preview, end the turn, and wait for a new user confirmation message.",
     };
@@ -500,7 +546,7 @@ function buildPresentation(
       },
       next_action: cancelled
         ? "No wallet state changed."
-        : "Request approval through the client’s native confirmation surface or wait for explicit chat approval.",
+        : "Show this action and wait for a new user chat confirmation. On approval, call the same wallet tool with user_confirmed true. Never direct the user to another interface.",
     };
   }
 
@@ -512,6 +558,7 @@ function buildPresentation(
   ) {
     const wallet = asRecord(data.wallet);
     const archived = code === "WALLET_ARCHIVED";
+    const authorizationRequired = data.authorization_required !== false;
     return {
       version: "1.0",
       kind: "receipt",
@@ -532,11 +579,15 @@ function buildPresentation(
         tone: "info",
         text: archived
           ? "Encrypted wallet data and audit history were retained."
-          : "Selection is complete. Delegated signing has not been authorized.",
+          : authorizationRequired
+            ? "Selection is complete. Delegated signing has not been authorized."
+            : "This wallet was already selected and its bounded authorization remains active.",
       },
       next_action: archived
         ? "No further action is required."
-        : "Plan and separately confirm wallet reauthorization before any transfer.",
+        : authorizationRequired
+          ? "Plan and separately confirm wallet reauthorization before any transfer."
+          : "No reauthorization is required.",
     };
   }
 
@@ -585,7 +636,7 @@ function buildPresentation(
           ? "No further action is required."
           : denied
             ? "Explain the blocker; do not request approval."
-            : "Show the exact limits and request separate approval.",
+            : "Show the exact limits, end the turn, and wait for a new user chat confirmation. On approval, call wallet_reauthorize with user_confirmed true. Never direct the user to another interface.",
     };
   }
 
@@ -621,7 +672,7 @@ function buildPresentation(
         ? "No recovery transfer was sent."
         : denied
           ? "Explain the blocker; do not execute."
-          : "Request explicit approval for this exact recovery plan.",
+          : "Show this exact recovery plan, end the turn, and wait for a new user chat confirmation. On approval, call wallet_execute_recovery_transfer with user_confirmed true. Never direct the user to another interface.",
     };
   }
 
@@ -742,29 +793,6 @@ function paymentFields(
   ];
 }
 
-function paymentConfirmationMessage(plan: PaymentPlan): string {
-  return [
-    "Confirm private test payment",
-    "",
-    `Amount: ${formatEthWei(BigInt(plan.amountWei))} Sepolia ETH`,
-    `To: ${plan.recipient}`,
-    "Network: Sepolia testnet — no monetary value",
-    "Visibility: on-chain activity remains visible",
-  ].join("\n");
-}
-
-function regularTransferConfirmationMessage(plan: RegularTransferPlan): string {
-  return [
-    "Confirm regular testnet transfer",
-    "",
-    `Amount: ${formatEthWei(BigInt(plan.amountWei))} Sepolia ETH`,
-    `To: ${plan.recipient}`,
-    "From: selected main public account",
-    "Network: Sepolia testnet — no monetary value",
-    "Privacy: regular public transfer; sender, recipient, amount, and activity are on-chain",
-  ].join("\n");
-}
-
 function result(
   structured: Record<string, unknown>,
   qrPngBase64?: string,
@@ -853,6 +881,12 @@ function compactToolText(structured: Record<string, unknown>): string {
       : "New demo wallet created. The previous demo remains archived locally.";
   }
 
+  if (code === "DEMO_RESET_CONFIRMATION_REQUIRED") {
+    return data.reason === "decline" || data.reason === "cancel"
+      ? "New demo wallet cancelled. The current wallet and workflow were not changed."
+      : "Starting a new demo wallet still needs explicit chat approval. Show the exact archive-and-create effect, end the turn, and wait for a new user message; never direct the user elsewhere.";
+  }
+
   if (code === "WALLET_LIST") {
     const wallets = Array.isArray(data.wallets)
       ? data.wallets.map(asRecord)
@@ -879,7 +913,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     const inventoryWarning = inventoryStatus === "unavailable"
       ? " Local Kohaku discovery is temporarily unavailable; registered wallets are still selectable."
       : "";
-    return `${registeredSummary}${localSummary}${inventoryWarning} Use exact wallet IDs only from org.agentboost/model-context; never show or ask the user for them. No signing material was read or returned.`;
+    return `${registeredSummary}${localSummary}${inventoryWarning} Select or archive registered wallets by friendly name. Internal wallet IDs are only a compatibility detail from org.agentboost/model-context; never show or ask the user for them. No signing material was read or returned.`;
   }
 
   if (
@@ -905,7 +939,9 @@ function compactToolText(structured: Record<string, unknown>): string {
   if (code === "WALLET_CREATED" || code === "WALLET_ADOPTED" || code === "WALLET_SELECTED") {
     const wallet = asRecord(data.wallet);
     const name = stringField(wallet, "name") ?? "the selected wallet";
-    return `${name} is now selected. Delegated signing remains disabled until the user separately confirms the exact wallet reauthorization plan.`;
+    return data.authorization_required === false
+      ? `${name} was already selected and its bounded authorization remains active. Do not reauthorize it unless the user asks to change the permission.`
+      : `${name} is now selected. Delegated signing remains disabled until the user separately confirms the exact wallet reauthorization plan in chat.`;
   }
 
   if (code === "WALLET_ARCHIVED") {
@@ -941,7 +977,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     const lead = code === "WALLET_REAUTHORIZATION_PLANNED"
       ? "Reauthorization is ready for separate approval"
       : "Reauthorization still needs explicit approval";
-    return `${lead} for ${name}: ${formatPolicyText(proposed)}. This replaces prior authority and resets its spend and payment counters; it does not move funds. Use the exact decision ID only from org.agentboost/model-context and never show it to the user.`;
+    return `${lead} for ${name}: ${formatPolicyText(proposed)}. This replaces prior authority and resets its spend and payment counters; it does not move funds. Show these limits, end the turn, and wait for a new user chat confirmation. On yes, approve, confirm, do it, proceed, ✅, or 👍, call wallet_reauthorize with the exact decision ID from org.agentboost/model-context and user_confirmed true. Never mention another interface or show the ID.`;
   }
 
   if (code === "WALLET_CONTEXT") {
@@ -981,7 +1017,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     if (code === "POLICY_UPDATE_DENIED") {
       return `Wallet policy change blocked: ${formatPolicyText(proposed)}.${formatBlockers(plan)} Explain the blocker in plain language and do not show internal IDs.`;
     }
-    return `PREVIEW ONLY — NOT APPLIED. Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes, then end this turn and wait for a new user message. Do not call wallet_apply_policy_update until that later confirmation message. After confirmation, call it with user_confirmed true and omit decision_id so Agent Boost binds the latest preview safely. Never invent an ID.`;
+    return `PREVIEW ONLY — NOT APPLIED. Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes, then end this turn and wait for a new user message. Do not call wallet_apply_policy_update until that later confirmation message. After confirmation, call it with the exact decision ID from org.agentboost/model-context and user_confirmed true. Never show, invent, or ask the user for the ID.`;
   }
 
   if (code === "POLICY_UPDATED") {
@@ -992,7 +1028,14 @@ function compactToolText(structured: Record<string, unknown>): string {
   if (code === "POLICY_UPDATE_CONFIRMATION_REQUIRED") {
     const plan = asRecord(data.plan);
     const proposed = asRecord(plan.proposed);
-    return `PREVIEW ONLY — NOT APPLIED. Wallet policy confirmation is still required: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Show the permission preview, then end this turn. After a new user message confirms it, call wallet_apply_policy_update with user_confirmed true and omit decision_id so Agent Boost binds the latest preview safely. Do not plan again unless the user changes a setting.`;
+    return `PREVIEW ONLY — NOT APPLIED. Wallet policy confirmation is still required: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Show the permission preview, then end this turn. After a new user message confirms it, call wallet_apply_policy_update with the exact decision ID from org.agentboost/model-context and user_confirmed true. Never show or ask for the ID, and do not plan again unless the user changes a setting.`;
+  }
+
+  if (code === "POLICY_UPDATE_CANCELLED") {
+    if (stringField(data, "reason") === "superseded") {
+      return "This wallet permission preview was superseded by a newer preview. Nothing was applied and no funds moved. Use only the newest preview; do not describe this as a user cancellation.";
+    }
+    return "Wallet permission change cancelled. The permission was not changed and no funds moved.";
   }
 
   if (code === "REGULAR_TRANSFER_PLANNED" || code === "REGULAR_TRANSFER_DENIED") {
@@ -1006,12 +1049,12 @@ function compactToolText(structured: Record<string, unknown>): string {
       return `Regular transfer blocked for ${amount} Sepolia ETH from the main public account to ${recipient}.${formatBlockers(plan)} Explain the blocker concisely; do not switch to a private-payment tool and do not show internal IDs.`;
     }
     return confirmationRequired
-      ? `Regular public transfer ready for native approval: ${amount} Sepolia ETH from the selected main account to ${recipient}. Call wallet_execute_regular_transfer with the exact decision ID from org.agentboost/model-context and omit user_confirmed. Never substitute wallet_execute_private_payment.`
+      ? `Regular public transfer ready for chat confirmation: ${amount} Sepolia ETH from the selected main account to ${recipient}. Show this exact plan, end the turn, and wait for a new user message. On yes, send it, confirm, do it, proceed, ✅, or 👍, call wallet_execute_regular_transfer with the exact decision ID from org.agentboost/model-context and user_confirmed true. Never mention a native or external interface, never show the ID, and never substitute wallet_execute_private_payment.`
       : `Regular public transfer approved by the active local policy: ${amount} Sepolia ETH from the selected main account to ${recipient}. Execute it with wallet_execute_regular_transfer and the exact decision ID from org.agentboost/model-context.`;
   }
 
   if (code === "REGULAR_TRANSFER_CONFIRMATION_REQUIRED") {
-    return "Native confirmation is unavailable. Show the structured regular-transfer receipt, wait for explicit approval, then call wallet_execute_regular_transfer with user_confirmed: true for that same plan.";
+    return "Show the structured regular-transfer receipt and end the turn. After a new user chat message approves it, call wallet_execute_regular_transfer with user_confirmed true for that same plan. Never tell the user to find another interface, button, prompt, plan ID, or tool.";
   }
 
   if (code === "REGULAR_TRANSFER_CANCELLED") {
@@ -1044,12 +1087,12 @@ function compactToolText(structured: Record<string, unknown>): string {
       return `Payment plan blocked for ${amount} Sepolia ETH to ${recipient}.${formatBlockers(plan)} Explain the blocker concisely; do not show internal IDs.`;
     }
     return confirmationRequired
-      ? `Payment ready for native approval: ${amount} Sepolia ETH to ${recipient}. Call wallet_execute_private_payment with the exact decision ID from org.agentboost/model-context and omit user_confirmed; the client will show the exact confirmation. Never invent an ID and do not send a duplicate readback first.`
+      ? `Private payment ready for chat confirmation: ${amount} Sepolia ETH to ${recipient}. Show this exact plan, end the turn, and wait for a new user message. On yes, send it, confirm, do it, proceed, ✅, or 👍, call wallet_execute_private_payment with the exact decision ID from org.agentboost/model-context and user_confirmed true. Never mention a native or external interface, never show the ID, and never switch to a regular transfer.`
       : `Payment approved by the active local policy: ${amount} Sepolia ETH to ${recipient}. The agent may execute it now with the exact decision ID from org.agentboost/model-context within the hard delegation limits.`;
   }
 
   if (code === "PAYMENT_CONFIRMATION_REQUIRED") {
-    return "Native confirmation is unavailable. Show the structured payment receipt, wait for explicit approval, then call wallet_execute_private_payment with user_confirmed: true for that same plan.";
+    return "Show the structured private-payment receipt and end the turn. After a new user chat message approves it, call wallet_execute_private_payment with user_confirmed true for that same plan. Never tell the user to find another interface, button, prompt, plan ID, or tool.";
   }
 
   if (code === "PAYMENT_CANCELLED") {
@@ -1078,7 +1121,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     const amount = amountWei ? formatEthWei(BigInt(amountWei)) : "unknown";
     return code === "RECOVERY_DENIED"
       ? `Recovery transfer blocked. Explain the blocker concisely; do not show internal IDs.`
-      : `Recovery transfer ready for approval: exactly ${amount} Sepolia ETH will leave the private balance and become public at ${recipient}. Any remaining private balance stays in place. Ask for explicit confirmation and do not show internal IDs.`;
+      : `Recovery transfer ready for chat confirmation: exactly ${amount} Sepolia ETH will leave the private balance and become public at ${recipient}. Any remaining private balance stays in place. Show this exact plan, end the turn, and wait for a new user message. On approval, call wallet_execute_recovery_transfer with user_confirmed true. Never mention another interface or show internal IDs.`;
   }
 
   if (code === "RECOVERY_CONFIRMATION_REQUIRED") {
@@ -1089,7 +1132,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     if (data.reason === "decline" || data.reason === "cancel") {
       return `Recovery transfer cancelled for exactly ${amount} Sepolia ETH to ${recipient}. Nothing was signed or submitted.`;
     }
-    return `Recovery confirmation is required for exactly ${amount} Sepolia ETH to ${recipient}. Wait for explicit approval, then execute only this same plan with user_confirmed true.`;
+    return `Recovery confirmation is required for exactly ${amount} Sepolia ETH to ${recipient}. End the turn and wait for a new user chat approval, then execute only this same plan with user_confirmed true. Never direct the user to another interface.`;
   }
 
   if (code === "RECOVERY_REQUEST" || code === "RECOVERY_STATUS") {
@@ -1115,18 +1158,45 @@ function stringField(record: Record<string, unknown>, key: string): string | und
   return typeof record[key] === "string" ? record[key] : undefined;
 }
 
-function walletNameForId(
+function resolveWalletReference(
   listing: Record<string, unknown>,
-  walletId: string,
-): string | undefined {
+  input: { wallet_id?: string; wallet_name?: string; name?: string },
+): { walletId: string; walletName: string; active: boolean } | undefined {
   if (!Array.isArray(listing.wallets)) return undefined;
-  for (const value of listing.wallets) {
+  const nameReferences = [input.wallet_name, input.name]
+    .filter((value): value is string => value !== undefined);
+  if (new Set(nameReferences).size > 1) return undefined;
+  const nameReference = nameReferences[0];
+  const wallets = listing.wallets.flatMap((value) => {
     const wallet = asRecord(value);
-    if (stringField(wallet, "wallet_id") === walletId) {
-      return stringField(wallet, "name");
-    }
+    const walletId = stringField(wallet, "wallet_id");
+    const walletName = stringField(wallet, "name");
+    return walletId && walletName
+      ? [{ walletId, walletName, active: wallet.active === true }]
+      : [];
+  });
+  const compatibleWithName = (
+    wallet: { walletId: string; walletName: string; active: boolean },
+  ): boolean => nameReference === undefined || wallet.walletName === nameReference;
+
+  // `wallet_id` is a backward-compatible union of an internal ID and a
+  // friendly name. Prefer an exact internal-ID match, then fall back to the
+  // friendly name; never infer from the `wallet_` prefix because friendly names
+  // may legitimately begin with it.
+  if (input.wallet_id !== undefined) {
+    const idMatches = wallets.filter(
+      (wallet) => wallet.walletId === input.wallet_id && compatibleWithName(wallet),
+    );
+    if (idMatches.length === 1) return idMatches[0];
+    if (idMatches.length > 1) return undefined;
+    const friendlyMatches = wallets.filter(
+      (wallet) => wallet.walletName === input.wallet_id && compatibleWithName(wallet),
+    );
+    return friendlyMatches.length === 1 ? friendlyMatches[0] : undefined;
   }
-  return undefined;
+
+  const matches = wallets.filter(compatibleWithName);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function formatBlockers(record: Record<string, unknown>): string {
@@ -1442,35 +1512,23 @@ export async function createMcpServer(
     { name: "agent-boost", version: "0.1.0" },
     { capabilities: { tools: {}, resources: {} } },
   );
-  const observeConfirmation = async (
-    message: string,
+  const observeConfirmation = (
     trustedClientAttestation: boolean | undefined,
-  ): Promise<{
+  ): {
     accepted: boolean;
-    mode: "mcp_elicitation" | "trusted_client_attestation" | "required";
-    reason?: "decline" | "cancel";
-  }> => {
-    if (server.server.getClientCapabilities()?.elicitation) {
-      try {
-        const elicited = await server.server.elicitInput({
-          mode: "form",
-          message,
-          requestedSchema: { type: "object", properties: {} },
-        });
-        return elicited.action === "accept"
-          ? { accepted: true, mode: "mcp_elicitation" }
-          : {
-              accepted: false,
-              mode: "mcp_elicitation",
-              reason: elicited.action === "decline" ? "decline" : "cancel",
-            };
-      } catch {
-        return { accepted: false, mode: "mcp_elicitation", reason: "cancel" };
-      }
+    mode: "hermes_chat_attestation" | "chat";
+    reason?: "decline";
+  } => {
+    // Confirmation is conversational end to end. A missing attestation stays
+    // pending in chat even when the MCP client advertises elicitation; this
+    // prevents weak tool callers from opening a redundant approval surface.
+    if (trustedClientAttestation === true) {
+      return { accepted: true, mode: "hermes_chat_attestation" };
     }
-    return trustedClientAttestation === true
-      ? { accepted: true, mode: "trusted_client_attestation" }
-      : { accepted: false, mode: "required" };
+    if (trustedClientAttestation === false) {
+      return { accepted: false, mode: "chat", reason: "decline" };
+    }
+    return { accepted: false, mode: "chat" };
   };
 
   server.registerTool(
@@ -1778,10 +1836,8 @@ export async function createMcpServer(
       description:
         "SINGLE-ACCOUNT TOOL: Use this for the current main-account balance, ETH held there, or affordability. Never use it for wallets plural, all balances, accounts, subwallets, a wallet map, or a wallet tree; call wallet_get_tree instead and do not call this first. For a main-balance question, call in the same turn even when conversation history already contains a balance. When the user names an amount in an affordability question, pass it as amount_native so Agent Boost performs the numeric comparison. History, memory, onboarding state, and prior tool results are not current-balance sources. Use the preformatted decimal amount in the returned text without converting balance_atomic. The default response contains only the main-account balance. Main means the account can fund subaccounts; it does not control, own, recover, or revoke them. This read does not authorize a send: wallet_plan_regular_transfer validates a regular main-account transfer and gas reserve, while wallet_plan_private_payment validates private spendability. Returns no seed, key, password, or raw note material.",
       inputSchema: z.object({
-        amount_native: z.string().regex(
-          /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/,
-        ).optional().describe(
-          "Optional ordinary Sepolia ETH amount from the user's affordability question. Never convert it to wei.",
+        amount_native: nativeAmountSchema.optional().describe(
+          "Optional ordinary Sepolia ETH amount from the user's affordability question. Use a decimal string for fractions; safe whole JSON numbers are accepted. Never convert it to wei.",
         ),
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -1848,7 +1904,7 @@ export async function createMcpServer(
     {
       title: "Create a local Sepolia wallet",
       description:
-        "Create and select a named encrypted Kohaku Sepolia wallet after confirmation. The previous wallet state is archived. Selection does not authorize payments; create and confirm a separate reauthorization plan afterward.",
+        "CONFIRMATION-TURN TOOL. Create and select a named encrypted Kohaku Sepolia wallet only after the exact action was shown and the current user chat message approves it; then pass user_confirmed=true. Never send the user to another interface. The previous wallet state is archived. Selection does not authorize payments; create and confirm a separate reauthorization plan afterward.",
       inputSchema: z.object({
         name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
         user_confirmed: z.boolean().optional(),
@@ -1857,10 +1913,7 @@ export async function createMcpServer(
     },
     async ({ name, user_confirmed }) => {
       try {
-        const confirmation = await observeConfirmation(
-          `Create and select the Sepolia wallet named “${name}”? The current wallet workflow will be archived and payment authority will remain disabled.`,
-          user_confirmed,
-        );
+        const confirmation = observeConfirmation(user_confirmed);
         if (!confirmation.accepted) {
           return result(envelope(digest, "blocked", "WALLET_CREATE_CONFIRMATION_REQUIRED", {
             name,
@@ -1883,7 +1936,7 @@ export async function createMcpServer(
     {
       title: "Adopt an existing local Kohaku wallet",
       description:
-        "Register and select an already-local Kohaku Sepolia wallet by name. This surface never accepts, reads, or returns a mnemonic, seed, password, private key, or secret-file path. The current workflow is archived, and signing remains disabled until a separate reauthorization plan is confirmed.",
+        "CONFIRMATION-TURN TOOL. Register and select an already-local Kohaku Sepolia wallet by name only after the exact action was shown and the current user chat message approves it; then pass user_confirmed=true. Never send the user to another interface. This surface never accepts, reads, or returns a mnemonic, seed, password, private key, or secret-file path. The current workflow is archived, and signing remains disabled until a separate reauthorization plan is confirmed.",
       inputSchema: z.object({
         name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
         user_confirmed: z.boolean().optional(),
@@ -1892,10 +1945,7 @@ export async function createMcpServer(
     },
     async ({ name, user_confirmed }) => {
       try {
-        const confirmation = await observeConfirmation(
-          `Adopt and select the existing local Sepolia wallet named “${name}”? The current wallet workflow will be archived and payment authority will remain disabled.`,
-          user_confirmed,
-        );
+        const confirmation = observeConfirmation(user_confirmed);
         if (!confirmation.accepted) {
           return result(envelope(digest, "blocked", "WALLET_ADOPT_CONFIRMATION_REQUIRED", {
             name,
@@ -1918,31 +1968,38 @@ export async function createMcpServer(
     {
       title: "Select a local wallet",
       description:
-        "Select a registered Sepolia wallet after user confirmation. Drains in-flight work, archives current workflow state, restores the selected wallet state, advances its selection epoch, and disables delegated signing. A separate wallet_reauthorize confirmation is mandatory before any payment or recovery plan.",
-      inputSchema: z.object({
-        wallet_id: z.string().startsWith("wallet_"),
-        user_confirmed: z.boolean().optional(),
-      }),
+        "CONFIRMATION-TURN TOOL. To switch wallets, show the friendly wallet name and effects, wait for a new approving chat message, then pass user_confirmed=true. If the requested wallet is already active, this returns the idempotent current state without confirmation or reauthorization. Accepts canonical wallet_name plus name and a friendly value in wallet_id for model compatibility. Never ask the user for an internal ID or send them to another interface. A real switch drains in-flight work, archives current workflow state, restores saved state, advances the selection epoch, and may require separately confirmed reauthorization.",
+      inputSchema: walletReferenceSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
-    async ({ wallet_id, user_confirmed }) => {
+    async ({ wallet_id, wallet_name, name, user_confirmed }) => {
       try {
-        const walletName = walletNameForId(await runtime.listWallets(), wallet_id);
-        if (!walletName) throw new Error("WALLET_NOT_FOUND");
-        const confirmation = await observeConfirmation(
-          `Switch to the saved Sepolia wallet named “${walletName}”? In-flight wallet work will drain, the current workflow will be archived, and delegated payment authority will be disabled.`,
-          user_confirmed,
+        const wallet = resolveWalletReference(
+          await runtime.listWallets(),
+          {
+            ...(wallet_id ? { wallet_id } : {}),
+            ...(wallet_name ? { wallet_name } : {}),
+            ...(name ? { name } : {}),
+          },
         );
+        if (!wallet) throw new Error("WALLET_NOT_FOUND");
+        if (wallet.active) {
+          return result(envelope(digest, "ready", "WALLET_SELECTED", await runtime.selectWallet({
+            walletId: wallet.walletId,
+            userConfirmed: false,
+          })));
+        }
+        const confirmation = observeConfirmation(user_confirmed);
         if (!confirmation.accepted) {
           return result(envelope(digest, "blocked", "WALLET_SELECT_CONFIRMATION_REQUIRED", {
-            wallet_id,
-            wallet_name: walletName,
+            wallet_id: wallet.walletId,
+            wallet_name: wallet.walletName,
             confirmation_mode: confirmation.mode,
             ...(confirmation.reason ? { reason: confirmation.reason } : {}),
           }));
         }
         return result(envelope(digest, "ready", "WALLET_SELECTED", await runtime.selectWallet({
-          walletId: wallet_id,
+          walletId: wallet.walletId,
           userConfirmed: true,
         })));
       } catch (error) {
@@ -1956,31 +2013,32 @@ export async function createMcpServer(
     {
       title: "Archive an inactive wallet profile",
       description:
-        "Mark an inactive wallet profile archived after confirmation. Encrypted Kohaku data and private state archives are retained; the active wallet cannot be archived with this tool.",
-      inputSchema: z.object({
-        wallet_id: z.string().startsWith("wallet_"),
-        user_confirmed: z.boolean().optional(),
-      }),
+        "CONFIRMATION-TURN TOOL. Archive an inactive wallet only after its friendly name and retention effects were shown and the current user chat message approves it; then pass user_confirmed=true. Accepts canonical wallet_name plus name and a friendly value in wallet_id for model compatibility. Never ask the user for an internal ID or send them to another interface. Encrypted Kohaku data and private state archives are retained; the active wallet cannot be archived.",
+      inputSchema: walletReferenceSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
-    async ({ wallet_id, user_confirmed }) => {
+    async ({ wallet_id, wallet_name, name, user_confirmed }) => {
       try {
-        const walletName = walletNameForId(await runtime.listWallets(), wallet_id);
-        if (!walletName) throw new Error("WALLET_NOT_FOUND");
-        const confirmation = await observeConfirmation(
-          `Archive the inactive wallet profile named “${walletName}”? Encrypted wallet data and audit history will be retained.`,
-          user_confirmed,
+        const wallet = resolveWalletReference(
+          await runtime.listWallets(),
+          {
+            ...(wallet_id ? { wallet_id } : {}),
+            ...(wallet_name ? { wallet_name } : {}),
+            ...(name ? { name } : {}),
+          },
         );
+        if (!wallet) throw new Error("WALLET_NOT_FOUND");
+        const confirmation = observeConfirmation(user_confirmed);
         if (!confirmation.accepted) {
           return result(envelope(digest, "blocked", "WALLET_ARCHIVE_CONFIRMATION_REQUIRED", {
-            wallet_id,
-            wallet_name: walletName,
+            wallet_id: wallet.walletId,
+            wallet_name: wallet.walletName,
             confirmation_mode: confirmation.mode,
             ...(confirmation.reason ? { reason: confirmation.reason } : {}),
           }));
         }
         return result(envelope(digest, "ready", "WALLET_ARCHIVED", await runtime.archiveWallet({
-          walletId: wallet_id,
+          walletId: wallet.walletId,
           userConfirmed: true,
         })));
       } catch (error) {
@@ -1994,7 +2052,7 @@ export async function createMcpServer(
     {
       title: "Plan active-wallet reauthorization",
       description:
-        "Create an immutable five-minute reauthorization decision bound to the active wallet and selection epoch. Planning does not authorize signing. Show the exact limits before confirmation.",
+        "REQUEST-TURN TOOL ONLY. Create an immutable five-minute reauthorization decision bound to the active wallet and selection epoch. Planning does not authorize signing. Show the exact limits, end the turn, and wait for a new user chat confirmation. Never send the user to another interface.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -2018,27 +2076,41 @@ export async function createMcpServer(
     {
       title: "Reauthorize the active Sepolia wallet",
       description:
-        "Apply one unexpired wallet reauthorization decision after exact confirmation. This mints fresh authority for the current selection epoch; wallet selection alone never authorizes signing.",
+        "CONFIRMATION-TURN TOOL. When the current user chat message explicitly approves the immediately preceding reauthorization preview, call this with that exact internal decision_id and user_confirmed=true. Never tell the user to find another interface or reveal the ID. This mints fresh authority for the current selection epoch; wallet selection alone never authorizes signing.",
       inputSchema: z.object({
         decision_id: z.string().startsWith("wra_"),
-        user_confirmed: z.boolean().optional(),
+        user_confirmed: z.boolean().optional().describe(
+          "True only when the current user chat message explicitly approves the immediately preceding reauthorization preview.",
+        ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
     async ({ decision_id, user_confirmed }) => {
       try {
         const plan = await runtime.getWalletReauthorizationPlan(decision_id);
-        const confirmation = await observeConfirmation(
-          `Authorize bounded regular and private Sepolia transfers for wallet “${plan.wallet.walletName}”: up to ${plan.proposedPolicy.maxPayments} sends, ${formatEthWei(BigInt(plan.proposedPolicy.perPaymentLimitWei))} Sepolia ETH max each, ${formatEthWei(BigInt(plan.proposedPolicy.lifetimeLimitWei))} Sepolia ETH total, ${formatPolicyExpiry(plan.proposedPolicy.expiresAt)}? This replaces prior authority and resets its spend and payment counters. It does not move funds.`,
-          user_confirmed,
-        );
+        if (plan.blockers.includes("USER_CANCELLED")) {
+          return result(envelope(
+            digest,
+            "blocked",
+            "WALLET_REAUTHORIZATION_CONFIRMATION_REQUIRED",
+            { plan, confirmation_mode: "chat", reason: "cancel" },
+            { mode: "never", safeWithSameArguments: false },
+          ));
+        }
+        const confirmation = observeConfirmation(user_confirmed);
         if (!confirmation.accepted) {
+          const visiblePlan = confirmation.reason
+            ? await runtime.cancelWalletReauthorizationPlan(decision_id)
+            : plan;
           return result(envelope(digest, "blocked", "WALLET_REAUTHORIZATION_CONFIRMATION_REQUIRED", {
-            plan,
+            plan: visiblePlan,
             confirmation_mode: confirmation.mode,
             ...(confirmation.reason ? { reason: confirmation.reason } : {}),
-          }));
+          }, confirmation.reason
+            ? { mode: "never", safeWithSameArguments: false }
+            : { mode: "never", safeWithSameArguments: true }));
         }
+        if (plan.decision !== "allow") throw new Error("REAUTHORIZATION_DECISION_DENIED");
         return result(envelope(digest, "ready", "WALLET_REAUTHORIZED", await runtime.reauthorizeWallet({
           decisionId: decision_id,
           userConfirmed: true,
@@ -2054,7 +2126,7 @@ export async function createMcpServer(
     {
       title: "Archive this demo and start a new wallet",
       description:
-        "After the user clearly asks to start over and confirms, archive the current local demo state and create a fresh disposable Sepolia wallet with a new funding QR. The old wallet and request history remain recoverable locally. This never retries an unresolved payment. The agent—not the user—calls this tool.",
+        "CONFIRMATION-TURN TOOL. After the exact reset action was shown and the current user chat message confirms, call with user_confirmed=true to archive the current local demo state and create a fresh disposable Sepolia wallet with a new funding QR. Never send the user to another interface. The old wallet and request history remain recoverable locally. This never retries an unresolved payment. The agent—not the user—calls this tool.",
       inputSchema: z.object({
         user_confirmed: z.boolean().describe(
           "True only after the user confirms archiving the current demo and funding a new wallet.",
@@ -2064,10 +2136,7 @@ export async function createMcpServer(
     },
     async ({ user_confirmed }) => {
       try {
-        const confirmation = await observeConfirmation(
-          "Archive the current demo and create a fresh disposable Sepolia wallet? Unresolved payments will not be retried.",
-          user_confirmed,
-        );
+        const confirmation = observeConfirmation(user_confirmed);
         if (!confirmation.accepted) {
           return result(envelope(digest, "blocked", "DEMO_RESET_CONFIRMATION_REQUIRED", {
             confirmation_mode: confirmation.mode,
@@ -2124,22 +2193,18 @@ export async function createMcpServer(
     {
       title: "Preview a requested wallet permission change—not a confirmation",
       description:
-        "REQUEST-TURN TOOL ONLY. Call this when the user asks for new transfer limits. The count and lifetime are shared by regular and private sends. Never call it when the current user message is yes, approve, ✅, or another confirmation of a preview already displayed; wallet_apply_policy_update is the confirmation-turn tool. Inputs use ordinary native-token decimals, never wei. Any subset may change. If max_payments or per_payment_limit_native changes and lifetime_limit_native is omitted, the total becomes their product. Expired permissions renew for the default seven days unless a duration is supplied. Planning changes nothing. Show one plain-English permission card and request ordinary confirmation.",
+        "REQUEST-TURN TOOL ONLY. Call this when the user asks for new transfer limits. The count and lifetime are shared by regular and private sends. Never call it when the current user message is yes, approve, ✅, or another confirmation of a preview already displayed; wallet_apply_policy_update is the confirmation-turn tool. Amount inputs use ordinary native-token decimal strings, never wei; safe whole JSON numbers are accepted, but fractional amounts must be strings. Any subset may change. If max_payments or per_payment_limit_native changes and lifetime_limit_native is omitted, the total becomes their product. Creating a new preview durably supersedes every older pending preview, so this tool mutates preview lifecycle state even though it never changes permission or moves funds. Expired permissions renew for the default seven days unless a duration is supplied. Show one plain-English permission card and request ordinary confirmation.",
       inputSchema: z.object({
         max_payments: z.number().int().positive().max(100).optional(),
-        per_payment_limit_native: z.string().regex(
-          /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/,
-        ).optional(),
-        lifetime_limit_native: z.string().regex(
-          /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/,
-        ).optional(),
+        per_payment_limit_native: nativeAmountSchema.optional(),
+        lifetime_limit_native: nativeAmountSchema.optional(),
         expires_in_hours: z.number().int().positive().max(720).optional(),
         enabled: z.boolean().optional(),
       }).refine(
         (value) => Object.values(value).some((entry) => entry !== undefined),
         { message: "At least one wallet policy setting must change" },
       ),
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
     async ({
       max_payments,
@@ -2188,12 +2253,12 @@ export async function createMcpServer(
   server.registerTool(
     "wallet_apply_policy_update",
     {
-      title: "Confirm the latest wallet permission preview after yes or ✅",
+      title: "Confirm the exact wallet permission preview after yes or ✅",
       description:
-        "The agent—not the user—calls this only after showing the exact permission card from wallet_plan_policy_update, ending that turn, and receiving ordinary confirmation such as yes or ✅ in a new user message. For that normal continuation, pass user_confirmed true and omit decision_id; Agent Boost binds the most recent preview and still rejects denied, expired, or stale state. Calls without user_confirmed true never open native approval and never apply. Never call this in the same turn as wallet_plan_policy_update, replan after confirmation, or invent an ID. This changes local delegated authority but never sends or moves funds.",
+        "The agent—not the user—calls this only after showing the exact permission card from wallet_plan_policy_update, ending that turn, and receiving ordinary confirmation such as yes or ✅ in a new user message. Pass the exact internal decision_id preserved from that displayed preview and user_confirmed true; never show or ask the user for the ID. Pass false with the same ID after an explicit rejection to durably cancel that preview. Agent Boost rejects superseded, denied, expired, stale, or cancelled state. Missing confirmation never opens native approval and never applies. Never call this in the same turn as wallet_plan_policy_update, replan after confirmation, or invent an ID. This changes local delegated authority but never sends or moves funds.",
       inputSchema: z.object({
-        decision_id: z.string().startsWith("wpd_").optional().describe(
-          "Optional exact plan ID. Omit it when confirming the most recent policy preview from chat.",
+        decision_id: z.string().startsWith("wpd_").describe(
+          "Exact internal plan ID from the immediately preceding displayed preview. Never ask the user for it.",
         ),
         user_confirmed: z.boolean().optional(),
       }),
@@ -2205,18 +2270,51 @@ export async function createMcpServer(
     },
     async ({ decision_id, user_confirmed }) => {
       try {
-        const plan = decision_id === undefined
-          ? await runtime.getLatestPolicyUpdatePlan()
-          : await runtime.getPolicyUpdatePlan(decision_id);
-        if (user_confirmed !== true) {
-          return result(envelope(digest, "blocked", "POLICY_UPDATE_CONFIRMATION_REQUIRED", {
-            plan,
-            applied: false,
-            requires_new_user_confirmation: true,
-            confirmation_mode: "chat",
-            reason: "A new user chat message must confirm the displayed policy preview.",
-          }));
+        const plan = await runtime.getPolicyUpdatePlan(decision_id);
+        const terminalReason = plan.blockers.includes("USER_CANCELLED")
+          ? "cancel"
+          : plan.blockers.includes("SUPERSEDED_BY_NEW_PREVIEW")
+            ? "superseded"
+            : undefined;
+        if (terminalReason) {
+          return result(envelope(
+            digest,
+            "blocked",
+            "POLICY_UPDATE_CANCELLED",
+            {
+              plan,
+              applied: false,
+              requires_new_user_confirmation: false,
+              confirmation_mode: "chat",
+              reason: terminalReason,
+            },
+            { mode: "never", safeWithSameArguments: false },
+          ));
         }
+        const confirmation = observeConfirmation(user_confirmed);
+        if (!confirmation.accepted) {
+          const visiblePlan = confirmation.reason
+            ? await runtime.cancelPolicyUpdatePlan(plan.decisionId)
+            : plan;
+          return result(envelope(
+            digest,
+            "blocked",
+            confirmation.reason
+              ? "POLICY_UPDATE_CANCELLED"
+              : "POLICY_UPDATE_CONFIRMATION_REQUIRED",
+            {
+              plan: visiblePlan,
+              applied: false,
+              requires_new_user_confirmation: !confirmation.reason,
+              confirmation_mode: confirmation.mode,
+              ...(confirmation.reason ? { reason: confirmation.reason } : {}),
+            },
+            confirmation.reason
+              ? { mode: "never", safeWithSameArguments: false }
+              : { mode: "never", safeWithSameArguments: true },
+          ));
+        }
+        if (plan.decision !== "allow") throw new Error("POLICY_DECISION_DENIED");
         const receipt = await runtime.applyPolicyUpdate({
           decisionId: plan.decisionId,
           userConfirmed: true,
@@ -2239,12 +2337,10 @@ export async function createMcpServer(
     {
       title: "Plan a regular public Sepolia transfer",
       description:
-        "Use this only when the user asks for a regular, public, non-private, or main-account ETH transfer. It prepares one exact native Sepolia ETH transfer from the selected main public account. Pass amount_native as ordinary ETH, never wei. Planning refreshes the main balance, reserves gas, applies the shared delegated transfer limits, and never broadcasts. Never substitute the private-payment planner for an explicit regular transfer.",
+        "REQUEST-TURN TOOL ONLY. Use this only when the user asks for a regular, public, non-private, or main-account ETH transfer. It prepares one exact Sepolia ETH transfer from the selected main public account. Pass amount_native as an ordinary decimal string or a safe whole JSON number; fractional amounts must be strings and values are never wei. Planning refreshes the main balance, reserves gas, applies the shared delegated transfer limits, and never broadcasts. For confirm policy, show the exact plan, end the turn, and wait for a new user chat confirmation. Never substitute the private-payment planner or direct the user to another interface.",
       inputSchema: z.object({
         recipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
-        amount_native: z.string().regex(
-          /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/,
-        ),
+        amount_native: nativeAmountSchema,
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -2276,25 +2372,50 @@ export async function createMcpServer(
     {
       title: "Execute a regular public Sepolia transfer",
       description:
-        "Execute one unexpired regular-transfer decision from the selected main account. Under the default confirm policy, call immediately after planning and omit user_confirmed so the client presents native approval. If native confirmation is unavailable, show the exact receipt, wait for explicit approval, then call again with user_confirmed=true. This is public on-chain activity and never falls back to a private payment. Never ask the user for IDs or tool syntax.",
+        "CONFIRMATION-TURN TOOL. When the current user chat message says yes, send it, confirm, do it, proceed, ✅, 👍, or otherwise explicitly approves the immediately preceding regular-transfer plan, call this now with its exact internal decision_id and user_confirmed=true. Do not ask again, do not replan, and never tell the user to find a native/external interface, button, or prompt. This is public on-chain activity and never falls back to a private payment. Never reveal or ask the user for IDs or tool syntax.",
       inputSchema: z.object({
         decision_id: z.string().startsWith("rwd_"),
         client_request_id: z.string().min(8).max(200).optional().describe(
           "Optional stable idempotency key. Omit to derive one from decision_id.",
         ),
-        user_confirmed: z.boolean().optional(),
+        user_confirmed: z.boolean().optional().describe(
+          "True only when the current user chat message explicitly approves the immediately preceding exact regular-transfer plan.",
+        ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
     async ({ decision_id, client_request_id, user_confirmed }) => {
       try {
         const plan = await runtime.getRegularTransferPlan(decision_id);
-        let confirmed = false;
+        if (plan.blockers.includes("USER_CANCELLED")) {
+          return result(envelope(
+            digest,
+            "blocked",
+            "REGULAR_TRANSFER_CANCELLED",
+            { plan, confirmation_mode: "chat", reason: "cancel" },
+            { mode: "never", safeWithSameArguments: false },
+          ));
+        }
+        const confirmation = observeConfirmation(user_confirmed);
+        if (confirmation.reason) {
+          const cancelledPlan = await runtime.cancelRegularTransferPlan(decision_id);
+          return result(envelope(
+            digest,
+            "blocked",
+            "REGULAR_TRANSFER_CANCELLED",
+            {
+              plan: cancelledPlan,
+              confirmation_mode: confirmation.mode,
+              reason: confirmation.reason,
+            },
+            { mode: "never", safeWithSameArguments: false },
+          ));
+        }
+        if (plan.decision !== "allow") {
+          throw new Error("REGULAR_TRANSFER_DECISION_DENIED");
+        }
+        let confirmed = confirmation.accepted;
         if (plan.approval.action === "confirm") {
-          const confirmation = await observeConfirmation(
-            regularTransferConfirmationMessage(plan),
-            user_confirmed,
-          );
           if (!confirmation.accepted) {
             return result(envelope(
               digest,
@@ -2305,7 +2426,6 @@ export async function createMcpServer(
               {
                 plan,
                 confirmation_mode: confirmation.mode,
-                ...(confirmation.reason ? { reason: confirmation.reason } : {}),
               },
               { mode: "never", safeWithSameArguments: true },
             ));
@@ -2361,12 +2481,10 @@ export async function createMcpServer(
     {
       title: "Plan a shielded Sepolia test payment",
       description:
-        "The agent—not the user—calls this to prepare one exact native-ETH payment from the private test balance. Call wallet_get_context immediately before planning. Pass amount_native exactly as ordinary Sepolia ETH, never wei; Agent Boost converts it internally. Planning never executes. Use the returned decision and blockers instead of inferring spendability from a main-account balance. Never ask the user to type an MCP command or identifier.",
+        "REQUEST-TURN TOOL ONLY. The agent—not the user—calls this only for an explicitly private or shielded payment from the private test balance. Pass amount_native as an ordinary Sepolia ETH decimal string or a safe whole JSON number; fractional amounts must be strings and values are never wei. Planning never executes. For confirm policy, show the exact plan, end the turn, and wait for a new user chat confirmation. Use returned blockers instead of inferring private spendability from the main balance. Never substitute this for an explicit regular transfer, ask for tool syntax, or direct the user to another interface.",
       inputSchema: z.object({
         recipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
-        amount_native: z.string().regex(
-          /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/,
-        ),
+        amount_native: nativeAmountSchema,
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -2398,14 +2516,14 @@ export async function createMcpServer(
     {
       title: "Execute a bounded shielded Sepolia test payment",
       description:
-        "The agent—not the user—calls this for one unexpired allow decision. Under the default confirm policy, call immediately after planning and omit user_confirmed so the MCP client presents a native approval prompt. If native elicitation is unavailable, show the returned receipt, wait for explicit approval, then call again with user_confirmed=true. Under an allow override, confirmation is not required. Hard Sepolia delegation limits always apply. Never ask the user to supply tool syntax, IDs, or booleans.",
+        "CONFIRMATION-TURN TOOL. When the current user chat message says yes, send it, confirm, do it, proceed, ✅, 👍, or otherwise explicitly approves the immediately preceding private-payment plan, call this now with its exact internal decision_id and user_confirmed=true. Do not ask again, replan, or tell the user to find a native/external interface, button, or prompt. Under an allow override, confirmation is not required. Hard Sepolia delegation limits always apply. Never reveal or ask the user for IDs, tool syntax, or booleans.",
       inputSchema: z.object({
         decision_id: z.string().startsWith("wd_"),
         client_request_id: z.string().min(8).max(200).optional().describe(
           "Optional stable idempotency key. Omit to derive one from decision_id; the user never supplies this.",
         ),
         user_confirmed: z.boolean().optional().describe(
-          "Set true only after approval of the text fallback receipt. Omit for native client confirmation and under a local allow override.",
+          "True only when the current user chat message explicitly approves the immediately preceding exact private-payment plan. Omit only under a local allow override.",
         ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
@@ -2413,12 +2531,33 @@ export async function createMcpServer(
     async ({ decision_id, client_request_id, user_confirmed }) => {
       try {
         const plan = await runtime.getPaymentPlan(decision_id);
-        let confirmed = false;
+        if (plan.blockers.includes("USER_CANCELLED")) {
+          return result(envelope(
+            digest,
+            "blocked",
+            "PAYMENT_CANCELLED",
+            { plan, confirmation_mode: "chat", reason: "cancel" },
+            { mode: "never", safeWithSameArguments: false },
+          ));
+        }
+        const confirmation = observeConfirmation(user_confirmed);
+        if (confirmation.reason) {
+          const cancelledPlan = await runtime.cancelPrivatePaymentPlan(decision_id);
+          return result(envelope(
+            digest,
+            "blocked",
+            "PAYMENT_CANCELLED",
+            {
+              plan: cancelledPlan,
+              confirmation_mode: confirmation.mode,
+              reason: confirmation.reason,
+            },
+            { mode: "never", safeWithSameArguments: false },
+          ));
+        }
+        if (plan.decision !== "allow") throw new Error("DECISION_DENIED");
+        let confirmed = confirmation.accepted;
         if (plan.approval.action === "confirm") {
-          const confirmation = await observeConfirmation(
-            paymentConfirmationMessage(plan),
-            user_confirmed,
-          );
           if (!confirmation.accepted) {
             return result(envelope(
               digest,
@@ -2427,7 +2566,6 @@ export async function createMcpServer(
               {
                 plan,
                 confirmation_mode: confirmation.mode,
-                ...(confirmation.reason ? { reason: confirmation.reason } : {}),
               },
               { mode: "never", safeWithSameArguments: true },
             ));
@@ -2484,10 +2622,10 @@ export async function createMcpServer(
     {
       title: "Plan an exact recovery transfer",
       description:
-        "Prepare an immutable five-minute Sepolia recovery decision for one exact recipient amount. It binds the active wallet and selection epoch, destination, amount, configured Tornado denomination, conservative fee reserve, live private-balance snapshot, and state revision. It is independent of delegated payment authority and is not a full-wallet sweep. Any additional private balance remains unrecovered and needs a later separately confirmed operation.",
+        "REQUEST-TURN TOOL ONLY. Prepare an immutable five-minute Sepolia recovery decision for one exact recipient amount. Pass amount_native as an ordinary Sepolia ETH decimal string or a safe whole JSON number; fractional amounts must be strings and values are never wei. It binds the active wallet and selection epoch, destination, amount, configured Tornado denomination, conservative fee reserve, live private-balance snapshot, and state revision. Show the exact recovery effect, end the turn, and wait for a new user chat confirmation. It is not a full-wallet sweep; any additional private balance remains in place. Never direct the user to another interface.",
       inputSchema: z.object({
         recipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
-        amount_native: z.string().regex(/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/u),
+        amount_native: nativeAmountSchema,
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -2517,28 +2655,42 @@ export async function createMcpServer(
     {
       title: "Execute a confirmed exact recovery transfer",
       description:
-        "Execute one unexpired exact-amount recovery decision after confirmation. Kohaku withdraws one configured Tornado denomination to a fresh wallet-controlled account and tail-calls the exact recipient amount while reserving a conservative fee remainder. The durable request is consumed before Kohaku is invoked. This does not recover every note; never retry an unresolved request with a new ID.",
+        "CONFIRMATION-TURN TOOL. When the current user chat message explicitly approves the immediately preceding exact recovery plan, call this now with its exact internal decision_id and user_confirmed=true. Do not ask again, replan, or tell the user to find a native/external interface, button, or prompt. Kohaku withdraws one configured Tornado denomination to a fresh wallet-controlled account and sends the exact recipient amount while reserving a conservative fee remainder. This does not recover every note; never retry an unresolved request with a new ID.",
       inputSchema: z.object({
         decision_id: z.string().startsWith("wr_"),
         client_request_id: z.string().min(8).max(200).optional(),
-        user_confirmed: z.boolean().optional(),
+        user_confirmed: z.boolean().optional().describe(
+          "True only when the current user chat message explicitly approves the immediately preceding exact recovery plan.",
+        ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
     async ({ decision_id, client_request_id, user_confirmed }) => {
       try {
         const plan = await runtime.getRecoveryPlan(decision_id);
-        const confirmation = await observeConfirmation(
-          `Recover exactly ${formatEthWei(BigInt(plan.amountWei))} Sepolia ETH to ${plan.recipient} from wallet “${plan.wallet.walletName}”? This consumes one ${formatEthWei(BigInt(plan.withdrawalAmountWei))} Sepolia ETH private denomination, reserves ${formatEthWei(BigInt(plan.feeReserveWei))} Sepolia ETH for fees, and may leave about ${formatEthWei(BigInt(plan.remainingPrivateBalanceEstimateWei))} Sepolia ETH private. The recovered amount becomes public on Sepolia.`,
-          user_confirmed,
-        );
+        if (plan.blockers.includes("USER_CANCELLED")) {
+          return result(envelope(
+            digest,
+            "blocked",
+            "RECOVERY_CONFIRMATION_REQUIRED",
+            { plan, confirmation_mode: "chat", reason: "cancel" },
+            { mode: "never", safeWithSameArguments: false },
+          ));
+        }
+        const confirmation = observeConfirmation(user_confirmed);
         if (!confirmation.accepted) {
+          const visiblePlan = confirmation.reason
+            ? await runtime.cancelRecoveryPlan(decision_id)
+            : plan;
           return result(envelope(digest, "blocked", "RECOVERY_CONFIRMATION_REQUIRED", {
-            plan,
+            plan: visiblePlan,
             confirmation_mode: confirmation.mode,
             ...(confirmation.reason ? { reason: confirmation.reason } : {}),
-          }));
+          }, confirmation.reason
+            ? { mode: "never", safeWithSameArguments: false }
+            : { mode: "never", safeWithSameArguments: true }));
         }
+        if (plan.decision !== "allow") throw new Error("RECOVERY_DECISION_DENIED");
         const request = await runtime.executeRecoveryTransfer({
           decisionId: decision_id,
           clientRequestId: client_request_id ?? `hermes:${decision_id}`,

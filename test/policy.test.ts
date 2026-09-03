@@ -131,7 +131,7 @@ test("an expired permission renews when its limits change", async () => {
   );
 });
 
-test("latest policy lookup binds the newest preview without skipping a denial", async () => {
+test("a denied newer preview supersedes the prior allowed preview", async () => {
   let now = 1_000;
   const controller = new WalletPolicyController({
     store: await policyStore({ maxPayments: 10 }),
@@ -142,10 +142,14 @@ test("latest policy lookup binds the newest preview without skipping a denial", 
   now += 1_000;
   const denied = await controller.plan({ maxPayments: 101 });
 
-  assert.equal((await controller.getLatestPlan()).decisionId, denied.decisionId);
+  await assert.rejects(controller.getLatestPlan(), /POLICY_DECISION_NOT_FOUND/);
+  const superseded = await controller.getPlan(allowed.decisionId);
+  assert.equal(superseded.decision, "deny");
+  assert.ok(superseded.blockers.includes("SUPERSEDED_BY_NEW_PREVIEW"));
+  assert.equal((await controller.getPlan(denied.decisionId)).decision, "deny");
   await assert.rejects(
     controller.apply({
-      decisionId: (await controller.getLatestPlan()).decisionId,
+      decisionId: denied.decisionId,
       userConfirmed: true,
     }),
     /POLICY_DECISION_DENIED/,

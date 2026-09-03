@@ -92,18 +92,19 @@ export class WalletPolicyController {
   }
 
   async getLatestPlan(): Promise<PolicyUpdatePlan> {
-    const plans = Object.values((await this.#store.read()).policyPlans);
-    let latest: PolicyUpdatePlan | undefined;
-    for (const plan of plans) {
-      if (
-        latest === undefined ||
-        new Date(plan.createdAt).getTime() >= new Date(latest.createdAt).getTime()
-      ) {
-        latest = plan;
-      }
-    }
-    if (!latest) throw new Error("POLICY_DECISION_NOT_FOUND");
-    return latest;
+    const state = await this.#store.read();
+    const active = activeWalletContext(state);
+    const now = this.#clock.now().getTime();
+    const eligible = Object.values(state.policyPlans).filter((plan) =>
+      plan.decision === "allow" &&
+      !plan.appliedAt &&
+      new Date(plan.expiresAt).getTime() > now &&
+      sameWallet(plan.wallet, active.wallet) &&
+      plan.authorizationId === active.authorizationId
+    );
+    if (eligible.length === 0) throw new Error("POLICY_DECISION_NOT_FOUND");
+    if (eligible.length > 1) throw new Error("POLICY_DECISION_AMBIGUOUS");
+    return eligible[0]!;
   }
 
   async plan(input: {
@@ -222,9 +223,30 @@ export class WalletPolicyController {
       approval: { action: "confirm", userConfirmationRequired: true },
     };
     await this.#store.update((draft) => {
+      // A newer preview supersedes every older pending preview. Confirmation
+      // still requires the exact hidden ID of the card shown to the user.
+      for (const existing of Object.values(draft.policyPlans)) {
+        if (!existing.appliedAt && existing.decision === "allow") {
+          existing.decision = "deny";
+          if (!existing.blockers.includes("SUPERSEDED_BY_NEW_PREVIEW")) {
+            existing.blockers.push("SUPERSEDED_BY_NEW_PREVIEW");
+          }
+        }
+      }
       draft.policyPlans[plan.decisionId] = plan;
     });
     return plan;
+  }
+
+  async cancel(decisionId: string): Promise<PolicyUpdatePlan> {
+    const state = await this.#store.update((draft) => {
+      const plan = draft.policyPlans[decisionId];
+      if (!plan) throw new Error("POLICY_DECISION_NOT_FOUND");
+      if (plan.appliedAt) throw new Error("POLICY_DECISION_ALREADY_APPLIED");
+      plan.decision = "deny";
+      if (!plan.blockers.includes("USER_CANCELLED")) plan.blockers.push("USER_CANCELLED");
+    });
+    return state.policyPlans[decisionId]!;
   }
 
   async apply(input: {
@@ -238,6 +260,9 @@ export class WalletPolicyController {
     const state = await this.#store.update((draft) => {
       const plan = draft.policyPlans[input.decisionId];
       if (!plan) throw new Error("POLICY_DECISION_NOT_FOUND");
+      if (plan.blockers.includes("USER_CANCELLED")) {
+        throw new Error("POLICY_DECISION_CANCELLED");
+      }
       if (plan.decision !== "allow") throw new Error("POLICY_DECISION_DENIED");
       if (plan.appliedAt) {
         if (!plan.appliedPolicy) throw new Error("POLICY_RECEIPT_MISSING");

@@ -351,10 +351,16 @@ test("a previous wallet restores its setup, requires reauthorization, and become
   );
   try {
     const before = await runtime.listWallets() as {
-      wallets: Array<{ wallet_id: string; name: string; authorization_status: string }>;
+      wallets: Array<{
+        wallet_id: string;
+        name: string;
+        setup_phase: string;
+        authorization_status: string;
+      }>;
     };
     const original = before.wallets.find(({ name }) => name === "agent-boost");
     assert.ok(original);
+    assert.equal(original.setup_phase, "private_ready");
     assert.equal(original.authorization_status, "expired");
 
     const created = await runtime.createWallet({
@@ -391,6 +397,20 @@ test("a previous wallet restores its setup, requires reauthorization, and become
       decisionId: reauthorization.decisionId,
       userConfirmed: true,
     });
+
+    const alreadySelected = await runtime.selectWallet({
+      walletId: original.wallet_id,
+      userConfirmed: false,
+    }) as {
+      changed: boolean;
+      setup_phase: string;
+      authorization_required: boolean;
+      authorization_status: string;
+    };
+    assert.equal(alreadySelected.changed, false);
+    assert.equal(alreadySelected.setup_phase, "private_ready");
+    assert.equal(alreadySelected.authorization_required, false);
+    assert.equal(alreadySelected.authorization_status, "active");
 
     const transfer = await runtime.planRegularTransfer({
       recipient: "0x2222222222222222222222222222222222222222",

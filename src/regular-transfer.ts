@@ -226,9 +226,17 @@ export class RegularTransferController {
       if (existing.decisionId !== input.decisionId) throw new Error("IDEMPOTENCY_CONFLICT");
       return existing;
     }
+    if (Object.values(state.regularRequests).some(
+      (request) => request.decisionId === input.decisionId,
+    )) {
+      throw new Error("REGULAR_TRANSFER_DECISION_ALREADY_CONSUMED");
+    }
     if (this.#execution) throw new Error("REGULAR_TRANSFER_ALREADY_EXECUTING");
     const plan = state.regularPlans[input.decisionId];
     if (!plan) throw new Error("REGULAR_TRANSFER_DECISION_NOT_FOUND");
+    if (plan.blockers.includes("USER_CANCELLED")) {
+      throw new Error("REGULAR_TRANSFER_DECISION_CANCELLED");
+    }
     if (plan.decision !== "allow") throw new Error("REGULAR_TRANSFER_DECISION_DENIED");
     if (new Date(plan.expiresAt).getTime() <= this.#clock.now().getTime()) {
       throw new Error("REGULAR_TRANSFER_DECISION_EXPIRED");
@@ -247,6 +255,21 @@ export class RegularTransferController {
     const plan = (await this.#store.read()).regularPlans[decisionId];
     if (!plan) throw new Error("REGULAR_TRANSFER_DECISION_NOT_FOUND");
     return plan;
+  }
+
+  async cancel(decisionId: string): Promise<RegularTransferPlan> {
+    const state = await this.#store.update((draft) => {
+      const plan = draft.regularPlans[decisionId];
+      if (!plan) throw new Error("REGULAR_TRANSFER_DECISION_NOT_FOUND");
+      if (Object.values(draft.regularRequests).some(
+        (request) => request.decisionId === decisionId,
+      )) {
+        throw new Error("REGULAR_TRANSFER_DECISION_ALREADY_CONSUMED");
+      }
+      plan.decision = "deny";
+      if (!plan.blockers.includes("USER_CANCELLED")) plan.blockers.push("USER_CANCELLED");
+    });
+    return state.regularPlans[decisionId]!;
   }
 
   async getRequest(requestId: string): Promise<RegularTransferRequest> {
@@ -370,7 +393,13 @@ export class RegularTransferController {
       const onboarding = draft.onboarding;
       const storedPlan = draft.regularPlans[plan.decisionId];
       const active = activeAuthorization(draft);
-      if (!storedPlan || storedPlan.decision !== "allow" ||
+      if (Object.values(draft.regularRequests).some(
+        (existing) => existing.decisionId === plan.decisionId,
+      )) {
+        throw new Error("REGULAR_TRANSFER_DECISION_ALREADY_CONSUMED");
+      }
+      if (!storedPlan ||
+        storedPlan.decision !== "allow" ||
         storedPlan.intentDigest !== plan.intentDigest ||
         storedPlan.recipient !== plan.recipient || storedPlan.amountWei !== plan.amountWei ||
         storedPlan.gasReserveWei !== plan.gasReserveWei ||
