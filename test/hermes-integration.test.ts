@@ -67,6 +67,7 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.equal(result.restartRequired, true);
   assert.match(result.recommendation, /did not restart Hermes/u);
   assert.match(result.recommendation, /\/reload-skills.*\/reload-mcp/u);
+  assert.match(result.recommendation, /\/new.*!new/u);
   assert.ok(result.configBackupPath);
   assert.equal(
     await readFile(result.configBackupPath, "utf8"),
@@ -74,8 +75,10 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   );
 
   const config = parse(await readFile(fixture.configPath, "utf8")) as {
+    agent: { tool_use_enforcement: boolean };
     mcp_servers: Record<string, unknown>;
   };
+  assert.equal(config.agent.tool_use_enforcement, true);
   assert.deepEqual(
     config.mcp_servers["agent-boost"],
     createHermesServerConfig(result.executablePath),
@@ -159,6 +162,23 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
     operationalSkill,
     /mcp_agent_boost_|mcp__agent_boost__/u,
   );
+});
+
+test("preserves an advanced user's explicit tool-use setting", async () => {
+  const fixture = await createFixture(
+    "agent:\n  tool_use_enforcement: false\nmodel:\n  default: test\n",
+  );
+  const calls: string[][] = [];
+
+  await installHermesIntegration({
+    executablePath: fixture.executablePath,
+    runCommand: successfulRunner(fixture.configPath, calls),
+  });
+
+  const config = parse(await readFile(fixture.configPath, "utf8")) as {
+    agent: { tool_use_enforcement: boolean };
+  };
+  assert.equal(config.agent.tool_use_enforcement, false);
 });
 
 test("checked-in Hermes YAML stays identical to the generated config", async () => {
@@ -268,6 +288,23 @@ test("reports MCP validation failure without restarting Hermes", async () => {
 
 test("rejects a malformed mcp_servers section before making changes", async () => {
   const original = "mcp_servers: not-a-mapping\n";
+  const fixture = await createFixture(original);
+  const calls: string[][] = [];
+
+  await assert.rejects(
+    installHermesIntegration({
+      executablePath: fixture.executablePath,
+      runCommand: successfulRunner(fixture.configPath, calls),
+    }),
+    (error: unknown) =>
+      error instanceof HermesInstallError && error.code === "CONFIG_INVALID",
+  );
+  assert.equal(await readFile(fixture.configPath, "utf8"), original);
+  assert.deepEqual(calls, [["hermes", "config", "path"]]);
+});
+
+test("rejects a malformed agent section before making changes", async () => {
+  const original = "agent: not-a-mapping\n";
   const fixture = await createFixture(original);
   const calls: string[][] = [];
 

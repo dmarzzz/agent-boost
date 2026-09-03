@@ -2,8 +2,9 @@
 
 Agent Boost is a stdio MCP server plus two Hermes skills. The one-time installer
 places the executable and pinned Kohaku dependency locally, copies the skills
-into the active Hermes profile, adds one conflict-safe MCP entry, and runs
-`hermes mcp test agent-boost`.
+into the active Hermes profile, adds one conflict-safe MCP entry, enables
+Hermes tool-use enforcement when the operator has not already chosen a value,
+and runs `hermes mcp test agent-boost`.
 
 ## Supported hosts
 
@@ -22,13 +23,18 @@ The installer never replaces an existing, different `agent-boost` MCP entry.
 It creates timestamped backups before changing existing Hermes config or skill
 files. Repeat installation with the same content is idempotent.
 
-Restart Hermes once, or enter `/reload-skills` followed by `/reload-mcp` in a
-local conversation. Over Matrix, use `!reload-skills` followed by
-`!reload-mcp`.
+Restart Hermes once and begin a fresh conversation. The no-restart path is
+`/reload-skills`, `/reload-mcp`, then `/new` locally. Over Matrix, use
+`!reload-skills`, `!reload-mcp`, then `!new`. The fresh session prevents facts
+and behavioral assumptions from the prior contract surviving an upgrade; the
+old transcript remains in Hermes history.
 
 ## Generated MCP configuration
 
 ```yaml
+agent:
+  tool_use_enforcement: true
+
 mcp_servers:
   agent-boost:
     command: /absolute/path/to/agent-boost
@@ -49,6 +55,10 @@ mcp_servers:
       resources: false
       prompts: false
 ```
+
+`agent.tool_use_enforcement: true` is the safe default only when the setting is
+absent. The installer preserves an explicit operator value, including `false`,
+so an advanced user remains in control of the wider Hermes behavior.
 
 The native names above are the stable contract. Any prefix Hermes adds to a
 model-visible tool name is a host implementation detail.

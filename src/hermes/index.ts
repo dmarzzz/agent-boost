@@ -109,7 +109,7 @@ const DEFAULT_OPERATIONAL_SKILL = fileURLToPath(
 );
 
 const RESTART_RECOMMENDATION =
-  "If Hermes is already running, restart it once before setup. The no-restart commands are /reload-skills then /reload-mcp in the local CLI, or !reload-skills then !reload-mcp over Matrix. The installer did not restart Hermes.";
+  "If Hermes is already running, restart it once and start a fresh conversation before setup. The no-restart commands are /reload-skills then /reload-mcp in the local CLI, or !reload-skills then !reload-mcp over Matrix; then use /new locally or !new over Matrix so stale facts do not survive the upgrade. The installer did not restart Hermes or reset its sessions.";
 
 /**
  * Install Agent Boost into the active Hermes profile without restarting Hermes.
@@ -139,6 +139,16 @@ export async function installHermesIntegration(
       { configPath },
     );
   }
+  const agentConfig = configValue?.agent;
+  if (agentConfig !== undefined && !isPlainRecord(agentConfig)) {
+    throw new HermesInstallError(
+      "CONFIG_INVALID",
+      "The Hermes `agent` value must be a YAML mapping.",
+      { configPath },
+    );
+  }
+  const shouldDefaultToolUseEnforcement =
+    agentConfig === undefined || agentConfig.tool_use_enforcement === undefined;
   const existingServer =
     isPlainRecord(mcpServers) && HERMES_SERVER_NAME in mcpServers
       ? mcpServers[HERMES_SERVER_NAME]
@@ -154,9 +164,13 @@ export async function installHermesIntegration(
     }
   }
 
-  const configChanged = existingServer === undefined;
-  if (configChanged) {
+  const configChanged =
+    existingServer === undefined || shouldDefaultToolUseEnforcement;
+  if (existingServer === undefined) {
     document.setIn(["mcp_servers", HERMES_SERVER_NAME], desiredServer);
+  }
+  if (shouldDefaultToolUseEnforcement) {
+    document.setIn(["agent", "tool_use_enforcement"], true);
   }
 
   const skillsDirectory = join(dirname(configPath), "skills");
