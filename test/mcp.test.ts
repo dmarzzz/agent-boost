@@ -689,6 +689,19 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   );
   assert.doesNotMatch(JSON.stringify(policy), new RegExp(WALLET_ADDRESS, "u"));
 
+  const policyPlanTool = tools.tools.find(
+    (tool) => tool.name === "wallet_plan_policy_update",
+  );
+  const policyApplyTool = tools.tools.find(
+    (tool) => tool.name === "wallet_apply_policy_update",
+  );
+  assert.match(policyPlanTool?.description ?? "", /REQUEST-TURN TOOL ONLY/u);
+  assert.match(policyApplyTool?.title ?? "", /after yes or ✅/u);
+  const policyApplyRequired = (policyApplyTool?.inputSchema as {
+    required?: string[];
+  }).required ?? [];
+  assert.ok(!policyApplyRequired.includes("decision_id"));
+
   const policyPlan = await client.callTool({
     name: "wallet_plan_policy_update",
     arguments: {
@@ -720,10 +733,6 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   assert.match(
     policyPlanText?.type === "text" ? policyPlanText.text : "",
     /end this turn[\s\S]*new user message/u,
-  );
-  assert.match(
-    policyPlanText?.type === "text" ? policyPlanText.text : "",
-    /If it is yes, ✅[\s\S]*omit decision_id NOW/u,
   );
   assert.doesNotMatch(
     policyPlanText?.type === "text" ? policyPlanText.text : "",

@@ -589,7 +589,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     if (code === "POLICY_UPDATE_DENIED") {
       return `Wallet policy change blocked: ${formatPolicyText(proposed)}.${formatBlockers(plan)} Explain the blocker in plain language and do not show internal IDs.`;
     }
-    return `PREVIEW ONLY — NOT APPLIED. First inspect the current user message. If it is yes, ✅, or another confirmation of a policy preview already shown in the preceding assistant turn, call wallet_apply_policy_update with user_confirmed true and omit decision_id NOW; do not reply or show another preview. Otherwise, this wallet policy change is ready for approval: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes, then end this turn and wait for a new user message. Never invent an ID.`;
+    return `PREVIEW ONLY — NOT APPLIED. Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes, then end this turn and wait for a new user message. Do not call wallet_apply_policy_update until that later confirmation message. After confirmation, call it with user_confirmed true and omit decision_id so Agent Boost binds the latest preview safely. Never invent an ID.`;
   }
 
   if (code === "POLICY_UPDATED") {
@@ -1641,9 +1641,9 @@ export async function createMcpServer(
   server.registerTool(
     "wallet_plan_policy_update",
     {
-      title: "Preview a wallet permission change",
+      title: "Preview a requested wallet permission change—not a confirmation",
       description:
-        "The agent calls this after the user asks to change the private-payment policy, never when the current user message confirms an already displayed preview. If it is accidentally called on a confirmation turn, follow the returned recovery instruction and apply the latest preview without displaying another card. Inputs use ordinary native-token decimals, never wei. Any subset may change. If max_payments or per_payment_limit_native changes and lifetime_limit_native is omitted, the total becomes their product. Expired permissions renew for the default seven days unless a duration is supplied. Planning changes nothing. Show one plain-English permission card and request ordinary confirmation. Explain that policy changes do not move funds between the main account and private payment pocket.",
+        "REQUEST-TURN TOOL ONLY. Call this when the user asks for new private-payment limits. Never call it when the current user message is yes, approve, ✅, or another confirmation of a preview already displayed; wallet_apply_policy_update is the confirmation-turn tool. Inputs use ordinary native-token decimals, never wei. Any subset may change. If max_payments or per_payment_limit_native changes and lifetime_limit_native is omitted, the total becomes their product. Expired permissions renew for the default seven days unless a duration is supplied. Planning changes nothing. Show one plain-English permission card and request ordinary confirmation.",
       inputSchema: z.object({
         max_payments: z.number().int().positive().max(100).optional(),
         per_payment_limit_native: z.string().regex(
@@ -1707,7 +1707,7 @@ export async function createMcpServer(
   server.registerTool(
     "wallet_apply_policy_update",
     {
-      title: "Apply an approved wallet permission change",
+      title: "Confirm the latest wallet permission preview after yes or ✅",
       description:
         "The agent—not the user—calls this only after showing the exact permission card from wallet_plan_policy_update, ending that turn, and receiving ordinary confirmation such as yes or ✅ in a new user message. For that normal continuation, pass user_confirmed true and omit decision_id; Agent Boost binds the most recent preview and still rejects denied, expired, or stale state. Calls without user_confirmed true never open native approval and never apply. Never call this in the same turn as wallet_plan_policy_update, replan after confirmation, or invent an ID. This changes local delegated authority but never sends or moves funds.",
       inputSchema: z.object({
