@@ -5,6 +5,9 @@
 - Added a deterministic, privacy-safe wallet tree for Hermes: friendly profile
   names with sibling main/private balances, explicit live/last-known freshness,
   and no addresses, wallet IDs, raw atomic values, or aggregate total.
+- Hardened legacy wallet migration so old payment plans that predate the
+  approval field are retained for audit but forced to a non-executable,
+  replan-required state instead of preventing Agent Boost startup.
 - README cut to the essentials; the install details, demo walkthrough, tools,
   configuration, privacy claims, and runtime hardening notes moved to `docs/`
   with an index at `docs/README.md`.

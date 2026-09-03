@@ -37,11 +37,16 @@ interface LegacyPolicyUpdatePlan extends Omit<PolicyUpdatePlan, "wallet"> {
   wallet?: PolicyUpdatePlan["wallet"];
 }
 
+interface LegacyPaymentPlan extends Omit<PaymentPlan, "authorization" | "approval"> {
+  authorization?: PaymentPlan["authorization"];
+  approval?: PaymentPlan["approval"];
+}
+
 interface LegacyStateDocument {
   version: 1;
   wallet?: { activeName: string };
   onboarding?: OnboardingRecord;
-  plans?: Record<string, PaymentPlan>;
+  plans?: Record<string, LegacyPaymentPlan>;
   policyPlans?: Record<string, LegacyPolicyUpdatePlan>;
   requests?: Record<string, PaymentRequest>;
 }
@@ -134,17 +139,19 @@ const paymentPlanBase = {
   expiresAt: timestampSchema,
   decision: z.enum(["allow", "deny", "indeterminate"]),
   blockers: z.array(idSchema),
-  approval: z.object({
-    action: z.enum(["allow", "confirm", "deny"]),
-    userConfirmationRequired: z.boolean(),
-  }).strict(),
 };
+const paymentApprovalSchema = z.object({
+  action: z.enum(["allow", "confirm", "deny"]),
+  userConfirmationRequired: z.boolean(),
+}).strict();
 const paymentPlanSchema = z.object({
   ...paymentPlanBase,
+  approval: paymentApprovalSchema,
   authorization: authorizationSchema,
 }).strict();
 const legacyPaymentPlanSchema = z.object({
   ...paymentPlanBase,
+  approval: paymentApprovalSchema.optional(),
   authorization: authorizationSchema.optional(),
 }).strict();
 const paymentRequestBase = {
@@ -705,7 +712,7 @@ function migrateV1(
   const state: StateDocument = {
     version: 2,
     ...(legacy.onboarding ? { onboarding: structuredClone(legacy.onboarding) } : {}),
-    plans: legacy.plans ?? {},
+    plans: structuredClone(legacy.plans ?? {}) as Record<string, PaymentPlan>,
     policyPlans: structuredClone(legacy.policyPlans ?? {}) as Record<string, PolicyUpdatePlan>,
     requests: legacy.requests ?? {},
     recoveryPlans: {},

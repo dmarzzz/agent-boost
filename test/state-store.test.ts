@@ -132,13 +132,50 @@ test("StateStore conservatively migrates pre-policy-editor wallets", async () =>
         enabled: true,
       },
     },
-    plans: {},
-    requests: {},
+    plans: {
+      wd_legacy: {
+        version: 1,
+        decisionId: "wd_legacy",
+        recipient: "0x2222222222222222222222222222222222222222",
+        amountWei: "1",
+        intentDigest: `sha256:${"0".repeat(64)}`,
+        createdAt: new Date(0).toISOString(),
+        expiresAt: new Date(1).toISOString(),
+        decision: "allow",
+        blockers: [],
+      },
+    },
+    requests: {
+      req_legacy: {
+        version: 1,
+        requestId: "req_legacy",
+        clientRequestId: "hermes:wd_legacy",
+        decisionId: "wd_legacy",
+        recipient: "0x2222222222222222222222222222222222222222",
+        amountWei: "1",
+        phase: "indeterminate",
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      },
+    },
   }, null, 2)}\n`, "utf8");
 
   await store.initialize();
 
   const migrated = await store.read();
   assert.equal(migrated.onboarding?.delegation.maxPayments, 1);
+  assert.equal(migrated.plans.wd_legacy?.decision, "deny");
+  assert.deepEqual(migrated.plans.wd_legacy?.approval, {
+    action: "deny",
+    userConfirmationRequired: false,
+  });
+  assert.ok(migrated.plans.wd_legacy?.authorization.authorizationId.startsWith("auth_"));
+  assert.equal(
+    migrated.requests.req_legacy?.authorization.authorizationId,
+    migrated.plans.wd_legacy?.authorization.authorizationId,
+  );
+  assert.deepEqual(migrated.plans.wd_legacy?.blockers, [
+    "STATE_MIGRATION_REPLAN_REQUIRED",
+  ]);
   assert.deepEqual(migrated.policyPlans, {});
 });
