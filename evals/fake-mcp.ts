@@ -540,7 +540,7 @@ const runtime: AgentBoostRuntime = {
     // Selection and archival resolve friendly names through this same runtime
     // method. Record discovery once so the trace reflects public tool calls
     // instead of those internal lookups across separate Hermes turns.
-    await traceOnce("wallet_list", {});
+    await traceOnce("wallet_manage_profiles", {});
     const state = await loadWalletState();
     const inactiveNames = scenario === "wallet-ambiguous" || evalCase === "ambiguous-old-wallet"
       ? ["saved-wallet", "travel-wallet"] as const

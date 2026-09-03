@@ -115,16 +115,16 @@ Ask Hermes naturally:
 
 > Load my old wallet.
 
-Hermes calls `wallet_list`. If exactly one inactive profile exists, “old” is
-unambiguous; otherwise Hermes asks using friendly names only. After wallet-
+Hermes calls `wallet_manage_profiles`. If exactly one inactive profile exists,
+“old” is unambiguous; otherwise Hermes asks using friendly names only. After wallet-
 switch approval in chat, `wallet_select` archives the current workflow, restores the
 selected profile's durable setup and request state, advances its selection
 epoch, and disables signing. Hermes then shows the exact fresh authority and
 asks for a second, separate reauthorization approval. Only after
 `wallet_reauthorize` succeeds can a new regular or private transfer be planned.
 
-`wallet_list` also discovers unregistered local Kohaku wallets. A Sepolia entry
-can be adopted by friendly name without entering a seed, password, private key,
+`wallet_manage_profiles` also discovers unregistered local Kohaku wallets. A
+Sepolia entry can be adopted by friendly name without entering a seed, password, private key,
 or filesystem path. Named wallet creation and inactive-profile archival follow
 the same confirmation discipline. Archival retains encrypted state and is
 reversible by selecting the profile later.

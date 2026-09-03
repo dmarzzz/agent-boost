@@ -644,6 +644,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
       "wallet_get_request",
       "wallet_get_tree",
       "wallet_list",
+      "wallet_manage_profiles",
       "wallet_plan_policy_update",
       "wallet_plan_private_payment",
       "wallet_plan_reauthorization",
@@ -673,8 +674,27 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
     (tool) => tool.name === "wallet_get_tree",
   );
   assert.match(walletTreeTool?.description ?? "", /all wallets/u);
+  assert.match(walletTreeTool?.description ?? "", /Show me my Agent Boost wallets/u);
+  assert.match(walletTreeTool?.description ?? "", /correct tool even when the user says “list”/u);
+  assert.match(walletTreeTool?.description ?? "", /before or after this tool/u);
+  assert.match(walletTreeTool?.description ?? "", /this is the complete overview/u);
   assert.match(walletTreeTool?.description ?? "", /folders organize views only/u);
-  assert.match(walletTreeTool?.description ?? "", /entire final answer is data\.rendered exactly/u);
+  assert.match(walletTreeTool?.description ?? "", /return it byte-for-byte/u);
+  const walletManagementTool = tools.tools.find(
+    (tool) => tool.name === "wallet_manage_profiles",
+  );
+  assert.match(walletManagementTool?.description ?? "", /SAVED-PROFILE MANAGEMENT ONLY/u);
+  assert.match(walletManagementTool?.description ?? "", /Which wallets can I load/u);
+  assert.match(walletManagementTool?.description ?? "", /Generic wallet overviews belong to wallet_get_tree/u);
+  assert.doesNotMatch(
+    walletManagementTool?.description ?? "",
+    /Show me my Agent Boost wallets|show\/list my wallets|all balances|subwallets/u,
+  );
+  const legacyWalletListTool = tools.tools.find(
+    (tool) => tool.name === "wallet_list",
+  );
+  assert.match(legacyWalletListTool?.description ?? "", /COMPATIBILITY ALIAS/u);
+  assert.match(legacyWalletListTool?.description ?? "", /wallet_manage_profiles/u);
   const egressStatus = await client.callTool({ name: "egress_status", arguments: {} });
   assert.equal(
     (egressStatus.structuredContent as { data: { status: string } }).data.status,
@@ -845,19 +865,40 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
     walletTreeData.rendered,
     [
       "🗂 wallets/",
-      "|-- 💼 agent-boost/ [active]",
-      "|   |-- 🌐 main/      ≈68.899 Sepolia ETH · live",
-      "|   `-- 🥷 private/   0.25 Sepolia ETH · live",
-      "`-- 💼 travel/",
-      "    |-- 🌐 main/      0.75 Sepolia ETH · live",
-      "    `-- 🥷 private/   0.1 Sepolia ETH · last known",
+      "├── 💼 agent-boost/ [active]",
+      "│\u00a0\u00a0\u00a0├── 🌐 main/ — ≈68.899 Sepolia ETH · live",
+      "│\u00a0\u00a0\u00a0└── 🥷 private/ — 0.25 Sepolia ETH · live",
+      "└── 💼 travel/",
+      "\u00a0\u00a0\u00a0\u00a0├── 🌐 main/ — 0.75 Sepolia ETH · live",
+      "\u00a0\u00a0\u00a0\u00a0└── 🥷 private/ — 0.1 Sepolia ETH · last known",
       "",
       "Folders organize wallet views; they do not imply custody or control.",
     ].join("\n"),
   );
+  assert.doesNotMatch(walletTreeData.rendered, /`/u);
+  assert.doesNotMatch(walletTreeData.rendered, /(?:^|\n) {4}/u);
   assert.equal(walletTreeData.addresses_included, false);
   assert.equal(walletTreeData.raw_atomic_values_included, false);
   assert.equal(walletTreeData.archived_profiles_hidden, 1);
+  const walletTreeText = walletTree.content.find((block) => block.type === "text");
+  assert.equal(walletTreeText?.type, "text");
+  assert.equal(
+    walletTreeText?.type === "text" ? walletTreeText.text : "",
+    walletTreeData.rendered,
+  );
+  const walletTreePresentation = (walletTree.structuredContent as {
+    presentation: { notice: { text: string } };
+  }).presentation;
+  assert.equal(walletTreePresentation.notice.text, walletTreeData.rendered);
+  const walletTreeModelContext = walletTree._meta?.["org.agentboost/model-context"] as {
+    rendered: string;
+    instruction: string;
+  };
+  assert.equal(walletTreeModelContext.rendered, walletTreeData.rendered);
+  assert.match(walletTreeModelContext.instruction, /DIRECT OVERVIEW/iu);
+  assert.match(walletTreeModelContext.instruction, /call no other tool/iu);
+  assert.match(walletTreeModelContext.instruction, /onboarding or another larger workflow/iu);
+  assert.match(walletTreeModelContext.instruction, /Do not introduce, summarize, count, explain/iu);
   assert.equal(walletTreeData.relationship.implies_control, false);
   assert.deepEqual(
     walletTreeData.profiles.map((profile) => ({
@@ -1780,9 +1821,12 @@ test("wallet lifecycle confirmations use friendly names and keep internal IDs ou
   });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
-    const list = await client.callTool({ name: "wallet_list", arguments: {} });
+    const list = await client.callTool({ name: "wallet_manage_profiles", arguments: {} });
     const listText = list.content.find((block) => block.type === "text");
     assert.equal(listText?.type, "text");
+    assert.match(listText.text, /management inventory only/u);
+    assert.match(listText.text, /show me my Agent Boost wallets/u);
+    assert.match(listText.text, /perform the live wallet-tree read now/u);
     assert.match(listText.text, /saved-wallet/u);
     assert.doesNotMatch(listText.text, /wallet_[A-Za-z0-9-]+/u);
 
@@ -2357,8 +2401,28 @@ test("every shipped MCP tool has at least two contract-level flows", async () =>
     );
     runtime.onboardingStatus = async () => ({
       ...waiting,
-      phase: "failed",
+      phase: "private_ready",
       revision: waiting.revision + 1,
+      publicBalanceWei: waiting.requiredFundingWei,
+      privateBalanceWei: waiting.shieldAmountWei,
+    });
+    const readyStatus = await exercise("onboarding_status", "private ready", {
+      setup_id: "setup_12345678",
+    });
+    expectCode(readyStatus, "ONBOARDING_STATUS", "ready");
+    const readyStatusText = readyStatus.content.find((block) => block.type === "text");
+    assert.match(
+      readyStatusText?.type === "text" ? readyStatusText.text : "",
+      /do not answer yet[\s\S]*call wallet_get_tree[\s\S]*full 3\/3 setup-completion response/u,
+    );
+    assert.match(
+      readyStatusText?.type === "text" ? readyStatusText.text : "",
+      /Do not show the funding address, raw setup balances, or an invented balance summary/u,
+    );
+    runtime.onboardingStatus = async () => ({
+      ...waiting,
+      phase: "failed",
+      revision: waiting.revision + 2,
       error: { code: "SHIELD_FAILED", message: "test failure", retryable: false },
     });
     expectCode(
@@ -2390,7 +2454,16 @@ test("every shipped MCP tool has at least two contract-level flows", async () =>
       false,
     );
 
-    expectCode(await exercise("wallet_list", "empty inventory"), "WALLET_LIST", "ready");
+    expectCode(
+      await exercise("wallet_manage_profiles", "empty inventory"),
+      "WALLET_LIST",
+      "ready",
+    );
+    expectCode(
+      await exercise("wallet_list", "legacy empty inventory"),
+      "WALLET_LIST",
+      "ready",
+    );
     runtime.listWallets = async () => ({
       active_wallet_id: AUTHORIZATION.walletId,
       wallets: [
@@ -2410,7 +2483,16 @@ test("every shipped MCP tool has at least two contract-level flows", async () =>
         },
       ],
     });
-    expectCode(await exercise("wallet_list", "active inventory"), "WALLET_LIST", "ready");
+    expectCode(
+      await exercise("wallet_manage_profiles", "active inventory"),
+      "WALLET_LIST",
+      "ready",
+    );
+    expectCode(
+      await exercise("wallet_list", "legacy active inventory"),
+      "WALLET_LIST",
+      "ready",
+    );
 
     expectCode(await exercise("wallet_get_tree", "live tree"), "WALLET_TREE", "ready");
     runtime.walletTree = async () => {
@@ -2741,7 +2823,7 @@ test("every shipped MCP tool has at least two contract-level flows", async () =>
     );
 
     const shippedTools = (await client.listTools()).tools.map((tool) => tool.name).sort();
-    assert.equal(shippedTools.length, 32);
+    assert.equal(shippedTools.length, 33);
     assert.deepEqual(
       shippedTools.filter((name) => (coverage.get(name)?.size ?? 0) < 2),
       [],

@@ -103,9 +103,11 @@ short presentation hint with the human amount, status, and next action. Some
 Hermes versions prefer non-empty text and omit `structuredContent` from the
 model result, so Agent Boost also mirrors the exact redacted envelope under the
 vendor metadata key `_meta["org.agentboost/model-context"]`. Hermes preserves
-that metadata for exact decisions. Clients should treat it as agent-internal
-state and keep raw wei, phases, digests, and identifiers out of ordinary
-replies.
+that metadata for exact decisions. `WALLET_TREE` is the sole exception: because
+it has no authority or continuation handles, this key contains only the
+canonical rendered tree and a static direct-display contract. Clients should
+treat all vendor metadata as agent-internal state and keep raw wei, phases,
+digests, and identifiers out of ordinary replies.
 
 `presentation` is an optional, non-authoritative rendering contract. It gives
 clients a stable title, semantic state, real setup step, labeled fields, status
@@ -207,10 +209,11 @@ The MCP boundary rejects the response if any other field whose name contains
 
 ### `wallet_get_tree`
 
-No input. Returns one deterministic ASCII-style tree for every available wallet
-profile. Each profile folder contains sibling `main` and `private` views. Main
-balances are refreshed from Sepolia; the active private balance is refreshed
-from Kohaku; inactive private balances are explicitly labeled `last known`.
+No input. Returns one deterministic Markdown-safe Unicode tree for every
+available wallet profile. Each profile folder contains sibling `main` and
+`private` views. Main balances are refreshed from Sepolia; the active private
+balance is refreshed from Kohaku; inactive private balances are explicitly
+labeled `last known`.
 Failed reads render `unavailable`, never a cached value presented as live or an
 invented zero.
 
@@ -223,13 +226,24 @@ It excludes addresses, account IDs, wallet IDs, raw atomic values, secrets, and
 aggregate totals. Folder indentation is organizational and does not imply
 custody, ownership, recovery, revocation, or control.
 
-### `wallet_list`
+The MCP compact text and presentation notice both carry the same canonical
+rendered tree. Direct overview responses reproduce that text byte-for-byte;
+Unicode box-drawing connectors and nonbreaking indentation prevent chat
+Markdown renderers from converting branches into code spans or collapsing them.
+
+### `wallet_manage_profiles`
 
 No input. Returns registered profiles with friendly names, status, active and
 authorization state, plus local Kohaku inventory entries that are not yet
 registered. Each local entry is explicitly marked adoptable only when Kohaku
 reports Sepolia. Inventory failure never hides registered profiles. Wallet IDs
 are internal continuation handles and are excluded from compact user text.
+
+`wallet_list` remains an additive compatibility alias for generic MCP clients
+and returns the same `WALLET_LIST` envelope. Hermes omits that legacy name from
+its allowlist and safely migrates older Agent Boost configuration to
+`wallet_manage_profiles` so plain wallet-list wording cannot hit the flat
+management inventory.
 
 ### `wallet_create` and `wallet_adopt_existing`
 
@@ -240,9 +254,10 @@ schema has no seed, password, private-key, or filesystem-path input.
 
 ### `wallet_select` and `wallet_archive`
 
-Selection accepts a registered friendly `wallet_name` from `wallet_list`; an
-equivalent `name` alias and a friendly value in `wallet_id` are tolerated for
-model compatibility. An internal `wallet_id` remains accepted but is never a
+Selection accepts a registered friendly `wallet_name` from
+`wallet_manage_profiles`; an equivalent `name` alias and a friendly value in
+`wallet_id` are tolerated for model compatibility. An internal `wallet_id`
+remains accepted but is never a
 user input. Selecting the already-active profile is an unconfirmed idempotent
 read of current state and preserves active authorization. A real switch drains
 active work, privately archives the current state, restores the selected

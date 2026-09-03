@@ -21,6 +21,15 @@ const fixtures = JSON.parse(
   await readFile(join(root, "evals", "ideal-flows.json"), "utf8"),
 );
 
+const canonicalWalletTree = [
+  "🗂 wallets/",
+  "└── 💼 agent-boost/ [active]",
+  "\u00a0\u00a0\u00a0\u00a0├── 🌐 main/ — 1.5 Sepolia ETH · live",
+  "\u00a0\u00a0\u00a0\u00a0└── 🥷 private/ — 0.25 Sepolia ETH · live",
+  "",
+  "Folders organize wallet views; they do not imply custody or control.",
+].join("\n");
+
 const expectedTraces = {
   "setup-funding-qr": ["onboarding_start"],
   "setup-partial-funding": ["onboarding_status"],
@@ -30,16 +39,17 @@ const expectedTraces = {
   "start-new-demo-wallet": ["wallet_start_new_demo"],
   "advanced-setup-shows-live-policy": ["wallet_get_policy"],
   "wallet-tree-without-identifiers": ["wallet_get_tree"],
-  "saved-wallet-inventory": ["wallet_list"],
-  "already-active-wallet-needs-no-switch": ["wallet_list"],
-  "ambiguous-old-wallet": ["wallet_list"],
+  "plain-wallet-overview-uses-tree": ["wallet_get_tree"],
+  "saved-wallet-inventory": ["wallet_manage_profiles"],
+  "already-active-wallet-needs-no-switch": ["wallet_manage_profiles"],
+  "ambiguous-old-wallet": ["wallet_manage_profiles"],
   "load-and-reauthorize-previous-wallet": [
-    "wallet_list",
+    "wallet_manage_profiles",
     "wallet_select",
     "wallet_plan_reauthorization",
     "wallet_reauthorize",
   ],
-  "cancel-wallet-switch": ["wallet_list"],
+  "cancel-wallet-switch": ["wallet_manage_profiles"],
   "ambiguous-amount-clarification": [],
   "confirmed-payment-with-emoji": [
     "capabilities",
@@ -113,6 +123,11 @@ const optionalTraceTools = {
   "policy-update-with-confirmation": new Set(["wallet_get_policy"]),
 };
 
+const alternativeTraceOrders = {
+  // Both reads are non-mutating, and either may discover readiness first.
+  "setup-ready": [["capabilities", "onboarding_status", "wallet_get_tree"]],
+};
+
 const responseRules = {
   "setup-funding-qr": [
     { includes: ["1/3", "0.2", "Sepolia", "0x1111111111111111111111111111111111111111"], maxLines: 7 },
@@ -124,7 +139,12 @@ const responseRules = {
     { includes: ["2/3", "Funding found", "check again"], maxLines: 5 },
   ],
   "setup-ready": [
-    { includes: ["3/3", "Dark Mode", "Tor", "Sepolia test payment"], maxLines: 9 },
+    {
+      includes: ["3/3", "Dark Mode", "wallets/", "Tor", "Sepolia test payment"],
+      exactBlock: canonicalWalletTree,
+      excludes: ["0x", "Public balance", "Private balance"],
+      maxLines: 11,
+    },
   ],
   "setup-failed": [
     { includes: ["needs attention", "deadline", "Next"], maxLines: 4 },
@@ -137,7 +157,14 @@ const responseRules = {
     { includes: ["Current wallet permission", "1 send", "0.05", "expiry"], maxLines: 4 },
   ],
   "wallet-tree-without-identifiers": [
-    { includes: ["wallets/", "agent-boost/", "main/", "private/", "do not imply custody or control"], maxLines: 6 },
+    { includes: ["wallets/", "agent-boost/", "main/", "private/", "do not imply custody or control"], exact: canonicalWalletTree, maxLines: 6 },
+  ],
+  "plain-wallet-overview-uses-tree": [
+    {
+      includes: ["wallets/", "agent-boost/", "main/", "private/", "do not imply custody or control"],
+      exact: canonicalWalletTree,
+      maxLines: 6,
+    },
   ],
   "saved-wallet-inventory": [
     { includes: ["agent-boost", "active", "saved-wallet", "imported-wallet", "adopt"], maxLines: 6 },
@@ -236,7 +263,7 @@ const forbidden = [
   /\bmcp\b/iu,
   /\bwei\b/iu,
   /\b(?:decision_id|request_id|client_request_id|user_confirmed|wallet_id|wallet_name|amount_atomic|amount_native)\b/iu,
-  /\b(?:wallet_get_context|wallet_get_tree|wallet_list|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_start_new_demo|wallet_create|wallet_adopt_existing|wallet_select|wallet_archive|wallet_plan_reauthorization|wallet_reauthorize|wallet_plan_regular_transfer|wallet_execute_regular_transfer|wallet_get_regular_transfer_request|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|wallet_plan_recovery_transfer|wallet_execute_recovery_transfer|wallet_get_recovery_request|egress_status|egress_fetch)\b/iu,
+  /\b(?:wallet_get_context|wallet_get_tree|wallet_manage_profiles|wallet_list|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_start_new_demo|wallet_create|wallet_adopt_existing|wallet_select|wallet_archive|wallet_plan_reauthorization|wallet_reauthorize|wallet_plan_regular_transfer|wallet_execute_regular_transfer|wallet_get_regular_transfer_request|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|wallet_plan_recovery_transfer|wallet_execute_recovery_transfer|wallet_get_recovery_request|egress_status|egress_fetch)\b/iu,
   /\borg\.agentboost\/model-context\b/iu,
   /\b(?:native|external)\s+(?:approval|confirmation|interface|prompt)\b/iu,
   /\b(?:plan|decision|request|wallet)\s+id\b/iu,
@@ -263,7 +290,7 @@ async function main() {
     schema_version: "1.0",
     passed: reports.every((entry) => entry.passed),
     hermes,
-    provider: options.provider ?? "profile default",
+    provider: options.provider ?? (options.baseUrl ? "custom" : "profile default"),
     model: options.model ?? "profile default",
     cases: reports,
   };
@@ -298,6 +325,16 @@ async function runFlow(flow, hermes, options) {
     onboarding: { seen: { busy_input_prompt: true } },
     memory: { enabled: false, write_approval: true },
     skills: { write_approval: true },
+    ...(options.baseUrl
+      ? {
+          model: {
+            provider: options.provider ?? "custom",
+            default: options.model,
+            base_url: options.baseUrl,
+            api_key: "local-eval-not-a-secret",
+          },
+        }
+      : {}),
     mcp_servers: {
       "agent-boost": {
         command: tsx,
@@ -317,7 +354,7 @@ async function runFlow(flow, hermes, options) {
             "onboarding_status",
             "wallet_get_context",
             "wallet_get_tree",
-            "wallet_list",
+            "wallet_manage_profiles",
             "wallet_get_policy",
             "wallet_plan_policy_update",
             "wallet_apply_policy_update",
@@ -349,6 +386,13 @@ async function runFlow(flow, hermes, options) {
     platform_toolsets: { cli: ["agent-boost"] },
   };
   await writeFile(join(home, "config.yaml"), stringifyYaml(config), { mode: 0o600 });
+  if (options.baseUrl) {
+    await writeFile(
+      join(home, ".env"),
+      `OPENAI_BASE_URL=${options.baseUrl}\nOPENAI_API_KEY=local-eval-not-a-secret\n`,
+      { mode: 0o600 },
+    );
+  }
 
   const environment = { ...process.env };
   environment.HERMES_HOME = home;
@@ -366,6 +410,9 @@ async function runFlow(flow, hermes, options) {
         "start-new-demo-wallet",
         "advanced-setup-shows-live-policy",
       ].includes(flow.id);
+      const skillArgs = flow.skill_loading === "progressive"
+        ? []
+        : ["--skills", usesSetupSkill ? "agent-boost-setup" : "agent-boost"];
       const args = [
         "chat",
         "-q",
@@ -375,13 +422,12 @@ async function runFlow(flow, hermes, options) {
         "tool",
         "--toolsets",
         "agent-boost",
-        "--skills",
-        usesSetupSkill ? "agent-boost-setup" : "agent-boost",
+        ...skillArgs,
         "--max-turns",
         "12",
         ...(sessionId ? ["--resume", sessionId] : []),
-        ...(options.model ? ["--model", options.model] : []),
-        ...(options.provider ? ["--provider", options.provider] : []),
+        ...(!options.baseUrl && options.model ? ["--model", options.model] : []),
+        ...(!options.baseUrl && options.provider ? ["--provider", options.provider] : []),
       ];
       const result = await spawnCapture(hermes, args, {
         cwd: sandbox,
@@ -390,7 +436,9 @@ async function runFlow(flow, hermes, options) {
         stdin: "",
       });
       if (result.exitCode !== 0) {
-        const diagnostic = result.stderr.trim() || result.stdout.trim();
+        const diagnostic = [result.stderr.trim(), result.stdout.trim()]
+          .filter(Boolean)
+          .join("\n");
         throw new Error(`Hermes exited ${result.exitCode}: ${publicDiagnostic(diagnostic)}`);
       }
       sessionId = parseSessionId(result.stderr) ?? sessionId;
@@ -436,6 +484,12 @@ function grade(id, outputs, traces) {
   for (let index = 0; index < Math.min(outputs.length, rules.length); index += 1) {
     const output = outputs[index];
     const rule = rules[index];
+    if (rule.exact !== undefined && output !== rule.exact) {
+      failures.push(`turn ${index + 1} does not exactly match the canonical response`);
+    }
+    if (rule.exactBlock !== undefined && !output.includes(rule.exactBlock)) {
+      failures.push(`turn ${index + 1} is missing the exact canonical response block`);
+    }
     const visibleLines = output.split("\n").filter((line) => line.trim().length > 0).length;
     if (visibleLines > rule.maxLines) {
       failures.push(`turn ${index + 1} exceeds ${rule.maxLines} lines`);
@@ -467,9 +521,13 @@ function grade(id, outputs, traces) {
   const names = traces
     .map((entry) => entry.name)
     .filter((name) => !optional.has(name));
-  if (JSON.stringify(names) !== JSON.stringify(expectedTraces[id])) {
+  const acceptedTraces = [
+    expectedTraces[id],
+    ...(alternativeTraceOrders[id] ?? []),
+  ];
+  if (!acceptedTraces.some((trace) => JSON.stringify(names) === JSON.stringify(trace))) {
     failures.push(
-      `tool trace mismatch: expected ${expectedTraces[id].join(", ") || "none"}; received ${names.join(", ") || "none"}`,
+      `tool trace mismatch: expected ${acceptedTraces.map((trace) => trace.join(", ") || "none").join(" or ")}; received ${names.join(", ") || "none"}`,
     );
   }
   return failures;
@@ -480,20 +538,31 @@ function parseArgs(args) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--keep") options.keep = true;
-    else if (["--hermes", "--case", "--model", "--provider", "--report", "--timeout-ms"].includes(arg)) {
+    else if (["--hermes", "--case", "--model", "--provider", "--base-url", "--report", "--timeout-ms"].includes(arg)) {
       const value = args[++index];
       if (!value || value.startsWith("--")) throw new Error(`${arg} requires a value`);
       if (arg === "--case") options.cases.push(value);
       else if (arg === "--timeout-ms") options.timeoutMs = Number(value);
+      else if (arg === "--base-url") options.baseUrl = value;
       else options[arg.slice(2)] = value;
     } else if (arg === "--help" || arg === "-h") {
       process.stdout.write(
-        "Usage: npm run eval:live -- --hermes /absolute/path/to/hermes [--case ID] [--provider PROVIDER] [--model MODEL] [--report PATH] [--keep]\n",
+        "Usage: npm run eval:live -- --hermes /absolute/path/to/hermes [--case ID] [--provider PROVIDER] [--model MODEL] [--base-url URL] [--report PATH] [--keep]\n",
       );
       process.exit(0);
     } else throw new Error(`Unknown option: ${arg}`);
   }
   if (!options.hermes) throw new Error("--hermes is required");
+  if (options.baseUrl) {
+    if (!options.model) throw new Error("--base-url requires --model");
+    const baseUrl = new URL(options.baseUrl);
+    if (!["http:", "https:"].includes(baseUrl.protocol)) {
+      throw new Error("--base-url must use http or https");
+    }
+    if (!["127.0.0.1", "::1", "localhost"].includes(baseUrl.hostname)) {
+      throw new Error("--base-url is limited to a loopback model endpoint");
+    }
+  }
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) {
     throw new Error("--timeout-ms must be a positive integer");
   }

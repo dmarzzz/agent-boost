@@ -25,7 +25,7 @@ const HERMES_NATIVE_TOOLS = [
   "onboarding_start",
   "onboarding_status",
   "wallet_get_context",
-  "wallet_list",
+  "wallet_manage_profiles",
   "wallet_get_tree",
   "wallet_create",
   "wallet_adopt_existing",

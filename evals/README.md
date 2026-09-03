@@ -34,15 +34,18 @@ npm run eval:live -- --hermes "$(command -v hermes)"
 ```
 
 Use `--case confirmed-payment-with-emoji` to run one case, `--provider` and
-`--model` to pin inference, and `--report` to write a private-permission JSON report. Live cases
+`--model` to pin inference, `--base-url` for a local OpenAI-compatible model,
+and `--report` to write a private-permission JSON report. Live cases
 include saved-wallet discovery, ambiguous and already-active loads, the
 load/switch/reauthorize sequence, regular-transfer confirmation and status,
-and explicit cancellation. The runner
-creates a disposable `HERMES_HOME`, exposes only the fake Agent Boost MCP
-toolset, preloads the checked-in skills, grades participant-visible responses
-and the exact tool trace, and removes the profile afterward. It inherits the
-operator's normal inference-provider environment but never copies provider
-credentials, sessions, memory, rules, or MCP configuration. If that
+and explicit cancellation. The plain wallet-overview regression uses the exact
+production wording and leaves the skill behind Hermes progressive discovery;
+both direct tree cases require the complete response byte-for-byte. The other
+cases explicitly preload the checked-in skill. The runner creates a
+disposable `HERMES_HOME`, exposes only the fake Agent Boost MCP toolset, grades
+participant-visible responses and the exact tool trace, and removes the profile
+afterward. It inherits the operator's normal inference-provider environment but
+never copies provider credentials, sessions, memory, rules, or MCP configuration. If that
 environment has no auto-selectable provider, pass both `--provider` and
 `--model` explicitly. Keep live-wallet smoke tests
 separate and never use them for an `indeterminate` request.

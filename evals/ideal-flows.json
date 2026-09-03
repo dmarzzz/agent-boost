@@ -147,7 +147,7 @@
         {
           "actor": "assistant",
           "max_lines": 11,
-          "text": "**3/3 · Dark Mode online 🌑**\n\nThe vault combination stayed home. Hermes got the menu. 😎\n\n🗂 wallets/\n`-- 💼 agent-boost/ [active]\n    |-- 🌐 main/      1.5 Sepolia ETH · live\n    `-- 🥷 private/   0.25 Sepolia ETH · live\n\nFolders organize wallet views; they do not imply custody or control.\n**Next:** Try a Sepolia test payment."
+          "text": "**3/3 · Dark Mode online 🌑**\n\nThe vault combination stayed home. Hermes got the menu. 😎\n\n🗂 wallets/\n└── 💼 agent-boost/ [active]\n\u00a0\u00a0\u00a0\u00a0├── 🌐 main/ — 1.5 Sepolia ETH · live\n\u00a0\u00a0\u00a0\u00a0└── 🥷 private/ — 0.25 Sepolia ETH · live\n\nFolders organize wallet views; they do not imply custody or control.\n**Next:** Try a Sepolia test payment."
         }
       ]
     },
@@ -268,7 +268,33 @@
         {
           "actor": "assistant",
           "max_lines": 6,
-          "text": "🗂 wallets/\n`-- 💼 agent-boost/ [active]\n    |-- 🌐 main/      1.5 Sepolia ETH · live\n    `-- 🥷 private/   0.25 Sepolia ETH · live\n\nFolders organize wallet views; they do not imply custody or control."
+          "text": "🗂 wallets/\n└── 💼 agent-boost/ [active]\n\u00a0\u00a0\u00a0\u00a0├── 🌐 main/ — 1.5 Sepolia ETH · live\n\u00a0\u00a0\u00a0\u00a0└── 🥷 private/ — 0.25 Sepolia ETH · live\n\nFolders organize wallet views; they do not imply custody or control."
+        }
+      ]
+    },
+    {
+      "id": "plain-wallet-overview-uses-tree",
+      "title": "A plain Agent Boost wallet overview discovers and preserves the canonical tree",
+      "scenario": "setup-ready",
+      "skill_loading": "progressive",
+      "steps": [
+        {"actor": "user", "text": "Show me my agent boost wallets"},
+        {
+          "actor": "tool",
+          "name": "wallet_get_tree",
+          "arguments": {},
+          "expect": {
+            "code": "WALLET_TREE",
+            "outcome": "ready",
+            "text_includes": ["🗂 wallets/", "agent-boost/ [active]", "main/", "private/", "do not imply custody or control"],
+            "image": false,
+            "presentation": {"kind": "status", "state": "complete"}
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 6,
+          "text": "🗂 wallets/\n└── 💼 agent-boost/ [active]\n\u00a0\u00a0\u00a0\u00a0├── 🌐 main/ — 1.5 Sepolia ETH · live\n\u00a0\u00a0\u00a0\u00a0└── 🥷 private/ — 0.25 Sepolia ETH · live\n\nFolders organize wallet views; they do not imply custody or control."
         }
       ]
     },
@@ -278,7 +304,7 @@
       "scenario": "wallet-lifecycle",
       "steps": [
         {"actor": "user", "text": "Which wallets can I load?"},
-        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["Registered Sepolia wallets", "saved-wallet", "imported-wallet", "can adopt", "never show or ask the user"], "image": false, "presentation": {"kind": "status", "state": "complete"}}},
+        {"actor": "tool", "name": "wallet_manage_profiles", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["Registered Sepolia wallets", "saved-wallet", "imported-wallet", "can adopt", "never show or ask the user"], "image": false, "presentation": {"kind": "status", "state": "complete"}}},
         {"actor": "assistant", "max_lines": 4, "text": "**Saved wallets**\n- agent-boost — active\n- saved-wallet — available\n- imported-wallet — local and ready to adopt"}
       ]
     },
@@ -288,7 +314,7 @@
       "scenario": "wallet-lifecycle",
       "steps": [
         {"actor": "user", "text": "Load agent-boost."},
-        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["agent-boost (active; active)"], "image": false, "presentation": {"kind": "status", "state": "complete"}}},
+        {"actor": "tool", "name": "wallet_manage_profiles", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["agent-boost (active; active)"], "image": false, "presentation": {"kind": "status", "state": "complete"}}},
         {"actor": "assistant", "max_lines": 2, "text": "**agent-boost is already loaded**\nIts current bounded Sepolia transfer permission remains active."}
       ]
     },
@@ -298,7 +324,7 @@
       "scenario": "wallet-ambiguous",
       "steps": [
         {"actor": "user", "text": "Load my old wallet."},
-        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet", "travel-wallet"], "image": false}},
+        {"actor": "tool", "name": "wallet_manage_profiles", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet", "travel-wallet"], "image": false}},
         {"actor": "assistant", "max_lines": 2, "text": "I found two inactive saved wallets: **saved-wallet** and **travel-wallet**.\nWhich one should I load?"}
       ]
     },
@@ -308,7 +334,7 @@
       "scenario": "wallet-lifecycle",
       "steps": [
         {"actor": "user", "text": "Load my old wallet."},
-        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet", "inactive"], "image": false}},
+        {"actor": "tool", "name": "wallet_manage_profiles", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet", "inactive"], "image": false}},
         {"actor": "assistant", "max_lines": 3, "text": "**Confirm wallet switch**\nSwitch to **saved-wallet**? The current workflow will be archived and signing will stay disabled.\n**Next:** Reply ✅ to switch or ✕ to cancel."},
         {"actor": "user", "text": "Yes, switch wallets."},
         {"actor": "tool", "name": "wallet_select", "arguments": {"wallet_name": "saved-wallet", "user_confirmed": true}, "expect": {"code": "WALLET_SELECTED", "outcome": "ready", "text_includes": ["saved-wallet is now selected", "signing remains disabled"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
@@ -325,7 +351,7 @@
       "scenario": "wallet-lifecycle",
       "steps": [
         {"actor": "user", "text": "Load saved-wallet."},
-        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet"], "image": false}},
+        {"actor": "tool", "name": "wallet_manage_profiles", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet"], "image": false}},
         {"actor": "assistant", "max_lines": 3, "text": "**Confirm wallet switch**\nSwitch to **saved-wallet**? The current workflow will be archived and signing will stay disabled.\n**Next:** Reply ✅ to switch or ✕ to cancel."},
         {"actor": "user", "text": "Cancel."},
         {"actor": "assistant", "max_lines": 2, "text": "**✕ Wallet switch cancelled**\nNothing changed."}
@@ -337,7 +363,7 @@
       "scenario": "wallet-lifecycle",
       "steps": [
         {"actor": "user", "text": "Adopt imported-wallet."},
-        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["imported-wallet", "can adopt"], "image": false}},
+        {"actor": "tool", "name": "wallet_manage_profiles", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["imported-wallet", "can adopt"], "image": false}},
         {"actor": "assistant", "max_lines": 3, "text": "**Confirm wallet adoption**\nAdopt and select **imported-wallet**? The current workflow will be archived and signing will stay disabled.\n**Next:** Reply ✅ to approve or ✕ to cancel."},
         {"actor": "user", "text": "✅"},
         {"actor": "tool", "name": "wallet_adopt_existing", "arguments": {"name": "imported-wallet", "user_confirmed": true}, "expect": {"code": "WALLET_ADOPTED", "outcome": "ready", "text_includes": ["imported-wallet is now selected", "signing remains disabled"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
@@ -362,7 +388,7 @@
       "scenario": "wallet-lifecycle",
       "steps": [
         {"actor": "user", "text": "Archive saved-wallet."},
-        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet"], "image": false}},
+        {"actor": "tool", "name": "wallet_manage_profiles", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet"], "image": false}},
         {"actor": "assistant", "max_lines": 3, "text": "**Confirm wallet archive**\nArchive **saved-wallet**? Its encrypted data and history will stay on this device.\n**Next:** Reply ✅ to archive or ✕ to cancel."},
         {"actor": "user", "text": "✅"},
         {"actor": "tool", "name": "wallet_archive", "arguments": {"wallet_name": "saved-wallet", "user_confirmed": true}, "expect": {"code": "WALLET_ARCHIVED", "outcome": "ready", "text_includes": ["archived locally", "not deleted"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
