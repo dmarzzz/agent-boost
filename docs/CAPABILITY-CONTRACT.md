@@ -1,7 +1,7 @@
 # Wallet capability contract
 
 Agent Boost exposes a wallet-first MCP contract named
-`org.agentboost.wallet/1.6`. It is Sepolia-only.
+`org.agentboost.wallet/1.7`. It is Sepolia-only.
 
 The capability document is available through the read-only `capabilities`
 tool and the resource:
@@ -92,12 +92,7 @@ Every expected result appears in MCP `structuredContent`:
     "title": "Confirm private test payment",
     "state": "pending",
     "fields": [],
-    "interaction": {
-      "kind": "confirmation",
-      "transport": "mcp_elicitation",
-      "approve_label": "Approve",
-      "decline_label": "Cancel"
-    }
+    "next_action": "Show this plan, end the turn, then execute after a new user chat confirmation."
   },
   "data": {}
 }
@@ -114,12 +109,13 @@ replies.
 
 `presentation` is an optional, non-authoritative rendering contract. It gives
 clients a stable title, semantic state, real setup step, labeled fields, status
-markers, warning, next action, and interaction hint without changing the
-authority-bearing `data`. Setup uses three participant-facing steps. Payment
-confirmation uses MCP form elicitation, so clients can render native controls;
-clients without elicitation receive `PAYMENT_CONFIRMATION_REQUIRED` and use the
-same fields as a text fallback. A decline returns `PAYMENT_CANCELLED` and never
-executes the plan.
+markers, warning, and next action without changing the authority-bearing
+`data`. Setup uses three participant-facing steps. Under the default confirm
+policy, Hermes shows the exact plan in chat, ends the turn, and treats the
+user's next explicit approval message as confirmation. It then calls the
+matching execution tool with `user_confirmed: true`; users never handle an
+internal decision ID or leave the conversation for another interface. A
+decline never executes the plan.
 
 Known outcomes are `ready`, `blocked`, `awaiting_funding`, `executing`,
 `submitted`, `confirmed`, `failed`, and `indeterminate`. Retry advice is
@@ -244,10 +240,14 @@ schema has no seed, password, private-key, or filesystem-path input.
 
 ### `wallet_select` and `wallet_archive`
 
-Selection requires a registered wallet ID from `wallet_list`. It drains active
-work, privately archives the current state, restores the selected profile's
-durable onboarding state, advances its selection epoch, and deletes stale
-authorization. Archived profiles become available when selected again.
+Selection accepts a registered friendly `wallet_name` from `wallet_list`; an
+equivalent `name` alias and a friendly value in `wallet_id` are tolerated for
+model compatibility. An internal `wallet_id` remains accepted but is never a
+user input. Selecting the already-active profile is an unconfirmed idempotent
+read of current state and preserves active authorization. A real switch drains
+active work, privately archives the current state, restores the selected
+profile's durable onboarding state, advances its selection epoch, and deletes
+stale authorization. Archived profiles become available when selected again.
 
 Archival applies only to an inactive profile and retains encrypted Kohaku data,
 private workflow state, and audit history. The active profile is rejected.
@@ -288,11 +288,15 @@ balance. The policy is authority, not evidence of available funds.
 }
 ```
 
-Inputs are ordinary native-token decimals so the model does not convert wei.
-Any subset may change. When count or per-send amount changes and the total is
-omitted, the total is their product. An expired permission is renewed for the
-default seven days when another setting changes. The five-minute preview binds
-the complete current and proposed policies and changes no state.
+Inputs are ordinary native-token decimal strings so the model does not convert
+wei. Safe whole JSON numbers are also accepted. Since JSON parsing loses a
+number's original lexical form, any intended fractional value must be a string;
+parsed non-integers are rejected. Any subset may change. When count or per-send
+amount changes and the total is omitted, the total is their product. An expired
+permission is renewed for the default seven days when another setting changes.
+The five-minute preview binds the complete current and proposed policies and
+changes no wallet authority. Creating it durably supersedes any older pending
+policy preview.
 
 The controller rejects a proposal that erases already-spent amount or already-
 used sends, exceeds the count/amount/expiry ceilings, or gives a total above the
@@ -301,17 +305,39 @@ count-times-per-send envelope.
 ### `wallet_apply_policy_update`
 
 ```json
-{"user_confirmed":true}
+{"decision_id":"<internal ID from the displayed preview>","user_confirmed":true}
 ```
 
-The optional `decision_id` names an exact preview. When it is omitted, Agent
-Boost binds the most recently created preview. It applies only an allowed,
-unexpired preview after separate user confirmation. The write compares the live
-policy and used authority with the preview, then updates the delegation
-atomically. Repeating the same applied decision returns the same receipt. A
-concurrent payment or policy change makes an unapplied preview stale. This tool
-never transfers funds, changes chains, enables mainnet, or makes the main
-account spendable through the private-payment route.
+The required internal `decision_id` names the exact displayed preview; it stays
+in structured agent context and is never supplied by the user. The write
+compares the live policy and used authority with that preview, then updates the
+delegation atomically. Passing `user_confirmed:false` with the same ID durably
+cancels that preview; it cannot later apply.
+Repeating the same exact applied decision returns the same receipt. A concurrent
+payment or policy change makes an unapplied preview stale. This tool never
+transfers funds, changes chains, enables mainnet, or makes the main account
+spendable through the private-payment route.
+
+### `wallet_plan_regular_transfer`, `wallet_execute_regular_transfer`, and `wallet_get_regular_transfer_request`
+
+A regular transfer is a public Sepolia ETH send from the selected wallet's
+main account. Planning binds the exact recipient and ordinary-unit amount to a
+five-minute immutable decision, checks the shared policy envelope, reads the
+live main-account balance, and preserves the configured gas reserve. It never
+routes to the private balance or falls back to the private-payment path.
+
+Execution resolves recipient and amount only from that decision. Under the
+default policy it requires a later chat confirmation; a decline durably cancels
+the decision. One decision can create at most one durable request, even if a
+caller changes `client_request_id`; retrying the same request ID returns the
+original request. Immediately before signing, Agent Boost rechecks chain,
+selection epoch, policy expiry and counters, kill switch, live balance, and gas
+reserve. Authority remains consumed after a failed or uncertain handoff so an
+automatic retry cannot duplicate the send.
+
+The status tool reads and reconciles that exact request without rebroadcasting.
+Only a successful receipt or recipient-balance delta can produce `confirmed`;
+`submitted` and `indeterminate` remain explicitly unresolved.
 
 ### `wallet_plan_private_payment`
 
@@ -391,6 +417,13 @@ the policy.
 `user_confirmed` is Hermes's attestation about the conversation. Agent Boost
 does not independently hear or authenticate the user's speech, so this is a
 bounded demo control rather than a separate approval factor.
+
+For recoverable create, adopt, select, archive, and demo-reset actions, Hermes
+also attests that the passed action and friendly name, when applicable, match
+the exact lifecycle change it just showed. Agent Boost validates the supplied
+action/name but does not persistently bind that preview. A lifecycle change
+grants no signing authority: a distinct, immutable reauthorization plan is
+still required, and every fund movement is bound to its own exact server plan.
 
 MCP is not an OS sandbox. Same-user filesystem and shell access are outside this
 tool contract; see the threat model.

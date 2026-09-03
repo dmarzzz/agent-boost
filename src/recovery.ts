@@ -165,6 +165,21 @@ export class RecoveryTransferController {
     return plan;
   }
 
+  async cancel(decisionId: string): Promise<RecoveryTransferPlan> {
+    const state = await this.#store.update((draft) => {
+      const plan = draft.recoveryPlans[decisionId];
+      if (!plan) throw new Error("RECOVERY_DECISION_NOT_FOUND");
+      if (plan.consumedByRequestId || Object.values(draft.recoveryRequests).some(
+        (request) => request.decisionId === decisionId,
+      )) {
+        throw new Error("RECOVERY_DECISION_ALREADY_CONSUMED");
+      }
+      plan.decision = "deny";
+      if (!plan.blockers.includes("USER_CANCELLED")) plan.blockers.push("USER_CANCELLED");
+    });
+    return state.recoveryPlans[decisionId]!;
+  }
+
   async execute(input: {
     decisionId: string;
     clientRequestId: string;
@@ -186,6 +201,9 @@ export class RecoveryTransferController {
     if (this.#execution) throw new Error("RECOVERY_ALREADY_EXECUTING");
     const plan = state.recoveryPlans[input.decisionId];
     if (!plan) throw new Error("RECOVERY_DECISION_NOT_FOUND");
+    if (plan.blockers.includes("USER_CANCELLED")) {
+      throw new Error("RECOVERY_DECISION_CANCELLED");
+    }
     if (plan.decision !== "allow") throw new Error("RECOVERY_DECISION_DENIED");
     if (plan.consumedByRequestId) throw new Error("RECOVERY_DECISION_ALREADY_CONSUMED");
     if (new Date(plan.expiresAt).getTime() <= this.#clock.now().getTime()) {

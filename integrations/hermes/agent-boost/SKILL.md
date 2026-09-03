@@ -1,13 +1,12 @@
 ---
 name: agent-boost
-description: Manage Sepolia wallets and transfers.
-version: 0.7.0
+description: Load wallets, set limits, and send Sepolia ETH in chat.
+version: 0.8.0
 platforms: [macos, linux]
 metadata:
   hermes:
     tags: [wallet, privacy, payments, mcp]
     category: tools
-    requires_toolsets: [mcp-agent-boost]
 ---
 
 # Use Agent Boost
@@ -27,8 +26,10 @@ Boost mirrors the exact redacted result under
 `_meta["org.agentboost/model-context"]` for this case. Treat that metadata as
 agent-internal state: use its exact IDs, decisions, blockers, and request state,
 but never quote the metadata or its identifiers to the user. If neither the
-structured result nor this metadata contains a required ID, plan again. Never
-guess, shorten, synthesize, or repair an ID.
+structured result nor this metadata contains a required ID, plan again, display
+the replacement plan, end that turn, and require a new user confirmation. Never
+carry the earlier approval into the replacement plan, and never guess, shorten,
+synthesize, or repair an ID.
 
 Do not call a catalog-listed Agent Boost name directly while the bridge is
 visible. Do not emit a user-facing reply between those steps. A provisional
@@ -68,6 +69,10 @@ redeemable value.
   `structuredContent` or `org.agentboost/model-context` when calling a tool;
   never show it or ask the user to type it. `wallet_list` can also report
   unregistered local Kohaku wallets that are safe to adopt by name.
+- A load, open, use, or switch request whose friendly name is `agent-boost` is
+  still a saved-wallet request, even though it matches this product and skill
+  name. Always call `wallet_list`; if that profile is already active, say it is
+  already loaded and do not ask for confirmation or reauthorization.
 - **Every single-account balance is a live read.** For a question specifically
   about the current main wallet balance, ETH held there, funds, available ETH,
   or affordability, call `wallet_get_context` in that same turn. Conversation
@@ -86,6 +91,20 @@ redeemable value.
 - **The agent operates every tool.** Never ask the user to type a tool name,
   MCP command, decision ID, request ID, idempotency key, boolean, or atomic-unit
   amount.
+- **Chat is the approval surface.** Never tell the user to look for a native,
+  external, web, Agent Boost, or system interface, button, popup, notification,
+  or plan ID. Show the exact human-readable preview in chat and end the turn.
+  When the next user message says `yes`, `send it`, `go ahead`, `approved`,
+  `confirm`, `do it`, `proceed`, `✅`, `👍`, or equivalent, immediately call
+  the matching confirmation-turn tool with `user_confirmed: true`. Do not ask
+  again and do not replan. The user's authenticated chat reply is the explicit
+  confirmation.
+- **Rejection is also an action turn.** When the next user message rejects or
+  cancels a transfer, recovery, policy, or reauthorization preview, immediately
+  call that preview's matching confirmation-turn tool with
+  `user_confirmed: false`. Agent Boost durably cancels the decision, and any
+  later approval requires a new plan. Do not merely acknowledge a rejection
+  while leaving the old decision live.
 - **Wallet permissions are conversational.** When the user asks to inspect or
   change send count, per-send amount, total amount, expiry, or enabled state,
   use the policy tools yourself. Never send them to a config file or operator.
@@ -102,6 +121,9 @@ redeemable value.
   ask whether they want a regular public transfer or a private payment.
 - Accept natural requests. If the destination or amount is ambiguous, ask only
   for the missing human detail. Never invent an amount from words like “small.”
+- Pass fractional Sepolia ETH amounts as unchanged decimal strings. Safe whole
+  numbers such as `66` may be JSON numbers; never send a fractional JSON number,
+  because JSON parsing cannot preserve its original lexical precision.
 - **First transfer gate:** resolve missing human details before calling any
   Agent Boost tool for a transfer or recovery request, including `capabilities`.
   If amount or destination is missing or ambiguous, no transfer-related tool
@@ -121,6 +143,9 @@ redeemable value.
 - Under the default `confirm` policy, ordinary approval is enough after the
   exact plan is shown: `yes`, `send it`, `go ahead`, `approved`, `confirm`,
   `do it`, `proceed`, `✅`, and `👍` are valid. The words need not be exact.
+- A confirmation-only user message is an action turn, not a question. Search
+  for and call the immediately preceding plan's execute/apply tool. Never answer
+  it with a refusal, instructions to approve elsewhere, or an offer to help.
 - Confirmation binds only the immediately preceding unexpired plan. If the
   amount or destination changes, plan again and ask again.
 - “Fresh context,” “try again,” or similar wording does not authorize a new
@@ -174,11 +199,17 @@ Tor fail-closed routing, delegation limits, expiry, or adapter readiness.
    early apply call returns `POLICY_UPDATE_CONFIRMATION_REQUIRED`, show the
    preview and stop; do not plan again.
 4. After ordinary approval, call `wallet_apply_policy_update` with
-   `user_confirmed: true` and omit `decision_id`; Agent Boost binds the most
-   recent preview and still rejects denied, expired, or stale state. Do not
-   replan and never invent an ID. Then report `✅ Permission updated` plus the
-   new count and limits. Never imply that a payment happened.
-5. A changed amount, count, total, expiry, or enabled state requires a new
+   the exact internal `decision_id` preserved from the displayed preview and
+   `user_confirmed: true`. Never show the ID or ask the user for it. Agent Boost
+   rejects superseded, denied, expired, stale, or cancelled state. Do not replan
+   and never invent an ID. Then report `✅ Permission updated` plus the new
+   count and limits. Never imply that a payment happened.
+5. After an explicit rejection, call `wallet_apply_policy_update` with
+   the same exact internal `decision_id` and `user_confirmed: false`, then
+   report `✕ Permission change cancelled`, `Existing wallet limits are
+   unchanged.`, and `No funds moved.` Never present the preview again unless
+   the user makes a new change request.
+6. A changed amount, count, total, expiry, or enabled state requires a new
    preview and confirmation. Policy previews expire; plan again instead of
    reusing one. Policy update confirmation never doubles as payment
    confirmation.
@@ -210,14 +241,17 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
    internal selection handles.
 2. Resolve the requested friendly name against the returned registered
    profiles. “The old wallet” or “the previous wallet” is unambiguous when
-   exactly one inactive registered profile exists. If several match, list only
-   their friendly names and ask which one. Never guess an internal ID.
-3. For a registered profile, call `wallet_select` with its exact internal
-   `wallet_id` and omit `user_confirmed` so the client can request native
-   approval. For a Sepolia wallet reported under
-   `unregistered_local_wallets`, call `wallet_adopt_existing` with its exact
-   friendly `name`; this never accepts a seed, password, key, or path.
-4. If native approval is unavailable, say:
+   exactly one inactive registered profile exists. If two or more inactive
+   profiles exist, stop after `wallet_list`, list only their friendly names,
+   ask which one, and do not call `wallet_select`. Never silently choose the
+   first profile or guess an internal ID.
+3. If the requested registered profile is already active, do not ask for a
+   wallet-switch confirmation and do not call `wallet_select`. If its
+   `authorization_status` is `active`, say it is already loaded and ready under
+   its current limits. Otherwise, continue only with setup or reauthorization
+   as its current status requires.
+4. For an inactive registered profile, show this chat confirmation and end the
+   turn:
 
    ```text
    **Confirm wallet switch**
@@ -226,15 +260,21 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
    **Next:** Reply ✅ to switch or ✕ to cancel.
    ```
 
-   End the turn. After approval, repeat the same select/adopt call with
-   `user_confirmed: true`. A changed wallet name needs a new confirmation.
-5. Selection restores that profile's durable setup and request state, but
-   deliberately disables signing. If the returned setup is `private_ready`,
-   immediately call `wallet_plan_reauthorization`, show its exact count,
-   per-send amount, total, and friendly expiry, then call `wallet_reauthorize`
-   with the exact decision ID and omit `user_confirmed` for a second native
-   approval. Never treat wallet-switch approval as reauthorization approval.
-6. If native reauthorization is unavailable, end the turn after this fallback:
+   On the next explicit approval message, immediately call `wallet_select`
+   with `wallet_name: <friendly name>` and `user_confirmed: true`. The exact
+   internal `wallet_id` remains accepted for compatibility but is never needed
+   from the user. Never omit `user_confirmed`, invoke a native approval, or ask
+   the user to confirm anywhere else. A changed wallet name needs a new preview.
+   For a Sepolia wallet under `unregistered_local_wallets`, use the same
+   two-turn chat pattern, then call `wallet_adopt_existing` with its exact
+   friendly `name` and `user_confirmed: true`; this never accepts a seed,
+   password, key, or path.
+5. Selection restores that profile's durable setup and request state. Branch on
+   the returned `authorization_required` instead of assuming signing was
+   disabled. If it is `false`, say the wallet was already selected with active
+   bounded authorization and stop. If it is `true` and `setup_phase` is
+   `private_ready`, immediately call `wallet_plan_reauthorization`, then show
+   its exact count, per-send amount, total, and friendly expiry:
 
    ```text
    **Authorize wallet transfers**
@@ -246,26 +286,46 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
    **Next:** Reply ✅ to authorize or ✕ to cancel.
    ```
 
-   On approval call the same `wallet_reauthorize` decision with
-   `user_confirmed: true`. If the restored setup is not `private_ready`, call
-   `onboarding_start` to resume it and follow the setup flow before planning
-   reauthorization.
+   End the turn. On the next explicit approval message, immediately call
+   `wallet_reauthorize` with the exact internal decision ID and
+   `user_confirmed: true`. On explicit rejection, call that same tool with
+   `user_confirmed: false` and report that no authority was granted. Never
+   invoke or mention another approval surface.
+   After `WALLET_REAUTHORIZED`, report **✓ Wallet authorized** with the friendly
+   name and explicitly say `No funds moved.`
+   Wallet-switch approval never doubles as reauthorization approval. If the
+   `authorization_required` is true and the restored setup is not
+   `private_ready`, call `onboarding_start` to resume it and follow the setup
+   flow before planning reauthorization.
 
 ### Create or archive a wallet
 
 - To create a durable named wallet, get a friendly name if the user did not
-  supply one, then call `wallet_create` without `user_confirmed` for native
-  approval. Creating selects the new wallet, archives the current workflow,
-  starts its setup, and still requires separate reauthorization when ready.
+  supply one, show the exact create/select effects, and end the turn. On the
+  next explicit chat approval call `wallet_create` with the friendly `name`
+  and `user_confirmed: true`. Creating selects the new wallet, archives the
+  current workflow, starts its setup, and still requires separate
+  reauthorization when ready.
 - Use `wallet_start_new_demo` only when the user explicitly asks to start over
-  with an automatically named disposable demo. A generic request for another
-  named wallet uses `wallet_create`.
-- To archive a named inactive profile, call `wallet_list`, resolve its internal
-  ID, then call `wallet_archive` without `user_confirmed`. The active profile
-  cannot be archived; switch first. Archival retains encrypted wallet data,
-  private state, and audit history and can be reversed by selecting it later.
-- Creating, adopting, selecting, archiving, and reauthorizing are distinct
-  confirmations. A yes applies only to the immediately preceding exact action.
+  with an automatically named disposable demo. Show the archive-and-create
+  effect and end the turn; after approval call with `user_confirmed: true`, or
+  after rejection call with `user_confirmed: false` and report that nothing
+  changed. A generic request for another named wallet uses `wallet_create`.
+- To archive a named inactive profile, call `wallet_list`, show the exact
+  friendly name and retention effects, and end the turn. On the next explicit
+  chat approval call `wallet_archive` with `wallet_name` and
+  `user_confirmed: true`. The active profile cannot be archived; switch first.
+  Archival retains encrypted wallet data, private state, and audit history and
+  can be reversed by selecting it later.
+- Creating, adopting, selecting, archiving, starting a new demo, and
+  reauthorizing are distinct
+  confirmations. Apply a yes only to the immediately preceding exact action and
+  pass that exact friendly name when applicable. For create, adopt, select,
+  archive, and demo reset, this action/target correspondence is Hermes's chat
+  attestation: Agent Boost validates the passed action and name but does not
+  persistently bind the earlier lifecycle preview. Selection and reset cannot
+  grant signing authority, and reauthorization and all fund movement remain
+  bound to separate immutable server plans.
 
 ## Regular public transfer procedure
 
@@ -278,11 +338,7 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
    `amount_native`. Never convert the amount to wei. The planner refreshes the
    selected main-account balance, reserves gas, and applies the shared delegated
    transfer limits. Branch only on the returned decision and blockers.
-3. For an allowed plan under `confirm`, immediately call
-   `wallet_execute_regular_transfer` with the exact structured `decision_id` and
-   omit `user_confirmed`. Do not call a private-payment tool. The native approval
-   must identify this as a **regular public transfer from the main account**.
-4. If native confirmation is unavailable, show exactly:
+3. For an allowed plan under `confirm`, show exactly and end the turn:
 
    ```text
    **Confirm regular testnet transfer**
@@ -294,9 +350,14 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
    **Next:** Reply ✅ to approve or ✕ to cancel.
    ```
 
-   End the turn. After approval, call `wallet_execute_regular_transfer` for the
-   same structured decision with `user_confirmed: true`. A cancellation or any
-   changed amount, recipient, or mode requires a new plan.
+4. When the next user chat message approves—including `confirm yes send`—call
+   `wallet_execute_regular_transfer` immediately for the same structured
+   decision with `user_confirmed: true`. Do not ask again, replan, call a
+   private-payment tool, or tell the user to find a native/system/external
+   interface, button, popup, notification, or plan ID. On explicit rejection,
+   call the same tool with `user_confirmed: false`, report that nothing was
+   sent, and do not reuse the decision. A cancellation or any changed amount,
+   recipient, or mode requires a new plan.
 5. Under an `allow` override, execute the exact plan without `user_confirmed`.
    Always omit `client_request_id`; Agent Boost derives it.
 6. Preserve the returned request ID. If it is not terminal, call
@@ -324,18 +385,8 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
    Never convert it to wei or call this tool with `amount_atomic`. Branch on
    `data.plan.decision`; a denied or expired plan never executes. Use returned
    blockers rather than inventing a reason.
-4. For an allowed plan under `confirm`, prefer the tool's native confirmation:
-
-   - Immediately call `wallet_execute_private_payment` with the structured
-     `decision_id` and omit `user_confirmed`. Do not send a duplicate assistant
-     readback first. The tool will ask the MCP client to render the exact plan as
-     native **Approve** and **Cancel** controls. Telegram receives inline
-     buttons, Matrix receives reaction controls, interactive local clients
-     receive their native approval UI, and other clients fall back safely.
-   - If the result is `PAYMENT_CANCELLED`, say **✕ Payment cancelled** and that
-     nothing was sent. Do not retry.
-   - If the result is `PAYMENT_CONFIRMATION_REQUIRED`, native elicitation is not
-     available. Then use this text fallback and end the turn:
+4. For an allowed plan under `confirm`, show this exact chat confirmation and
+   end the turn:
 
    ```text
    **Confirm private test payment**
@@ -346,10 +397,14 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
    **Next:** Reply ✅ to approve or ✕ to cancel.
    ```
 
-   Do not add decision IDs, wei, protocol names, or a second explanation. After
-   an explicit fallback approval, call `wallet_execute_private_payment` with
-   the same structured `decision_id` and `user_confirmed: true`. A cancellation
-   or changed amount or destination requires a new user request and plan.
+   Do not add decision IDs, wei, protocol names, or a second explanation. When
+   the next user message approves, immediately call
+   `wallet_execute_private_payment` with the same structured `decision_id` and
+   `user_confirmed: true`. On explicit rejection, call that same tool with
+   `user_confirmed: false`. Do not ask again or mention another interface. If
+   the result is `PAYMENT_CANCELLED`, say **✕ Payment cancelled** and that
+   nothing was sent; do not retry. A cancellation or changed amount or
+   destination requires a new user request and plan.
 5. Under an `allow` override, call `wallet_execute_private_payment` with the
    decision ID and omit `user_confirmed`; no approval UI is shown. Always omit
    `client_request_id`; Agent Boost derives the stable value.
@@ -371,10 +426,7 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
    recipient. Branch only on the returned decision and blockers. State that the
    recovered amount becomes public and any remaining private balance stays in
    place.
-3. For an allowed plan, immediately call
-   `wallet_execute_recovery_transfer` with the exact internal decision ID and
-   omit `user_confirmed`, allowing native approval. If native confirmation is
-   unavailable, show exactly:
+3. For an allowed plan under `confirm`, show exactly and end the turn:
 
    ```text
    **Confirm recovery transfer**
@@ -385,12 +437,17 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
    **Next:** Reply ✅ to approve or ✕ to cancel.
    ```
 
-   End the turn. After approval, execute the same decision with
-   `user_confirmed: true`. Never invent or expose a decision ID.
+   After the next explicit user chat approval, execute the same decision with
+   `user_confirmed: true`. On explicit rejection, call the same tool with
+   `user_confirmed: false`, report that nothing was recovered, and require a new
+   plan for any later approval. Do not ask again or mention another interface.
+   Never invent or expose a decision ID.
 4. Preserve the returned request ID. For a non-terminal result call
    `wallet_get_recovery_request` for that exact request. Report success only for
-   `confirmed`; `submitted` and `indeterminate` are unresolved and must never
-   be replaced or retried with a new request.
+   `confirmed`; the receipt must say **✓ Recovery confirmed**, repeat the exact
+   recovered amount, and say that the remaining private balance stayed in
+   place. `submitted` and `indeterminate` are unresolved and must never be
+   replaced or retried with a new request.
 
 ## Pitfalls
 

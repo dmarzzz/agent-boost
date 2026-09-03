@@ -229,7 +229,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     const setup = state.onboarding;
     const egress = await this.#egress.status();
     return {
-      contract: "org.agentboost.wallet/1.6",
+      contract: "org.agentboost.wallet/1.7",
       chain_id: "eip155:11155111",
       network_name: "Sepolia",
       asset_type: "eip155:11155111/slip44:60",
@@ -679,6 +679,10 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return this.#policy.getLatestPlan();
   }
 
+  cancelPolicyUpdatePlan(decisionId: string): Promise<PolicyUpdatePlan> {
+    return this.#withWalletOperation(() => this.#policy.cancel(decisionId));
+  }
+
   applyPolicyUpdate(input: {
     decisionId: string;
     userConfirmed: boolean;
@@ -690,8 +694,16 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return this.#payments.getPlan(decisionId);
   }
 
+  cancelPrivatePaymentPlan(decisionId: string): Promise<PaymentPlan> {
+    return this.#withWalletOperation(() => this.#payments.cancel(decisionId));
+  }
+
   getRegularTransferPlan(decisionId: string): Promise<RegularTransferPlan> {
     return this.#regularTransfers.getPlan(decisionId);
+  }
+
+  cancelRegularTransferPlan(decisionId: string): Promise<RegularTransferPlan> {
+    return this.#withWalletOperation(() => this.#regularTransfers.cancel(decisionId));
   }
 
   executePrivatePayment(input: {
@@ -882,9 +894,6 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     walletId: string;
     userConfirmed: boolean;
   }): Promise<Record<string, unknown>> {
-    if (!input.userConfirmed) {
-      throw new Error("The user must confirm changing the active wallet");
-    }
     if (!this.#wallet.selectWallet || !this.#wallet.listWallets) {
       throw new Error("WALLET_MANAGEMENT_UNAVAILABLE");
     }
@@ -897,9 +906,13 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         return {
           wallet: publicWalletProfile(profile, before),
           changed: false,
+          setup_phase: profile.onboarding?.phase ?? "not_started",
           authorization_required: authorization !== "active",
           authorization_status: authorization,
         };
+      }
+      if (!input.userConfirmed) {
+        throw new Error("The user must confirm changing the active wallet");
       }
       const previousName = before.wallet?.activeName ?? this.#config.kohakuWalletName;
       await this.#stopWalletWork();
@@ -1041,6 +1054,10 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return plan;
   }
 
+  cancelWalletReauthorizationPlan(decisionId: string): Promise<WalletReauthorizationPlan> {
+    return this.#withWalletOperation(() => this.#store.cancelReauthorizationPlan(decisionId));
+  }
+
   planRecoveryTransfer(input: {
     recipient: string;
     amountWei: string;
@@ -1050,6 +1067,10 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
 
   getRecoveryPlan(decisionId: string): Promise<RecoveryTransferPlan> {
     return this.#recovery.getPlan(decisionId);
+  }
+
+  cancelRecoveryPlan(decisionId: string): Promise<RecoveryTransferPlan> {
+    return this.#withWalletOperation(() => this.#recovery.cancel(decisionId));
   }
 
   executeRecoveryTransfer(input: {
@@ -1223,6 +1244,7 @@ function publicWalletProfile(
     origin: profile.origin,
     status: profile.status,
     active,
+    setup_phase: onboarding?.phase ?? "not_started",
     selection_epoch: profile.selectionEpoch,
     authorized: authorizationStatus === "active",
     authorization_status: authorizationStatus,

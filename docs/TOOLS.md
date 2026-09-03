@@ -29,24 +29,25 @@ How a payment works, in the order the tools are called:
 6. `wallet_get_policy`, `wallet_plan_policy_update`, and
    `wallet_apply_policy_update` let the user inspect and change send count,
    per-send amount, total amount, expiry, and enabled state in conversation.
-   Every update is immutable, five-minute, separately confirmed, bounded, and
-   idempotent. It changes authority only; it never moves funds.
+   Every preview has immutable terms and a five-minute lifetime; applying one
+   is separately confirmed, bounded, and idempotent. A newer preview supersedes
+   an older pending one. Applying changes authority only; it never moves funds.
 7. `wallet_plan_regular_transfer` validates one recipient and exact ordinary
    Sepolia ETH amount against the selected main account's live balance, a
    conservative gas reserve, and the shared delegated limits. Its matching
    execute and status tools remain strictly on the public transfer path.
-8. `wallet_plan_private_payment` validates one recipient and one exact amount
-   (a canonical wei string) against readiness, the active count and amount
-   limits, and balance, then returns a five-minute immutable plan with a SHA-256
-   digest over chain, recipient, asset, amount, and operation. Plans never
-   sign, submit, or reserve funds.
-9. `wallet_execute_private_payment` takes the decision ID and asks a capable MCP
-   client for one native **Approve** or **Cancel** decision. Acceptance atomically
-   consumes one send and its amount allowance before Kohaku is called. If the client
-   cannot elicit, the tool returns a structured receipt for Hermes to read back
-   and accepts `user_confirmed: true` only on the retry. Recipient and amount
-   always come from the plan. An uncertain outcome never restores authority for
-   an automatic retry.
+8. `wallet_plan_private_payment` accepts one recipient and one ordinary Sepolia
+   ETH decimal, converts it internally, and validates the exact value against
+   readiness, the active count and amount limits, and balance. It returns a
+   five-minute immutable plan with a SHA-256 digest over chain, recipient,
+   asset, amount, and operation. Plans never sign, submit, or reserve funds.
+9. `wallet_execute_private_payment` takes the internal decision ID after Hermes
+   has shown the exact plan and received a new explicit chat confirmation.
+   Hermes passes that approval as `user_confirmed: true`; the user never handles
+   the ID or leaves the conversation. Execution atomically consumes one send and
+   its amount allowance before Kohaku is called. Recipient and amount always
+   come from the plan. An uncertain outcome never restores authority for an
+   automatic retry.
 10. `wallet_get_request` reads the durable, redacted result and reconciles a
    non-terminal request from a real receipt or the recipient-balance checkpoint.
    Reconciliation never rebroadcasts.
@@ -64,24 +65,24 @@ public archive ID and a new QR, never a path or a secret.
 | `onboarding_status` | `setup_id`, `since_revision`, `wait_ms` | latest durable state, or waits for a newer revision |
 | `wallet_get_context` | optional `amount_native` affordability comparison | main address and live balance, delegation, route status |
 | `wallet_get_tree` | none | address-free profile tree, decimal balances, freshness labels |
-| `wallet_list` | none | registered profiles plus unregistered local Kohaku wallets that may be adopted |
+| `wallet_list` | none | registered profiles with setup/authorization state, plus unregistered local Kohaku wallets that may be adopted |
 | `wallet_create` | friendly `name`, confirmation | newly selected named wallet and setup state |
 | `wallet_adopt_existing` | exact local `name`, confirmation | registered and selected Sepolia wallet; never accepts secrets or paths |
-| `wallet_select` | internal `wallet_id`, confirmation | restored profile state with signing disabled pending reauthorization |
-| `wallet_archive` | internal `wallet_id`, confirmation | retained inactive profile marked archived |
+| `wallet_select` | friendly `wallet_name` (`name` and friendly `wallet_id` tolerated), chat confirmation | restored profile state; a real switch disables stale authority, while selecting the already-active wallet preserves active authorization |
+| `wallet_archive` | friendly `wallet_name` (`name` and friendly `wallet_id` tolerated), chat confirmation | retained inactive profile marked archived |
 | `wallet_plan_reauthorization` | none | exact fresh authority preview bound to active wallet and selection epoch |
 | `wallet_reauthorize` | exact `decision_id`, confirmation | fresh authorization and reset send/spend counters |
 | `wallet_get_policy` | none | active send count, amount limits, use, expiry, enabled state |
 | `wallet_plan_policy_update` | any of `max_payments`, `per_payment_limit_native`, `lifetime_limit_native`, `expires_in_hours`, `enabled` | `wpd_` preview with current and proposed policies |
-| `wallet_apply_policy_update` | `user_confirmed`; optional exact `decision_id` | idempotent receipt for the latest or named policy preview |
+| `wallet_apply_policy_update` | exact internal `decision_id`, `user_confirmed` | idempotent receipt for the named policy preview |
 | `wallet_plan_regular_transfer` | `recipient`, `amount_native` in ordinary Sepolia ETH | `rwd_` public main-account decision, balance snapshot, gas reserve, and expiry |
-| `wallet_execute_regular_transfer` | `decision_id`, optional stable request ID and fallback confirmation | native confirmation or a durable `rreq_` public-transfer request |
+| `wallet_execute_regular_transfer` | internal `decision_id`, `user_confirmed` from the follow-up chat approval, optional stable request ID | durable `rreq_` public-transfer request |
 | `wallet_get_regular_transfer_request` | `request_id` | one redacted public-transfer request state |
 | `wallet_plan_private_payment` | `recipient`, `amount_native` in ordinary Sepolia ETH | `wd_` decision, digest, expiry, whether confirmation is required |
-| `wallet_execute_private_payment` | `decision_id`, `client_request_id`, optional `user_confirmed` fallback | native confirmation, cancellation, fallback receipt, or a `req_` request in `executing` or later |
+| `wallet_execute_private_payment` | internal `decision_id`, `user_confirmed` from the follow-up chat approval, optional stable request ID | durable `req_` request in `executing` or later |
 | `wallet_get_request` | `request_id` | one redacted request state |
 | `wallet_plan_recovery_transfer` | `recipient`, `amount_native` | exact-amount recovery decision and remaining-private-balance estimate |
-| `wallet_execute_recovery_transfer` | `decision_id`, optional stable request ID and fallback confirmation | native confirmation or durable `wrr_` request |
+| `wallet_execute_recovery_transfer` | internal `decision_id`, `user_confirmed` from the follow-up chat approval, optional stable request ID | durable `wrr_` request |
 | `wallet_get_recovery_request` | `request_id` | one redacted recovery request state |
 | `wallet_start_new_demo` | `user_confirmed` | archive ID, new setup, new QR |
 
@@ -103,7 +104,7 @@ all other Hermes traffic keep their own routes. Content comes back marked
 
 ## Contract
 
-`capabilities` takes no input and returns `org.agentboost.wallet/1.6`: chain and
+`capabilities` takes no input and returns `org.agentboost.wallet/1.7`: chain and
 asset IDs, funding target, amount caps, the effective execution policy, live
 readiness, and `guarantees_anonymity: false`. It grants nothing. The same
 document is available as the resource `agent-boost://capabilities/wallet/v1`.

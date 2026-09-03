@@ -51,6 +51,24 @@ function simulateHermesContentArbitration(result: CallToolResult): {
   };
 }
 
+function visibleToolSurface(result: CallToolResult): string {
+  const text = result.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+  const presentation = (result.structuredContent as {
+    presentation?: Record<string, unknown>;
+  } | undefined)?.presentation;
+  return `${text}\n${presentation ? JSON.stringify(presentation) : ""}`;
+}
+
+function assertNoVisibleInternalIds(result: CallToolResult): void {
+  assert.doesNotMatch(
+    visibleToolSurface(result),
+    /\b(?:wra|wr|wrr|rwd|rreq|wd|wpd|req)_[A-Za-z0-9][A-Za-z0-9._:-]*\b|\bwallet_(?:[0-9a-f]{8}|saved_|eval_|[0-9])[A-Za-z0-9._:-]*\b/iu,
+  );
+}
+
 function fakeRuntime(): AgentBoostRuntime {
   const setup = {
     version: 1 as const,
@@ -220,6 +238,14 @@ function fakeRuntime(): AgentBoostRuntime {
     async getLatestPolicyUpdatePlan() {
       return this.getPolicyUpdatePlan("wpd_12345678");
     },
+    async cancelPolicyUpdatePlan() {
+      const plan = await this.getPolicyUpdatePlan("wpd_12345678");
+      return {
+        ...plan,
+        decision: "deny" as const,
+        blockers: [...plan.blockers, "USER_CANCELLED"],
+      };
+    },
     async applyPolicyUpdate(input) {
       assert.equal(input.decisionId, "wpd_12345678");
       assert.equal(input.userConfirmed, true);
@@ -315,6 +341,14 @@ function fakeRuntime(): AgentBoostRuntime {
     async getWalletReauthorizationPlan() {
       return this.planWalletReauthorization();
     },
+    async cancelWalletReauthorizationPlan() {
+      const plan = await this.planWalletReauthorization();
+      return {
+        ...plan,
+        decision: "deny" as const,
+        blockers: [...plan.blockers, "USER_CANCELLED"],
+      };
+    },
     async reauthorizeWallet() {
       return { wallet: { name: "agent-boost" } };
     },
@@ -340,6 +374,14 @@ function fakeRuntime(): AgentBoostRuntime {
         recipient: "0x2222222222222222222222222222222222222222",
         amountWei: "1000000000000000000",
       });
+    },
+    async cancelRegularTransferPlan() {
+      const plan = await this.getRegularTransferPlan("rwd_12345678");
+      return {
+        ...plan,
+        decision: "deny" as const,
+        blockers: [...plan.blockers, "USER_CANCELLED"],
+      };
     },
     async executeRegularTransfer(input) {
       return {
@@ -411,6 +453,14 @@ function fakeRuntime(): AgentBoostRuntime {
         },
       };
     },
+    async cancelPrivatePaymentPlan() {
+      const plan = await this.getPaymentPlan("wd_12345678");
+      return {
+        ...plan,
+        decision: "deny" as const,
+        blockers: [...plan.blockers, "USER_CANCELLED"],
+      };
+    },
     async executePrivatePayment(input) {
       return {
         version: 1,
@@ -474,6 +524,14 @@ function fakeRuntime(): AgentBoostRuntime {
         recipient: "0x2222222222222222222222222222222222222222",
         amountWei: "100000000000000000",
       });
+    },
+    async cancelRecoveryPlan() {
+      const plan = await this.getRecoveryPlan("wr_12345678");
+      return {
+        ...plan,
+        decision: "deny" as const,
+        blockers: [...plan.blockers, "USER_CANCELLED"],
+      };
     },
     async executeRecoveryTransfer(input) {
       return {
@@ -855,7 +913,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   const policyApplyRequired = (policyApplyTool?.inputSchema as {
     required?: string[];
   }).required ?? [];
-  assert.ok(!policyApplyRequired.includes("decision_id"));
+  assert.ok(policyApplyRequired.includes("decision_id"));
 
   const policyPlan = await client.callTool({
     name: "wallet_plan_policy_update",
@@ -913,12 +971,12 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   );
   assert.match(
     policyConfirmationText?.type === "text" ? policyConfirmationText.text : "",
-    /new user message[\s\S]*Do not plan again/u,
+    /new user message[\s\S]*do not plan again/iu,
   );
 
   const policyApplied = await client.callTool({
     name: "wallet_apply_policy_update",
-    arguments: { user_confirmed: true },
+    arguments: { decision_id: "wpd_12345678", user_confirmed: true },
   });
   assert.equal(
     (policyApplied.structuredContent as { code: string }).code,
@@ -935,7 +993,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   const regularPlanText = regularPlan.content.find((block) => block.type === "text");
   assert.match(
     regularPlanText?.type === "text" ? regularPlanText.text : "",
-    /Regular public transfer ready for native approval/u,
+    /Regular public transfer ready for chat confirmation/u,
   );
   assert.doesNotMatch(
     regularPlanText?.type === "text" ? regularPlanText.text : "",
@@ -985,7 +1043,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   });
   const planText = plan.content.find((block) => block.type === "text");
   assert.equal(planText?.type, "text");
-  assert.match(planText?.type === "text" ? planText.text : "", /native approval/u);
+  assert.match(planText?.type === "text" ? planText.text : "", /chat confirmation/u);
   assert.doesNotMatch(planText?.type === "text" ? planText.text : "", /wd_|amountWei|intentDigest/u);
   const hermesPaymentResult = simulateHermesContentArbitration(plan);
   const hermesPaymentContext = hermesPaymentResult._meta?.[HERMES_MODEL_CONTEXT_KEY] as {
@@ -997,13 +1055,13 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
     presentation: {
       kind: string;
       title: string;
-      interaction: { transport: string };
+      interaction?: { transport: string };
       fields: Array<{ label: string; value: string }>;
     };
   }).presentation;
   assert.equal(planPresentation.kind, "confirmation");
   assert.equal(planPresentation.title, "Confirm private test payment");
-  assert.equal(planPresentation.interaction.transport, "mcp_elicitation");
+  assert.equal(planPresentation.interaction, undefined);
   assert.deepEqual(
     planPresentation.fields.map((field) => field.label),
     ["Amount", "To", "Network"],
@@ -1020,8 +1078,11 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   }).properties ?? {};
   assert.ok("amount_native" in planProperties);
   assert.ok(!("amount_atomic" in planProperties));
-  assert.match(executeTool?.description ?? "", /agent—not the user/u);
-  assert.match(executeTool?.description ?? "", /Never ask the user to supply tool syntax/u);
+  assert.match(executeTool?.description ?? "", /CONFIRMATION-TURN TOOL/u);
+  assert.match(
+    executeTool?.description ?? "",
+    /Never reveal or ask the user for IDs, tool syntax, or booleans/u,
+  );
 
   const executed = await client.callTool({
     name: "wallet_execute_private_payment",
@@ -1056,8 +1117,272 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   await server.close();
 });
 
-test("MCP native payment confirmation accepts, declines, and fails closed", async (t) => {
-  await t.test("accepted elicitation executes the exact plan", async () => {
+test("chat confirmation is primary across every confirm-mode tool", async () => {
+  const runtime = fakeRuntime();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client(
+    { name: "chat-confirmation-priority-test", version: "1.0.0" },
+    { capabilities: { elicitation: { form: {} } } },
+  ));
+  let elicitationCalls = 0;
+  client.setRequestHandler(ElicitRequestSchema, async () => {
+    elicitationCalls += 1;
+    return { action: "decline" };
+  });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  try {
+    const tools = await client.listTools();
+    for (const name of [
+      "wallet_create",
+      "wallet_adopt_existing",
+      "wallet_select",
+      "wallet_archive",
+      "wallet_reauthorize",
+      "wallet_apply_policy_update",
+      "wallet_execute_regular_transfer",
+      "wallet_execute_private_payment",
+      "wallet_execute_recovery_transfer",
+      "wallet_start_new_demo",
+    ]) {
+      const description = tools.tools.find((tool) => tool.name === name)?.description ?? "";
+      assert.match(
+        description,
+        /chat|conversation|new user message/iu,
+        `${name} must describe chat confirmation`,
+      );
+      assert.doesNotMatch(
+        description,
+        /(?<!never )\b(?:ready for|requires?|request|use|open|through|via|look for|go to)\b[^\n]{0,80}(?:native|external)[^\n]{0,80}(?:approval|confirmation|interface|surface|UI)/iu,
+        `${name} must not send the user to another interface`,
+      );
+    }
+    const selectSchema = tools.tools.find((tool) => tool.name === "wallet_select")
+      ?.inputSchema as { properties?: Record<string, unknown> } | undefined;
+    assert.deepEqual(
+      ["wallet_name", "name", "wallet_id"].map(
+        (field) => field in (selectSchema?.properties ?? {}),
+      ),
+      [true, true, true],
+      "wallet selection must tolerate common friendly-name argument shapes",
+    );
+
+    const regularPlan = await client.callTool({
+      name: "wallet_plan_regular_transfer",
+      arguments: {
+        recipient: "0x2222222222222222222222222222222222222222",
+        amount_native: 66,
+      },
+    });
+    assert.equal(
+      (regularPlan.structuredContent as { code: string }).code,
+      "REGULAR_TRANSFER_PLANNED",
+    );
+    assert.equal(
+      (regularPlan.structuredContent as {
+        data: { plan: { amountWei: string } };
+      }).data.plan.amountWei,
+      "66000000000000000000",
+    );
+
+    const privatePlan = await client.callTool({
+      name: "wallet_plan_private_payment",
+      arguments: {
+        recipient: "0x2222222222222222222222222222222222222222",
+        amount_native: "0.02",
+      },
+    });
+    const recoveryPlan = await client.callTool({
+      name: "wallet_plan_recovery_transfer",
+      arguments: {
+        recipient: "0x2222222222222222222222222222222222222222",
+        amount_native: "0.1",
+      },
+    });
+    const reauthorizationPlan = await client.callTool({
+      name: "wallet_plan_reauthorization",
+      arguments: {},
+    });
+    const policyPlan = await client.callTool({
+      name: "wallet_plan_policy_update",
+      arguments: { max_payments: 10, per_payment_limit_native: "1" },
+    });
+    for (const planned of [
+      regularPlan,
+      privatePlan,
+      recoveryPlan,
+      reauthorizationPlan,
+      policyPlan,
+    ]) {
+      assert.doesNotMatch(
+        visibleToolSurface(planned),
+        /(?<!never )\b(?:ready for|requires?|request|use|open|through|via|look for|go to)\b[^\n]{0,80}(?:native|external)[^\n]{0,80}(?:approval|confirmation|interface|surface|UI)|mcp_elicitation/iu,
+      );
+      assertNoVisibleInternalIds(planned);
+    }
+
+    const missingConfirmations: Array<{
+      name: string;
+      arguments: Record<string, unknown>;
+      code: string;
+    }> = [
+      {
+        name: "wallet_create",
+        arguments: { name: "travel-wallet" },
+        code: "WALLET_CREATE_CONFIRMATION_REQUIRED",
+      },
+      {
+        name: "wallet_adopt_existing",
+        arguments: { name: "imported-wallet" },
+        code: "WALLET_ADOPT_CONFIRMATION_REQUIRED",
+      },
+      {
+        name: "wallet_select",
+        arguments: { name: "saved-wallet" },
+        code: "WALLET_SELECT_CONFIRMATION_REQUIRED",
+      },
+      {
+        name: "wallet_archive",
+        arguments: { wallet_name: "saved-wallet" },
+        code: "WALLET_ARCHIVE_CONFIRMATION_REQUIRED",
+      },
+      {
+        name: "wallet_reauthorize",
+        arguments: { decision_id: "wra_12345678" },
+        code: "WALLET_REAUTHORIZATION_CONFIRMATION_REQUIRED",
+      },
+      {
+        name: "wallet_apply_policy_update",
+        arguments: { decision_id: "wpd_12345678" },
+        code: "POLICY_UPDATE_CONFIRMATION_REQUIRED",
+      },
+      {
+        name: "wallet_execute_regular_transfer",
+        arguments: { decision_id: "rwd_12345678" },
+        code: "REGULAR_TRANSFER_CONFIRMATION_REQUIRED",
+      },
+      {
+        name: "wallet_execute_private_payment",
+        arguments: { decision_id: "wd_12345678" },
+        code: "PAYMENT_CONFIRMATION_REQUIRED",
+      },
+      {
+        name: "wallet_execute_recovery_transfer",
+        arguments: { decision_id: "wr_12345678" },
+        code: "RECOVERY_CONFIRMATION_REQUIRED",
+      },
+      {
+        name: "wallet_start_new_demo",
+        arguments: {},
+        code: "DEMO_RESET_CONFIRMATION_REQUIRED",
+      },
+    ];
+
+    for (const confirmation of missingConfirmations) {
+      const response = await client.callTool({
+        name: confirmation.name,
+        arguments: confirmation.arguments,
+      });
+      const structured = response.structuredContent as {
+        code: string;
+        outcome: string;
+        data: { confirmation_mode?: string; reason?: string };
+      };
+      assert.equal(structured.code, confirmation.code);
+      assert.equal(structured.outcome, "blocked");
+      assert.equal(structured.data.confirmation_mode, "chat");
+      assert.equal(structured.data.reason, undefined);
+      assertNoVisibleInternalIds(response);
+    }
+    assert.equal(
+      elicitationCalls,
+      0,
+      "missing chat confirmation must never open MCP elicitation",
+    );
+
+    const confirmations: Array<{
+      name: string;
+      arguments: Record<string, unknown>;
+      code: string;
+    }> = [
+      {
+        name: "wallet_create",
+        arguments: { name: "travel-wallet", user_confirmed: true },
+        code: "WALLET_CREATED",
+      },
+      {
+        name: "wallet_adopt_existing",
+        arguments: { name: "imported-wallet", user_confirmed: true },
+        code: "WALLET_ADOPTED",
+      },
+      {
+        name: "wallet_select",
+        arguments: { wallet_name: "saved-wallet", user_confirmed: true },
+        code: "WALLET_SELECTED",
+      },
+      {
+        name: "wallet_archive",
+        arguments: { wallet_name: "saved-wallet", user_confirmed: true },
+        code: "WALLET_ARCHIVED",
+      },
+      {
+        name: "wallet_reauthorize",
+        arguments: { decision_id: "wra_12345678", user_confirmed: true },
+        code: "WALLET_REAUTHORIZED",
+      },
+      {
+        name: "wallet_apply_policy_update",
+        arguments: { decision_id: "wpd_12345678", user_confirmed: true },
+        code: "POLICY_UPDATED",
+      },
+      {
+        name: "wallet_execute_regular_transfer",
+        arguments: { decision_id: "rwd_12345678", user_confirmed: true },
+        code: "REGULAR_TRANSFER_REQUEST",
+      },
+      {
+        name: "wallet_execute_private_payment",
+        arguments: { decision_id: "wd_12345678", user_confirmed: true },
+        code: "PAYMENT_REQUEST",
+      },
+      {
+        name: "wallet_execute_recovery_transfer",
+        arguments: { decision_id: "wr_12345678", user_confirmed: true },
+        code: "RECOVERY_REQUEST",
+      },
+      {
+        name: "wallet_start_new_demo",
+        arguments: { user_confirmed: true },
+        code: "DEMO_RESET_STARTED",
+      },
+    ];
+
+    for (const confirmation of confirmations) {
+      const response = await client.callTool({
+        name: confirmation.name,
+        arguments: confirmation.arguments,
+      });
+      assert.equal(
+        (response.structuredContent as { code: string }).code,
+        confirmation.code,
+        `${confirmation.name} must honor the chat confirmation`,
+      );
+      assertNoVisibleInternalIds(response);
+    }
+    assert.equal(
+      elicitationCalls,
+      0,
+      "user_confirmed:true must bypass an advertised MCP elicitation handler",
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("MCP chat payment confirmation executes, cancels, and never opens another surface", async (t) => {
+  await t.test("explicit chat attestation executes the exact plan", async () => {
     const runtime = fakeRuntime();
     let executeCalls = 0;
     const execute = runtime.executePrivatePayment;
@@ -1069,37 +1394,33 @@ test("MCP native payment confirmation accepts, declines, and fails closed", asyn
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = await createMcpServer(runtime);
     const client = testMcpClient(new Client(
-      { name: "elicitation-test", version: "1.0.0" },
+      { name: "chat-confirmation-test", version: "1.0.0" },
       { capabilities: { elicitation: { form: {} } } },
     ));
-    let prompt = "";
-    client.setRequestHandler(ElicitRequestSchema, async (request) => {
-      assert.equal(request.params.mode, "form");
-      prompt = request.params.message;
+    let elicitationCalls = 0;
+    client.setRequestHandler(ElicitRequestSchema, async () => {
+      elicitationCalls += 1;
       return { action: "accept", content: {} };
     });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
       const response = await client.callTool({
         name: "wallet_execute_private_payment",
-        arguments: { decision_id: "wd_12345678" },
+        arguments: { decision_id: "wd_12345678", user_confirmed: true },
       });
       assert.equal(
         (response.structuredContent as { code: string }).code,
         "PAYMENT_REQUEST",
       );
       assert.equal(executeCalls, 1);
-      assert.match(prompt, /Confirm private test payment/u);
-      assert.match(prompt, /Amount: 0\.02 Sepolia ETH/u);
-      assert.match(prompt, /0x2222222222222222222222222222222222222222/u);
-      assert.match(prompt, /on-chain activity remains visible/u);
+      assert.equal(elicitationCalls, 0);
     } finally {
       await client.close();
       await server.close();
     }
   });
 
-  await t.test("declined elicitation never executes", async () => {
+  await t.test("explicit chat decline never executes", async () => {
     const runtime = fakeRuntime();
     let executed = false;
     runtime.executePrivatePayment = async () => {
@@ -1109,15 +1430,19 @@ test("MCP native payment confirmation accepts, declines, and fails closed", asyn
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = await createMcpServer(runtime);
     const client = testMcpClient(new Client(
-      { name: "elicitation-test", version: "1.0.0" },
+      { name: "chat-decline-test", version: "1.0.0" },
       { capabilities: { elicitation: { form: {} } } },
     ));
-    client.setRequestHandler(ElicitRequestSchema, async () => ({ action: "decline" }));
+    let elicitationCalls = 0;
+    client.setRequestHandler(ElicitRequestSchema, async () => {
+      elicitationCalls += 1;
+      return { action: "accept", content: {} };
+    });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
       const response = await client.callTool({
         name: "wallet_execute_private_payment",
-        arguments: { decision_id: "wd_12345678" },
+        arguments: { decision_id: "wd_12345678", user_confirmed: false },
       });
       const structured = response.structuredContent as {
         code: string;
@@ -1128,6 +1453,51 @@ test("MCP native payment confirmation accepts, declines, and fails closed", asyn
       assert.equal(structured.outcome, "blocked");
       assert.equal(structured.presentation.state, "cancelled");
       assert.equal(executed, false);
+      assert.equal(elicitationCalls, 0);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  await t.test("missing attestation stays pending even when the client advertises elicitation", async () => {
+    const runtime = fakeRuntime();
+    let executed = false;
+    runtime.executePrivatePayment = async () => {
+      executed = true;
+      throw new Error("must not execute");
+    };
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = await createMcpServer(runtime);
+    const client = testMcpClient(new Client(
+      { name: "missing-chat-confirmation-test", version: "1.0.0" },
+      { capabilities: { elicitation: { form: {} } } },
+    ));
+    let elicitationCalls = 0;
+    client.setRequestHandler(ElicitRequestSchema, async () => {
+      elicitationCalls += 1;
+      return { action: "accept", content: {} };
+    });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const response = await client.callTool({
+        name: "wallet_execute_private_payment",
+        arguments: { decision_id: "wd_12345678" },
+      });
+      const structured = response.structuredContent as {
+        code: string;
+        outcome: string;
+        data: { reason?: string; confirmation_mode: string };
+        presentation: { state: string };
+      };
+      assert.equal(structured.code, "PAYMENT_CONFIRMATION_REQUIRED");
+      assert.equal(structured.outcome, "blocked");
+      assert.equal(structured.data.confirmation_mode, "chat");
+      assert.equal(structured.data.reason, undefined);
+      assert.equal(structured.presentation.state, "pending");
+      assert.doesNotMatch(visibleToolSurface(response), /cancelled/iu);
+      assert.equal(executed, false);
+      assert.equal(elicitationCalls, 0);
     } finally {
       await client.close();
       await server.close();
@@ -1173,6 +1543,184 @@ test("MCP native payment confirmation accepts, declines, and fails closed", asyn
   });
 });
 
+test("an explicit chat decline cancels allow-mode transfers instead of executing", async () => {
+  const runtime = fakeRuntime();
+  const regularPlan = runtime.getRegularTransferPlan.bind(runtime);
+  const privatePlan = runtime.getPaymentPlan.bind(runtime);
+  let regularState = {
+    ...(await regularPlan("rwd_12345678")),
+    approval: { action: "allow", userConfirmationRequired: false },
+  } as const;
+  let privateState = {
+    ...(await privatePlan("wd_12345678")),
+    approval: { action: "allow", userConfirmationRequired: false },
+  } as const;
+  runtime.getRegularTransferPlan = async () => regularState;
+  runtime.getPaymentPlan = async () => privateState;
+  const cancelled: string[] = [];
+  runtime.cancelRegularTransferPlan = async (decisionId) => {
+    cancelled.push(decisionId);
+    regularState = {
+      ...regularState,
+      decision: "deny",
+      blockers: [...regularState.blockers, "USER_CANCELLED"],
+    };
+    return regularState;
+  };
+  runtime.cancelPrivatePaymentPlan = async (decisionId) => {
+    cancelled.push(decisionId);
+    privateState = {
+      ...privateState,
+      decision: "deny",
+      blockers: [...privateState.blockers, "USER_CANCELLED"],
+    };
+    return privateState;
+  };
+  let executionCalls = 0;
+  runtime.executeRegularTransfer = async () => {
+    executionCalls += 1;
+    throw new Error("explicit false must not execute a regular transfer");
+  };
+  runtime.executePrivatePayment = async () => {
+    executionCalls += 1;
+    throw new Error("explicit false must not execute a private payment");
+  };
+
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client(
+    { name: "allow-mode-chat-decline-test", version: "1.0.0" },
+  ));
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const regular = await client.callTool({
+      name: "wallet_execute_regular_transfer",
+      arguments: { decision_id: "rwd_12345678", user_confirmed: false },
+    });
+    const privatePayment = await client.callTool({
+      name: "wallet_execute_private_payment",
+      arguments: { decision_id: "wd_12345678", user_confirmed: false },
+    });
+    const regularWithoutAttestation = await client.callTool({
+      name: "wallet_execute_regular_transfer",
+      arguments: { decision_id: "rwd_12345678" },
+    });
+    const regularRetriedApproval = await client.callTool({
+      name: "wallet_execute_regular_transfer",
+      arguments: { decision_id: "rwd_12345678", user_confirmed: true },
+    });
+    const privateWithoutAttestation = await client.callTool({
+      name: "wallet_execute_private_payment",
+      arguments: { decision_id: "wd_12345678" },
+    });
+    const privateRetriedApproval = await client.callTool({
+      name: "wallet_execute_private_payment",
+      arguments: { decision_id: "wd_12345678", user_confirmed: true },
+    });
+
+    for (const [index, response] of [
+      regular,
+      regularWithoutAttestation,
+      regularRetriedApproval,
+    ].entries()) {
+      const structured = response.structuredContent as {
+        code: string;
+        data: { reason: string; plan: { decision: string; blockers: string[] } };
+        presentation: { state: string };
+      };
+      assert.equal(structured.code, "REGULAR_TRANSFER_CANCELLED");
+      assert.equal(structured.data.reason, index === 0 ? "decline" : "cancel");
+      assert.equal(structured.data.plan.decision, "deny");
+      assert.ok(structured.data.plan.blockers.includes("USER_CANCELLED"));
+      assert.equal(structured.presentation.state, "cancelled");
+    }
+    for (const [index, response] of [
+      privatePayment,
+      privateWithoutAttestation,
+      privateRetriedApproval,
+    ].entries()) {
+      const structured = response.structuredContent as {
+        code: string;
+        data: { reason: string; plan: { decision: string; blockers: string[] } };
+        presentation: { state: string };
+      };
+      assert.equal(structured.code, "PAYMENT_CANCELLED");
+      assert.equal(structured.data.reason, index === 0 ? "decline" : "cancel");
+      assert.equal(structured.data.plan.decision, "deny");
+      assert.ok(structured.data.plan.blockers.includes("USER_CANCELLED"));
+      assert.equal(structured.presentation.state, "cancelled");
+    }
+    assert.deepEqual(cancelled, ["rwd_12345678", "wd_12345678"]);
+    assert.equal(executionCalls, 0);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("native amount schemas accept exact strings and whole JSON numbers", async () => {
+  const runtime = fakeRuntime();
+  const plannedAmounts: string[] = [];
+  const planRegularTransfer = runtime.planRegularTransfer.bind(runtime);
+  runtime.planRegularTransfer = async (input) => {
+    plannedAmounts.push(input.amountWei);
+    return planRegularTransfer(input);
+  };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client(
+    { name: "native-amount-precision-test", version: "1.0.0" },
+  ));
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const fractional = await client.callTool({
+      name: "wallet_plan_regular_transfer",
+      arguments: {
+        recipient: "0x2222222222222222222222222222222222222222",
+        amount_native: 0.1,
+      },
+    });
+    assert.equal(fractional.isError, true);
+    assert.equal(plannedAmounts.length, 0, "fractional JSON numbers must fail before planning");
+
+    const fractionalString = await client.callTool({
+      name: "wallet_plan_regular_transfer",
+      arguments: {
+        recipient: "0x2222222222222222222222222222222222222222",
+        amount_native: "0.1",
+      },
+    });
+    assert.equal(fractionalString.isError, undefined);
+    assert.deepEqual(plannedAmounts, ["100000000000000000"]);
+
+    const unsafeWhole = await client.callTool({
+      name: "wallet_plan_regular_transfer",
+      arguments: {
+        recipient: "0x2222222222222222222222222222222222222222",
+        amount_native: Number.MAX_SAFE_INTEGER + 1,
+      },
+    });
+    assert.equal(unsafeWhole.isError, true);
+    assert.equal(plannedAmounts.length, 1, "unsafe JSON integers must fail before planning");
+
+    const whole = await client.callTool({
+      name: "wallet_plan_regular_transfer",
+      arguments: {
+        recipient: "0x2222222222222222222222222222222222222222",
+        amount_native: 66,
+      },
+    });
+    assert.equal(whole.isError, undefined);
+    assert.deepEqual(plannedAmounts, [
+      "100000000000000000",
+      "66000000000000000000",
+    ]);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("MCP regular transfer confirmation stays on the public path", async () => {
   const runtime = fakeRuntime();
   let regularCalls = 0;
@@ -1190,19 +1738,19 @@ test("MCP regular transfer confirmation stays on the public path", async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = await createMcpServer(runtime);
   const client = testMcpClient(new Client(
-    { name: "regular-elicitation-test", version: "1.0.0" },
+    { name: "regular-chat-confirmation-test", version: "1.0.0" },
     { capabilities: { elicitation: { form: {} } } },
   ));
-  let prompt = "";
-  client.setRequestHandler(ElicitRequestSchema, async (request) => {
-    prompt = request.params.message;
+  let elicitationCalls = 0;
+  client.setRequestHandler(ElicitRequestSchema, async () => {
+    elicitationCalls += 1;
     return { action: "accept", content: {} };
   });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
     const response = await client.callTool({
       name: "wallet_execute_regular_transfer",
-      arguments: { decision_id: "rwd_12345678" },
+      arguments: { decision_id: "rwd_12345678", user_confirmed: true },
     });
     assert.equal(
       (response.structuredContent as { code: string }).code,
@@ -1210,9 +1758,7 @@ test("MCP regular transfer confirmation stays on the public path", async () => {
     );
     assert.equal(regularCalls, 1);
     assert.equal(privateCalls, 0);
-    assert.match(prompt, /Confirm regular testnet transfer/u);
-    assert.match(prompt, /From: selected main public account/u);
-    assert.match(prompt, /regular public transfer/u);
+    assert.equal(elicitationCalls, 0);
   } finally {
     await client.close();
     await server.close();
@@ -1221,15 +1767,15 @@ test("MCP regular transfer confirmation stays on the public path", async () => {
 
 test("wallet lifecycle confirmations use friendly names and keep internal IDs out of text", async () => {
   const runtime = fakeRuntime();
-  const prompts: string[] = [];
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = await createMcpServer(runtime);
   const client = testMcpClient(new Client(
-    { name: "wallet-lifecycle-elicitation-test", version: "1.0.0" },
+    { name: "wallet-lifecycle-chat-test", version: "1.0.0" },
     { capabilities: { elicitation: { form: {} } } },
   ));
-  client.setRequestHandler(ElicitRequestSchema, async (request) => {
-    prompts.push(request.params.message);
+  let elicitationCalls = 0;
+  client.setRequestHandler(ElicitRequestSchema, async () => {
+    elicitationCalls += 1;
     return { action: "accept", content: {} };
   });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -1240,9 +1786,22 @@ test("wallet lifecycle confirmations use friendly names and keep internal IDs ou
     assert.match(listText.text, /saved-wallet/u);
     assert.doesNotMatch(listText.text, /wallet_[A-Za-z0-9-]+/u);
 
+    const selectionPending = await client.callTool({
+      name: "wallet_select",
+      arguments: { wallet_id: "saved-wallet" },
+    });
+    assert.equal(
+      (selectionPending.structuredContent as { code: string }).code,
+      "WALLET_SELECT_CONFIRMATION_REQUIRED",
+    );
+    const selectionPendingText = selectionPending.content.find((block) => block.type === "text");
+    assert.equal(selectionPendingText?.type, "text");
+    assert.match(selectionPendingText.text, /saved-wallet/u);
+    assert.doesNotMatch(selectionPendingText.text, /wallet_[A-Za-z0-9-]+/u);
+
     const selected = await client.callTool({
       name: "wallet_select",
-      arguments: { wallet_id: "wallet_87654321" },
+      arguments: { wallet_id: "saved-wallet", user_confirmed: true },
     });
     const selectedText = selected.content.find((block) => block.type === "text");
     assert.equal(selectedText?.type, "text");
@@ -1257,23 +1816,148 @@ test("wallet lifecycle confirmations use friendly names and keep internal IDs ou
       (plan.structuredContent as { code: string }).code,
       "WALLET_REAUTHORIZATION_PLANNED",
     );
-    const reauthorized = await client.callTool({
+    const reauthorizationPending = await client.callTool({
       name: "wallet_reauthorize",
       arguments: { decision_id: "wra_12345678" },
+    });
+    assert.equal(
+      (reauthorizationPending.structuredContent as { code: string }).code,
+      "WALLET_REAUTHORIZATION_CONFIRMATION_REQUIRED",
+    );
+    assertNoVisibleInternalIds(reauthorizationPending);
+    const reauthorizationPendingText = reauthorizationPending.content.find(
+      (block) => block.type === "text",
+    );
+    assert.equal(reauthorizationPendingText?.type, "text");
+    assert.match(reauthorizationPendingText.text, /agent-boost/u);
+    assert.match(reauthorizationPendingText.text, /0\.1 Sepolia ETH each/u);
+    assert.match(reauthorizationPendingText.text, /0\.1 Sepolia ETH total/u);
+    assert.doesNotMatch(reauthorizationPendingText.text, /\bwei\b/u);
+
+    const reauthorized = await client.callTool({
+      name: "wallet_reauthorize",
+      arguments: { decision_id: "wra_12345678", user_confirmed: true },
     });
     assert.equal(
       (reauthorized.structuredContent as { code: string }).code,
       "WALLET_REAUTHORIZED",
     );
 
-    assert.equal(prompts.length, 2);
-    assert.match(prompts[0]!, /saved-wallet/u);
-    assert.doesNotMatch(prompts[0]!, /wallet_[A-Za-z0-9-]+/u);
-    assert.match(prompts[1]!, /agent-boost/u);
-    assert.match(prompts[1]!, /0\.1 Sepolia ETH max each/u);
-    assert.match(prompts[1]!, /0\.1 Sepolia ETH total/u);
-    assert.doesNotMatch(prompts[1]!, /\bwei\b/u);
-    assert.doesNotMatch(prompts[1]!, /(?:wallet_|wra_)[A-Za-z0-9-]+/u);
+    assert.equal(elicitationCalls, 0);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("selecting an already-active authorized wallet does not demand reauthorization", async () => {
+  const runtime = fakeRuntime();
+  runtime.selectWallet = async (input) => {
+    assert.equal(input.userConfirmed, false);
+    return {
+      wallet: { name: "agent-boost" },
+      changed: false,
+      setup_phase: "private_ready",
+      authorization_required: false,
+      authorization_status: "active",
+    };
+  };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client(
+    { name: "already-selected-test", version: "1.0.0" },
+    { capabilities: { elicitation: { form: {} } } },
+  ));
+  let elicitationCalls = 0;
+  client.setRequestHandler(ElicitRequestSchema, async () => {
+    elicitationCalls += 1;
+    return { action: "accept", content: {} };
+  });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const response = await client.callTool({
+      name: "wallet_select",
+      arguments: { wallet_name: "agent-boost" },
+    });
+    const text = response.content.find((block) => block.type === "text");
+    assert.equal(text?.type, "text");
+    assert.match(text.text, /already selected/u);
+    assert.match(text.text, /authorization remains active/u);
+    assert.doesNotMatch(text.text, /remains disabled|must reauthorize/u);
+    const presentation = (response.structuredContent as {
+      presentation: { notice: { text: string }; next_action: string };
+    }).presentation;
+    assert.match(presentation.notice.text, /authorization remains active/u);
+    assert.equal(presentation.next_action, "No reauthorization is required.");
+    assert.equal(elicitationCalls, 0);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("wallet_id compatibility prefers exact IDs and still accepts wallet_-prefixed friendly names", async () => {
+  const runtime = fakeRuntime();
+  const originalListWallets = runtime.listWallets.bind(runtime);
+  runtime.listWallets = async () => {
+    const listing = await originalListWallets();
+    return {
+      ...listing,
+      wallets: [
+        ...(listing.wallets as Array<Record<string, unknown>>),
+        {
+          wallet_id: "wallet_friendly_prefix",
+          name: "wallet_backup",
+          status: "available",
+          active: false,
+          authorization_status: "inactive",
+        },
+        {
+          wallet_id: "wallet_name_collision",
+          name: "wallet_87654321",
+          status: "available",
+          active: false,
+          authorization_status: "inactive",
+        },
+      ],
+    };
+  };
+  const selectedIds: string[] = [];
+  runtime.selectWallet = async (input) => {
+    selectedIds.push(input.walletId);
+    return {
+      wallet: { name: input.walletId },
+      authorization_required: true,
+    };
+  };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client({ name: "wallet-reference-test", version: "1.0.0" }));
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    await client.callTool({
+      name: "wallet_select",
+      arguments: { wallet_id: "wallet_backup", user_confirmed: true },
+    });
+    await client.callTool({
+      name: "wallet_select",
+      arguments: { wallet_id: "wallet_87654321", user_confirmed: true },
+    });
+    assert.deepEqual(selectedIds, ["wallet_friendly_prefix", "wallet_87654321"]);
+
+    const conflict = await client.callTool({
+      name: "wallet_select",
+      arguments: {
+        wallet_id: "wallet_87654321",
+        wallet_name: "wallet_backup",
+        user_confirmed: true,
+      },
+    });
+    assert.equal(
+      (conflict.structuredContent as { code: string }).code,
+      "REQUEST_BLOCKED",
+    );
+    assert.deepEqual(selectedIds, ["wallet_friendly_prefix", "wallet_87654321"]);
   } finally {
     await client.close();
     await server.close();
@@ -1282,6 +1966,30 @@ test("wallet lifecycle confirmations use friendly names and keep internal IDs ou
 
 test("declined wallet reauthorization and recovery confirmations cause no execution", async () => {
   const runtime = fakeRuntime();
+  let reauthorizationState = await runtime.getWalletReauthorizationPlan("wra_12345678");
+  let recoveryState = await runtime.getRecoveryPlan("wr_12345678");
+  let reauthorizationCancellations = 0;
+  let recoveryCancellations = 0;
+  runtime.getWalletReauthorizationPlan = async () => reauthorizationState;
+  runtime.cancelWalletReauthorizationPlan = async () => {
+    reauthorizationCancellations += 1;
+    reauthorizationState = {
+      ...reauthorizationState,
+      decision: "deny",
+      blockers: [...reauthorizationState.blockers, "USER_CANCELLED"],
+    };
+    return reauthorizationState;
+  };
+  runtime.getRecoveryPlan = async () => recoveryState;
+  runtime.cancelRecoveryPlan = async () => {
+    recoveryCancellations += 1;
+    recoveryState = {
+      ...recoveryState,
+      decision: "deny",
+      blockers: [...recoveryState.blockers, "USER_CANCELLED"],
+    };
+    return recoveryState;
+  };
   let reauthorizationCalls = 0;
   let recoveryCalls = 0;
   runtime.reauthorizeWallet = async () => {
@@ -1295,15 +2003,19 @@ test("declined wallet reauthorization and recovery confirmations cause no execut
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = await createMcpServer(runtime);
   const client = testMcpClient(new Client(
-    { name: "wallet-lifecycle-decline-test", version: "1.0.0" },
+    { name: "wallet-lifecycle-chat-decline-test", version: "1.0.0" },
     { capabilities: { elicitation: { form: {} } } },
   ));
-  client.setRequestHandler(ElicitRequestSchema, async () => ({ action: "decline" }));
+  let elicitationCalls = 0;
+  client.setRequestHandler(ElicitRequestSchema, async () => {
+    elicitationCalls += 1;
+    return { action: "accept", content: {} };
+  });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
     const reauthorization = await client.callTool({
       name: "wallet_reauthorize",
-      arguments: { decision_id: "wra_12345678" },
+      arguments: { decision_id: "wra_12345678", user_confirmed: false },
     });
     const reauthorizationResult = reauthorization.structuredContent as {
       code: string;
@@ -1314,10 +2026,22 @@ test("declined wallet reauthorization and recovery confirmations cause no execut
     const reauthorizationText = reauthorization.content.find((block) => block.type === "text");
     assert.equal(reauthorizationText?.type, "text");
     assert.match(reauthorizationText.text, /reauthorization cancelled/u);
+    for (const argumentsValue of [
+      { decision_id: "wra_12345678" },
+      { decision_id: "wra_12345678", user_confirmed: true },
+    ]) {
+      const retry = await client.callTool({ name: "wallet_reauthorize", arguments: argumentsValue });
+      const retryResult = retry.structuredContent as {
+        code: string;
+        presentation: { state: string };
+      };
+      assert.equal(retryResult.code, "WALLET_REAUTHORIZATION_CONFIRMATION_REQUIRED");
+      assert.equal(retryResult.presentation.state, "cancelled");
+    }
 
     const recovery = await client.callTool({
       name: "wallet_execute_recovery_transfer",
-      arguments: { decision_id: "wr_12345678" },
+      arguments: { decision_id: "wr_12345678", user_confirmed: false },
     });
     const recoveryResult = recovery.structuredContent as {
       code: string;
@@ -1328,8 +2052,117 @@ test("declined wallet reauthorization and recovery confirmations cause no execut
     const recoveryText = recovery.content.find((block) => block.type === "text");
     assert.equal(recoveryText?.type, "text");
     assert.match(recoveryText.text, /Recovery transfer cancelled/u);
+    for (const argumentsValue of [
+      { decision_id: "wr_12345678" },
+      { decision_id: "wr_12345678", user_confirmed: true },
+    ]) {
+      const retry = await client.callTool({
+        name: "wallet_execute_recovery_transfer",
+        arguments: argumentsValue,
+      });
+      const retryResult = retry.structuredContent as {
+        code: string;
+        presentation: { state: string };
+      };
+      assert.equal(retryResult.code, "RECOVERY_CONFIRMATION_REQUIRED");
+      assert.equal(retryResult.presentation.state, "cancelled");
+    }
     assert.equal(reauthorizationCalls, 0);
     assert.equal(recoveryCalls, 0);
+    assert.equal(reauthorizationCancellations, 1);
+    assert.equal(recoveryCancellations, 1);
+    assert.equal(elicitationCalls, 0);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("a cancelled policy preview remains terminal for omitted and true retries", async () => {
+  const runtime = fakeRuntime();
+  let policyState = await runtime.getPolicyUpdatePlan("wpd_12345678");
+  let cancellationCalls = 0;
+  let applyCalls = 0;
+  runtime.getPolicyUpdatePlan = async () => policyState;
+  runtime.cancelPolicyUpdatePlan = async () => {
+    cancellationCalls += 1;
+    policyState = {
+      ...policyState,
+      decision: "deny",
+      blockers: [...policyState.blockers, "USER_CANCELLED"],
+    };
+    return policyState;
+  };
+  runtime.applyPolicyUpdate = async () => {
+    applyCalls += 1;
+    throw new Error("must not apply a cancelled policy preview");
+  };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client({ name: "policy-terminal-cancel-test", version: "1.0.0" }));
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    for (const argumentsValue of [
+      { decision_id: "wpd_12345678", user_confirmed: false },
+      { decision_id: "wpd_12345678" },
+      { decision_id: "wpd_12345678", user_confirmed: true },
+    ]) {
+      const response = await client.callTool({
+        name: "wallet_apply_policy_update",
+        arguments: argumentsValue,
+      });
+      const structured = response.structuredContent as {
+        code: string;
+        data: { requires_new_user_confirmation: boolean };
+        presentation: { state: string };
+      };
+      assert.equal(structured.code, "POLICY_UPDATE_CANCELLED");
+      assert.equal(structured.data.requires_new_user_confirmation, false);
+      assert.equal(structured.presentation.state, "cancelled");
+    }
+    assert.equal(cancellationCalls, 1);
+    assert.equal(applyCalls, 0);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("an older policy preview reports supersession rather than user cancellation", async () => {
+  const runtime = fakeRuntime();
+  const original = await runtime.getPolicyUpdatePlan("wpd_12345678");
+  runtime.getPolicyUpdatePlan = async () => ({
+    ...original,
+    decision: "deny",
+    blockers: ["SUPERSEDED_BY_NEW_PREVIEW"],
+  });
+  runtime.applyPolicyUpdate = async () => {
+    throw new Error("must not apply a superseded policy preview");
+  };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client({ name: "policy-superseded-test", version: "1.0.0" }));
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const response = await client.callTool({
+      name: "wallet_apply_policy_update",
+      arguments: { decision_id: "wpd_12345678", user_confirmed: true },
+    });
+    const structured = response.structuredContent as {
+      code: string;
+      data: { reason: string; requires_new_user_confirmation: boolean };
+      presentation: { title: string; state: string; notice: { text: string } };
+    };
+    assert.equal(structured.code, "POLICY_UPDATE_CANCELLED");
+    assert.equal(structured.data.reason, "superseded");
+    assert.equal(structured.data.requires_new_user_confirmation, false);
+    assert.equal(structured.presentation.title, "Permission preview superseded");
+    assert.equal(structured.presentation.state, "attention");
+    assert.match(structured.presentation.notice.text, /newer preview replaced/u);
+    const textBlock = response.content.find((block) => block.type === "text");
+    assert.equal(textBlock?.type, "text");
+    assert.match(textBlock.text, /superseded by a newer preview/u);
+    assert.doesNotMatch(textBlock.text, /change cancelled/u);
   } finally {
     await client.close();
     await server.close();
@@ -1720,7 +2553,8 @@ test("every shipped MCP tool has at least two contract-level flows", async () =>
       "blocked",
     );
     expectCode(
-      await exercise("wallet_apply_policy_update", "confirmed latest plan", {
+      await exercise("wallet_apply_policy_update", "confirmed exact plan", {
+        decision_id: "wpd_12345678",
         user_confirmed: true,
       }),
       "POLICY_UPDATED",

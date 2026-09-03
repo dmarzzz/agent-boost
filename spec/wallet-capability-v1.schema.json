@@ -23,7 +23,7 @@
     "wallet_tree"
   ],
   "properties": {
-    "contract": {"const": "org.agentboost.wallet/1.6"},
+    "contract": {"const": "org.agentboost.wallet/1.7"},
     "chain_id": {"const": "eip155:11155111"},
     "network_name": {"const": "Sepolia"},
     "asset_type": {"const": "eip155:11155111/slip44:60"},

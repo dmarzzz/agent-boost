@@ -90,8 +90,8 @@ gives reload guidance, starts onboarding with no arguments, preserves the setup
 ID and revision, presents the browser/QR/address fallback honestly, and
 long-polls with `wait_ms: 90000`.
 
-`agent-boost` requires the Agent Boost MCP toolset. It teaches wallet lifecycle,
-policy, and transfer sequences:
+`agent-boost` teaches Hermes to discover and use the Agent Boost MCP toolset for
+wallet lifecycle, policy, and transfer sequences:
 
 1. list saved and discoverable local profiles by friendly name;
 2. create, adopt, select, or archive only after exact confirmation;
@@ -99,11 +99,9 @@ policy, and transfer sequences:
 4. inspect or preview wallet-policy changes in ordinary native-token units;
 5. keep regular, private, and exact recovery routes distinct;
 6. plan an exact recipient and ordinary Sepolia ETH amount;
-7. immediately execute an immutable allowed plan without `user_confirmed`,
-   allowing the MCP client to render one-shot **Approve** / **Cancel** controls;
-8. only when native elicitation is unavailable, read back the returned receipt,
-   obtain unambiguous chat confirmation, and retry the same decision with
-   `user_confirmed: true`;
+7. show the exact immutable allowed plan in chat and end the turn;
+8. after a new unambiguous approval message, execute that same decision with
+   `user_confirmed: true` without asking again or directing the user elsewhere;
 9. preserve the returned request ID until terminal and never replace an
    unresolved request.
 
@@ -113,9 +111,12 @@ are enforced in Agent Boost.
 
 Policy editing uses `wallet_get_policy`, `wallet_plan_policy_update`, and
 `wallet_apply_policy_update`. The user speaks in native-token decimals; the MCP
-boundary converts them exactly. The preview says explicitly that authority is
-not liquidity: applying it does not move the main balance into the private
-payment pocket or approve a payment.
+boundary converts decimal strings exactly. Because JSON parsing erases a
+number's original spelling, any intended fractional amount must be a string;
+parsed non-integers are rejected, while safe whole-number values such as `66`
+are accepted. The preview says explicitly that authority is not liquidity:
+applying it does not move the main balance into the private payment pocket or
+approve a payment.
 
 ## Onboarding
 
@@ -157,14 +158,22 @@ Planning refreshes Kohaku's private balance, reads the durable delegation, and
 returns `allow` or `deny` with explicit blockers. It creates no transaction.
 
 `wallet_execute_private_payment` accepts only the returned decision ID, a
-stable client request ID, and an optional fallback confirmation boolean. It
-never accepts a second copy of the recipient or amount. Under the default
-policy, Agent Boost requests native form elicitation from the MCP client; a
-decline or cancellation never executes. A client without elicitation receives a
-structured receipt and may retry the same plan after verbal approval with
-`user_confirmed: true`. That boolean is Hermes's attestation, not independent
-speaker authentication. A repeat with the same client ID and decision returns
-the original request; a conflicting repeat is rejected.
+stable client request ID, and the confirmation attestation. It never accepts a
+second copy of the recipient or amount. Under the default policy, Hermes shows
+the exact structured receipt in chat and ends the turn. A new explicit user
+approval causes Hermes to call the execution tool with `user_confirmed: true`;
+Agent Boost never invokes advertised MCP elicitation for this flow. An omitted
+attestation stays pending in chat. The boolean is Hermes's attestation, not
+independent speaker authentication. A decline never executes. A repeat with the
+same client ID and decision returns the original request; a conflicting repeat
+is rejected.
+
+Recoverable create, adopt, select, archive, and demo-reset actions rely on the
+same chat attestation for the exact action and friendly name, when applicable;
+Agent Boost does not persist a separate lifecycle preview. A lifecycle change
+does not grant signing authority. Reauthorization and every transfer use
+distinct immutable plans, so a lifecycle mismatch cannot itself authorize or
+move funds.
 
 The execution tool can cause signing and broadcast. The authority is constrained
 to the active count, per-send, total, and expiry policy, with non-adjustable
@@ -183,8 +192,10 @@ always resumes the current wallet.
 `wallet_list` is the selection inventory. It returns registered profiles and,
 when Kohaku inventory is healthy, local unregistered wallets with an explicit
 Sepolia adoption flag. Hermes speaks only friendly names; internal wallet IDs
-stay in structured model context. `wallet_select` restores the target profile's
-durable setup, advances its selection epoch, and disables prior authority.
+stay in structured model context. `wallet_select` restores an inactive target
+profile's durable setup, advances its selection epoch, and disables prior
+authority. Selecting the already-active profile is an authorization-preserving
+no-op.
 `wallet_plan_reauthorization` plus separately confirmed `wallet_reauthorize`
 mint fresh bounded authority before another transfer can be planned. An
 archived profile retains encrypted data and can be made available by selecting

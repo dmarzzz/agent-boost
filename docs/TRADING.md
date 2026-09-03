@@ -66,7 +66,7 @@ trade_capabilities
   -> Boost validates tokens, amount, recipient, slippage, fees, spender,
      approvals, calldata, deadline, and chain
   -> immutable decision + digest
-  -> native user confirmation
+  -> exact chat preview + new user confirmation
   -> trade_execute(decision ID)
   -> persist request and consume authority before signing
   -> bounded token approval/wrap action when required

@@ -82,7 +82,9 @@ to preview and approve different testnet guardrails.
 
 Hermes uses the selected main account, reserves gas, shows a public-transfer
 confirmation, and never substitutes the private route. Regular and private
-sends share the same testnet delegation envelope.
+sends share the same testnet delegation envelope. Your next chat reply—“yes,”
+“send it,” or ✅—confirms the shown plan; there is no separate interface or
+plan ID for you to operate.
 
 > Fetch https://example.com/data.json through covered egress.
 

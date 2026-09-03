@@ -24,9 +24,8 @@ correct decision-making, not secrets.
 2. Wallet commands are a fixed allowlist with validated fields and no shell.
 3. Mainnet and non-Sepolia RPC endpoints are rejected.
 4. Payment terms cannot change between plan and execution.
-5. A payment requires explicit one-shot confirmation—native client elicitation
-   when available, with a verbal fallback—and stays within a one-use, expiring
-   amount delegation.
+5. A payment requires an exact in-chat preview followed by a new explicit user
+   confirmation, and stays within a one-use, expiring amount delegation.
 6. Stable client IDs prevent ordinary retries from double-executing.
 7. Uncertain side effects fail safe and do not restore payment authority.
 8. The onboarding UI is local, read-only, and exposes only the public funding
@@ -80,8 +79,9 @@ formal verification. The event boundary is disposable, valueless Sepolia ETH.
 | --- | --- | --- |
 | Prompt asks for mainnet payment | Hard-coded Sepolia client and capability | Same-user shell could bypass Agent Boost entirely |
 | Prompt changes recipient after approval | Decision binds exact recipient/amount | User may verbally confirm misleading text |
-| Hermes or the MCP host falsely reports approval | One-shot native elicitation where supported, exact fallback `user_confirmed` gate, and bounded delegation | Client acceptance and verbal fallback are host-attested, not independent authentication |
-| Tool retry duplicates payment | Stable client ID and durable request | New malicious client ID is blocked only after first request exists |
+| Hermes or the MCP host falsely reports approval | Exact plan binding, `user_confirmed` gate, and bounded delegation | Chat confirmation is host-attested, not independent speaker authentication |
+| Faulty host rebinds a recoverable wallet lifecycle approval to another action or friendly name | Agent Boost validates the passed action/name; lifecycle changes grant no signing authority; reauthorization and fund movement require separate immutable plans | Create, adopt, select, archive, and demo-reset previews are chat choreography and are not independently persisted or bound by Agent Boost |
+| Tool retry duplicates payment | Stable client ID plus atomic one-request-per-decision enforcement | Failures before any durable request exists remain retryable |
 | Shell injection through recipient/path | Address/path validation and `shell: false` | Vulnerabilities in Node or Kohaku remain |
 | Secret appears in MCP output | Explicit public projections, stable adapter errors, URL/path redaction, and no raw upstream stderr | Same-user process inspection remains possible |
 | Concurrent MCP processes race signing | Exclusive loopback runtime-ownership lock | A local denial of service can occupy the lock port |

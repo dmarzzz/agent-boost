@@ -105,13 +105,7 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.match(setupDescription, /\.$/u);
   assert.match(operationalDescription, /\.$/u);
   assert.doesNotMatch(setupSkill, /requires_toolsets/u);
-  assert.deepEqual(
-    (
-      (operationalMetadata.metadata as { hermes: Record<string, unknown> })
-        .hermes.requires_toolsets
-    ),
-    ["mcp-agent-boost"],
-  );
+  assert.doesNotMatch(operationalSkill, /requires_toolsets/u);
   assert.match(setupSkill, /onboarding_start/u);
   assert.match(setupSkill, /immediately[\s\S]*tool-returned QR/u);
   assert.match(setupSkill, /gateway owns MCP image delivery/u);
@@ -152,6 +146,18 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
     /Never route an explicit regular transfer through the private-payment tools/iu,
   );
   assert.match(operationalSkill, /`user_confirmed: true`/u);
+  assert.match(
+    operationalSkill,
+    /already active[\s\S]{0,180}do not ask[\s\S]{0,180}wallet-switch confirmation/iu,
+  );
+  assert.match(
+    operationalSkill,
+    /authorization_required[\s\S]{0,180}instead of assuming signing was[\s\S]{0,40}disabled/iu,
+  );
+  assert.match(
+    operationalSkill,
+    /Never (?:tell|send|direct)[\s\S]{0,80}user[\s\S]{0,80}(?:native|external)[\s\S]{0,80}(?:interface|surface)/iu,
+  );
   assert.match(operationalSkill, /agent operates every tool/iu);
   assert.match(operationalSkill, /Never ask the user to type a tool name/iu);
   assert.match(operationalSkill, /wallet tree is a live view/iu);

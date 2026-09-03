@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Bumped the wallet capability contract to `org.agentboost.wallet/1.7` for the
+  chat-only confirmation contract, friendly wallet references, regular public
+  transfer route, and durable cancellation/replay protections.
+
+- Made Hermes approvals conversational end to end: an explicit follow-up such
+  as “confirm yes send” now executes the shown plan, while missing confirmation
+  stays pending in chat instead of opening another approval surface. Execution
+  tools tell the agent to act instead of sending the user elsewhere. The
+  operational skill is now discoverable even when Agent Boost tools are behind
+  Hermes progressive discovery.
+- Hardened tool inputs for real model behavior: regular, private, recovery,
+  policy, and affordability amounts accept safe whole JSON numbers while
+  fractional amounts remain exact decimal strings; wallet selection and
+  archival accept friendly names without exposing internal wallet IDs.
+- Made chat rejection durable for transfer, recovery, reauthorization, and
+  policy previews. Cancelled decisions cannot later execute, newer policy
+  previews supersede older ones, and confirmation requires the exact internal
+  ID preserved from the displayed preview.
 - Exposed the complete safe wallet lifecycle to Hermes: list and discover local
   profiles, create, adopt, select, archive, separately reauthorize, and execute
   exact recovery transfers. Loading a prior wallet restores its durable setup

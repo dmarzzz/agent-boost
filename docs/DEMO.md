@@ -69,16 +69,13 @@ Tell Hermes, for example:
 > 0x2222222222222222222222222222222222222222.
 
 Hermes reads current wallet context and creates a short-lived plan itself. Under
-the default security policy, the client shows a native receipt with the exact
-Sepolia ETH amount, full recipient address, testnet privacy warning, and
-**Approve** / **Cancel** controls. Hermes owns the MCP calls, decision IDs,
-atomic units, and idempotency key; the user never types them.
-
-If the client cannot render MCP elicitation, Agent Boost returns the same
-structured receipt for Hermes to read back. In that fallback only, reply ✅,
-`yes`, or `send it`, and Hermes retries the unchanged decision with
-`user_confirmed: true`. This remains a conversational demo control, not
-independent authentication or an out-of-band approval channel.
+the default security policy, Hermes shows the exact Sepolia ETH amount, full
+recipient address, and testnet visibility warning in chat, then ends the turn.
+Reply ✅, `yes`, or `send it`; Hermes executes the unchanged decision with
+`user_confirmed: true`. It never sends you to a native or external interface.
+Hermes owns the MCP calls, decision IDs, atomic units, and idempotency key; the
+user never types them. This is a conversational demo control, not independent
+speaker authentication or an out-of-band approval channel.
 
 After confirmation, Hermes executes the immutable plan with a stable request
 ID. The default wallet policy permits:
@@ -120,7 +117,7 @@ Ask Hermes naturally:
 
 Hermes calls `wallet_list`. If exactly one inactive profile exists, “old” is
 unambiguous; otherwise Hermes asks using friendly names only. After wallet-
-switch approval, `wallet_select` archives the current workflow, restores the
+switch approval in chat, `wallet_select` archives the current workflow, restores the
 selected profile's durable setup and request state, advances its selection
 epoch, and disables signing. Hermes then shows the exact fresh authority and
 asks for a second, separate reauthorization approval. Only after

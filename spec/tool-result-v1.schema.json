@@ -96,18 +96,7 @@
             "text": {"type": "string", "minLength": 1}
           }
         },
-        "next_action": {"type": "string", "minLength": 1},
-        "interaction": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "transport", "approve_label", "decline_label"],
-          "properties": {
-            "kind": {"const": "confirmation"},
-            "transport": {"const": "mcp_elicitation"},
-            "approve_label": {"type": "string", "minLength": 1},
-            "decline_label": {"type": "string", "minLength": 1}
-          }
-        }
+        "next_action": {"type": "string", "minLength": 1}
       }
     },
     "data": {"type": "object"}
