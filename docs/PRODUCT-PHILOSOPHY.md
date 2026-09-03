@@ -32,6 +32,8 @@ canonical tree from the wallet registry, refreshes every visible public balance
 and the active private balance, and marks an inactive private balance as `last
 known`. A failed read becomes `unavailable`, never a plausible zero. Friendly
 profile names replace addresses and wallet IDs in the default presentation.
+Display rounding is always marked as approximate, and a tiny nonzero balance is
+never rendered as zero.
 
 The balance incident that shaped this rule was simple: the chain value was
 correct, but an agent reused old context and rendered roughly `68.899 ETH` as

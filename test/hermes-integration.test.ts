@@ -149,6 +149,10 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.match(operationalSkill, /agent operates every tool/iu);
   assert.match(operationalSkill, /Never ask the user to type a tool name/iu);
   assert.match(operationalSkill, /wallet tree is a live view/iu);
+  assert.match(
+    operationalSkill,
+    /tree rule wins[\s\S]*Never call `wallet_get_context` first/iu,
+  );
   assert.match(operationalSkill, /shortened address[\s\S]*aggregate total/iu);
   assert.match(
     operationalSkill,
@@ -158,13 +162,16 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
     operationalSkill,
     /never tell the user to reload[\s\S]*contact an operator/iu,
   );
-  assert.match(operationalSkill, /Every balance is a live read/u);
+  assert.match(operationalSkill, /Every single-account balance is a live read/u);
   assert.match(
     operationalSkill,
-    /history, memory, onboarding status, and prior[\s\S]*never balance sources/u,
+    /history, memory, onboarding status, and prior[\s\S]*never balance\s+sources/iu,
   );
   assert.match(operationalSkill, /never convert `balance_atomic` or wei/u);
-  assert.match(operationalSkill, /Do not mention the address unless the user asks/u);
+  assert.match(
+    operationalSkill,
+    /Do not mention the\s+address unless the user asks/u,
+  );
   assert.match(operationalSkill, /first gate[\s\S]*never blocks/iu);
   assert.match(operationalSkill, /`yes`[\s\S]*`send it`[\s\S]*`✅`/u);
   assert.match(operationalSkill, /Never claim an unresolved payment succeeded from a balance change/u);

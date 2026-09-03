@@ -56,17 +56,23 @@ redeemable value.
   profile contains sibling `main` and `private` views; the folders are
   organization, not ownership or control. Main balances and the active private
   balance are live. An inactive private balance is explicitly marked last known.
-- **Every balance is a live read.** For any question about a wallet balance,
-  ETH held, funds, available ETH, or affordability, call `wallet_get_context`
-  in that same turn. Conversation history, memory, onboarding status, and prior
-  tool results are never balance sources. Quote the preformatted `Main account
-  balance:` amount returned by the tool; never convert `balance_atomic` or wei
-  yourself. When the user names an amount in an affordability question, pass it
-  unchanged as `amount_native` and use the returned comparison. A main-account
-  balance never proves that a private payment is spendable; an exact recipient
-  and `wallet_plan_private_payment` result are required. Do not mention the address unless the user asks for it.
-- Read-only balance questions are complete human requests. The first gate below
-  never blocks their required `wallet_get_context` call.
+- **The tree rule wins.** Never call `wallet_get_context` first—or answer from
+  its result—when the request says wallets plural, all balances, accounts,
+  subwallets, map, or tree. `wallet_get_tree` is the single complete read.
+- **Every single-account balance is a live read.** For a question specifically
+  about the current main wallet balance, ETH held there, funds, available ETH,
+  or affordability, call `wallet_get_context` in that same turn. Conversation
+  history, memory, onboarding status, and prior tool results are never balance
+  sources. Quote the preformatted `Main account balance:` amount returned by the
+  tool; never convert `balance_atomic` or wei yourself. When the user names an
+  amount in an affordability question, pass it unchanged as `amount_native` and
+  use the returned comparison. A main-account balance never proves that a
+  private payment is spendable; an exact recipient and
+  `wallet_plan_private_payment` result are required. Do not mention the address
+  unless the user asks for it. Do not mention private payment capacity unless
+  that is what the user asked about.
+- Read-only single-account balance questions are complete human requests. The
+  first gate below never blocks their required `wallet_get_context` call.
 - **The agent operates every tool.** Never ask the user to type a tool name,
   MCP command, decision ID, request ID, idempotency key, boolean, or atomic-unit
   amount.
@@ -180,15 +186,16 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
 
 1. Call `capabilities` when the contract version or readiness is unknown, or a
    tool reports unsupported or degraded state.
-2. Call `wallet_get_context` before wallet-dependent reasoning. For a general
-   balance question, quote the tool's preformatted decimal main-account balance
-   exactly. Never convert `balance_atomic` yourself. "Main" means it funds
-   subaccounts; it does not control, own, recover, or revoke them. Do not add
-   subaccount balances or setup funding targets. Payment planning validates
-   spendability separately. For an affordability question that includes an
-   amount, pass that ordinary Sepolia ETH decimal as `amount_native`; even a
-   positive main-account comparison is not permission to claim a private send
-   is possible.
+2. Call `wallet_get_context` before payment reasoning or a main-account balance
+   answer. Do not call it for a wallet tree, wallets-plural overview, or policy-
+   only read. For a main balance question, quote the tool's preformatted decimal
+   main-account balance exactly. Never convert `balance_atomic` yourself. "Main"
+   means it funds subaccounts; it does not control, own, recover, or revoke them.
+   Do not add subaccount balances or setup funding targets. Payment planning
+   validates spendability separately. For an affordability question that
+   includes an amount, pass that ordinary Sepolia ETH decimal as
+   `amount_native`; even a positive main-account comparison is not permission
+   to claim a private send is possible.
 3. Once recipient and amount are exact, call `wallet_plan_private_payment`
    yourself with the user's ordinary Sepolia ETH decimal as `amount_native`.
    Never convert it to wei or call this tool with `amount_atomic`. Branch on

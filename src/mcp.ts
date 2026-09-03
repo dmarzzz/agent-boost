@@ -568,13 +568,13 @@ function compactToolText(structured: Record<string, unknown>): string {
         : covers
           ? ` The main account numerically covers the requested ${requested} Sepolia ETH.`
           : ` The requested ${requested} Sepolia ETH exceeds the main account balance.`;
-    return `Live wallet read complete (${phase}). Quote exactly: Main account balance: ${amount} Sepolia ETH.${comparison} Do not recalculate this amount from balance_atomic or reuse a prior balance. “Main” means the funding source; it has no control over subaccounts. Never use this balance alone to claim a private payment can be sent; exact private-payment spendability requires a recipient and wallet_plan_private_payment. Do not reveal the address or raw atomic value unless asked.`;
+    return `Single main-account read complete (${phase}). If the user asked for wallets plural, all balances, accounts, subwallets, a wallet map, or a wallet tree, do not answer from this result: call wallet_get_tree now. Otherwise quote exactly: Main account balance: ${amount} Sepolia ETH.${comparison} Do not recalculate this amount from balance_atomic, compare it with conversation history, or reuse a prior balance. “Main” means the funding source; it has no control over subaccounts. Never use this balance alone to claim a private payment can be sent; exact private-payment spendability requires a recipient and wallet_plan_private_payment. Do not reveal the address or raw atomic value unless asked.`;
   }
 
   if (code === "WALLET_TREE") {
     const rendered = stringField(data, "rendered");
     return rendered
-      ? `Live wallet map. Quote data.rendered exactly and do not add an address:\n${rendered}`
+      ? `Live wallet map. For a direct tree request, the entire final answer must be data.rendered exactly—no preamble, code fence, comparison with history, address, or follow-up offer. During onboarding, embed it only in the instructed completion template:\n${rendered}`
       : "The live wallet map is unavailable.";
   }
 
@@ -810,11 +810,20 @@ function walletTreeBalance(
 ): string {
   if (balanceWei !== undefined) {
     const age = freshness === "last_known" ? " · last known" : " · live";
-    return `${formatEthWei(BigInt(balanceWei))} Sepolia ETH${age}`;
+    return `${formatTreeEthWei(BigInt(balanceWei))} Sepolia ETH${age}`;
   }
   if (status === "not_created") return "not created";
   if (status === "preparing") return "preparing...";
   return "unavailable";
+}
+
+function formatTreeEthWei(wei: bigint): string {
+  if (wei === 0n) return "0";
+  const sixDecimalWei = 1_000_000_000_000n;
+  if (wei < sixDecimalWei) return "<0.000001";
+  if (wei % sixDecimalWei === 0n) return formatEthWei(wei);
+  const rounded = ((wei + sixDecimalWei / 2n) / sixDecimalWei) * sixDecimalWei;
+  return `≈${formatEthWei(rounded)}`;
 }
 
 function publicWalletTree(snapshot: WalletTreeSnapshot): Record<string, unknown> {
@@ -1301,7 +1310,7 @@ export async function createMcpServer(
     {
       title: "Refresh live wallet balance",
       description:
-        "FRESHNESS REQUIREMENT: Call this tool in the same turn for every question about wallet balance, ETH held, funds, or affordability, even when conversation history already contains a balance. When the user names an amount in an affordability question, pass it as amount_native so Agent Boost performs the numeric comparison. History, memory, onboarding state, and prior tool results are not current-balance sources. Use the preformatted decimal amount in the returned text without converting balance_atomic. The default response contains only the main-account balance. Main means the account can fund subaccounts; it does not control, own, recover, or revoke them. Never claim a private payment is affordable from the main balance: exact spendability requires a recipient and wallet_plan_private_payment. Returns no seed, key, password, or raw note material.",
+        "SINGLE-ACCOUNT TOOL: Use this for the current main-account balance, ETH held there, or affordability. Never use it for wallets plural, all balances, accounts, subwallets, a wallet map, or a wallet tree; call wallet_get_tree instead and do not call this first. For a main-balance question, call in the same turn even when conversation history already contains a balance. When the user names an amount in an affordability question, pass it as amount_native so Agent Boost performs the numeric comparison. History, memory, onboarding state, and prior tool results are not current-balance sources. Use the preformatted decimal amount in the returned text without converting balance_atomic. The default response contains only the main-account balance. Main means the account can fund subaccounts; it does not control, own, recover, or revoke them. Never claim a private payment is affordable from the main balance: exact spendability requires a recipient and wallet_plan_private_payment. Returns no seed, key, password, or raw note material.",
       inputSchema: z.object({
         amount_native: z.string().regex(
           /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/,
@@ -1352,7 +1361,7 @@ export async function createMcpServer(
     {
       title: "Show the live wallet tree",
       description:
-        "Call this whenever the user asks to see all wallets, accounts, subwallets, their balances, or a wallet tree. It refreshes every available profile's main balance and the active profile's private balance, then returns one deterministic ASCII-style tree with friendly short names. Quote data.rendered exactly. Inactive private balances are explicitly labeled last known. Addresses, wallet IDs, raw atomic values, and secrets are intentionally excluded. The folders organize views only; they never imply custody or control.",
+        "EXCLUSIVE TREE TOOL: Call this—and not wallet_get_context—whenever the user asks to see all wallets or balances, accounts, subwallets, their wallet map, or a wallet tree. It refreshes every available profile's main balance and the active profile's private balance, then returns one deterministic ASCII-style tree with friendly short names. For a direct tree request, the entire final answer is data.rendered exactly: no preamble, code fence, history comparison, or follow-up offer. Inactive private balances are explicitly labeled last known. Addresses, wallet IDs, raw atomic values, and secrets are intentionally excluded. The folders organize views only; they never imply custody or control.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

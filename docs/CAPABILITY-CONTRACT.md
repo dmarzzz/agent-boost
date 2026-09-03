@@ -215,6 +215,10 @@ from Kohaku; inactive private balances are explicitly labeled `last known`.
 Failed reads render `unavailable`, never a cached value presented as live or an
 invented zero.
 
+The tree keeps six decimal places for scanability. A longer dust tail is rounded
+with an explicit `≈` marker, and a smaller nonzero value is shown as
+`<0.000001`; the structured decimal remains exact.
+
 The public tree includes friendly profile names and decimal Sepolia ETH only.
 It excludes addresses, account IDs, wallet IDs, raw atomic values, secrets, and
 aggregate totals. Folder indentation is organizational and does not imply
