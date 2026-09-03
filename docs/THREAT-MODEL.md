@@ -69,8 +69,8 @@ timing despite Tor.
 
 ### Real-value safety
 
-The wallet stack has not been audited. There is no seed export or guided wallet
-recovery UX, hardware signer,
+The wallet stack has not been audited. There is no seed export, whole-wallet
+sweep, hardware signer,
 multi-party approval, production fee policy, chain reorganization handling, or
 formal verification. The event boundary is disposable, valueless Sepolia ETH.
 

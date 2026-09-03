@@ -108,9 +108,29 @@ deadline applies to delegated Agent Boost execution, not to the
 wallet, address, or funds. Address and balance reads remain available after it
 expires. This POC currently blocks new Agent Boost transfers under an expired
 delegation; the user can now preview and confirm a renewal conversationally.
-The current release still requires a separately designed and confirmed recovery
-transfer path before it can move those funds. Never
-interpret expiry as deletion or loss of access to the encrypted wallet.
+An exact-amount recovery transfer is separately planned and confirmed; it is
+not a whole-wallet sweep. Never interpret expiry as deletion or loss of access
+to the encrypted wallet.
+
+## Load a previous wallet
+
+Ask Hermes naturally:
+
+> Load my old wallet.
+
+Hermes calls `wallet_list`. If exactly one inactive profile exists, “old” is
+unambiguous; otherwise Hermes asks using friendly names only. After wallet-
+switch approval, `wallet_select` archives the current workflow, restores the
+selected profile's durable setup and request state, advances its selection
+epoch, and disables signing. Hermes then shows the exact fresh authority and
+asks for a second, separate reauthorization approval. Only after
+`wallet_reauthorize` succeeds can a new regular or private transfer be planned.
+
+`wallet_list` also discovers unregistered local Kohaku wallets. A Sepolia entry
+can be adopted by friendly name without entering a seed, password, private key,
+or filesystem path. Named wallet creation and inactive-profile archival follow
+the same confirmation discipline. Archival retains encrypted state and is
+reversible by selecting the profile later.
 
 ## Start a fresh demo
 

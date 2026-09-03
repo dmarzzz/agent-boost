@@ -17,8 +17,11 @@ import type {
   PaymentRequest,
   PolicyUpdatePlan,
   PolicyUpdateReceipt,
+  RecoveryTransferPlan,
+  RecoveryTransferRequest,
   RegularTransferPlan,
   RegularTransferRequest,
+  WalletReauthorizationPlan,
 } from "../src/contracts.js";
 import type { AgentBoostRuntime } from "../src/mcp.js";
 import { createMcpServer } from "../src/mcp.js";
@@ -37,6 +40,9 @@ type Scenario =
   | "payment-allowed"
   | "affordability-check"
   | "policy-update"
+  | "wallet-lifecycle"
+  | "wallet-ambiguous"
+  | "recovery-confirmed"
   | "payment-expired"
   | "egress-ready"
   | "egress-needs-enrollment";
@@ -98,6 +104,10 @@ const DECISION_ID = "wd_eval_12345678";
 const REQUEST_ID = "req_eval_12345678";
 const REGULAR_DECISION_ID = "rwd_eval_12345678";
 const REGULAR_REQUEST_ID = "rreq_eval_12345678";
+const SAVED_WALLET_ID = "wallet_saved_12345678";
+const REAUTHORIZATION_ID = "wra_eval_12345678";
+const RECOVERY_DECISION_ID = "wr_eval_12345678";
+const RECOVERY_REQUEST_ID = "wrr_eval_12345678";
 const NOW = "2026-09-01T00:00:00.000Z";
 const AUTHORIZATION = {
   walletId: "wallet_eval_12345678",
@@ -126,6 +136,18 @@ const expectedToolTraces: Record<string, string[]> = {
   "start-new-demo-wallet": ["wallet_start_new_demo"],
   "advanced-setup-shows-live-policy": ["wallet_get_policy"],
   "wallet-tree-without-identifiers": ["wallet_get_tree"],
+  "saved-wallet-inventory": ["wallet_list"],
+  "ambiguous-old-wallet": ["wallet_list"],
+  "load-and-reauthorize-previous-wallet": [
+    "wallet_list",
+    "wallet_select",
+    "wallet_plan_reauthorization",
+    "wallet_reauthorize",
+  ],
+  "cancel-wallet-switch": ["wallet_list", "wallet_select"],
+  "adopt-local-wallet": ["wallet_list", "wallet_adopt_existing"],
+  "create-named-wallet": ["wallet_create"],
+  "archive-inactive-wallet": ["wallet_list", "wallet_archive"],
   "ambiguous-amount-clarification": [],
   "confirmed-payment-with-emoji": [
     "capabilities",
@@ -182,6 +204,11 @@ const expectedToolTraces: Record<string, string[]> = {
     "wallet_get_context",
     "wallet_plan_private_payment",
   ],
+  "confirmed-exact-recovery": [
+    "wallet_plan_recovery_transfer",
+    "wallet_execute_recovery_transfer",
+    "wallet_get_recovery_request",
+  ],
   "covered-public-read": ["egress_status", "egress_fetch"],
   "covered-read-needs-enrollment": ["egress_status"],
 };
@@ -190,9 +217,9 @@ const forbiddenVisiblePatterns = [
   /\bmcp\b/iu,
   /\bwei\b/iu,
   /\b(?:decision_id|request_id|client_request_id|user_confirmed|amount_atomic|amount_native|manifest_digest|setupId)\b/iu,
-  /\b(?:wallet_get_context|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_start_new_demo|wallet_plan_regular_transfer|wallet_execute_regular_transfer|wallet_get_regular_transfer_request|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|egress_status|egress_fetch)\b/iu,
+  /\b(?:wallet_get_context|wallet_list|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_start_new_demo|wallet_create|wallet_adopt_existing|wallet_select|wallet_archive|wallet_plan_reauthorization|wallet_reauthorize|wallet_plan_regular_transfer|wallet_execute_regular_transfer|wallet_get_regular_transfer_request|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|wallet_plan_recovery_transfer|wallet_execute_recovery_transfer|wallet_get_recovery_request|egress_status|egress_fetch)\b/iu,
   /\b(?:private key|seed phrase|wallet password)\b/iu,
-  /\b(?:rwd_|rreq_|wd_|wpd_|req_|sha256:)[A-Za-z0-9._:-]*/u,
+  /\b(?:wallet_|wra_|wr_|wrr_|rwd_|rreq_|wd_|wpd_|req_|sha256:)[A-Za-z0-9._:-]*/u,
 ];
 
 function approvalFor(scenario: Scenario): PaymentApproval {
@@ -335,6 +362,84 @@ function regularTransferRequest(
     ...(phase === "confirmed"
       ? { transactionHash: `0x${"b".repeat(64)}` }
       : {}),
+  };
+}
+
+function walletReauthorizationPlan(): WalletReauthorizationPlan {
+  const policy = {
+    ...onboardingRecord("private_ready").delegation,
+    expiresAt: "2026-09-08T00:00:00.000Z",
+    paymentsUsed: 0,
+    paymentsRemaining: 1,
+  };
+  return {
+    version: 1,
+    decisionId: REAUTHORIZATION_ID,
+    wallet: {
+      walletId: SAVED_WALLET_ID,
+      walletName: "saved-wallet",
+      selectionEpoch: 2,
+    },
+    currentPolicy: { ...policy, enabled: false },
+    proposedPolicy: { ...policy, enabled: true, spentWei: "0" },
+    authorizationEffect: "replace",
+    counterEffect: "reset_spend_and_payment_count",
+    intentDigest: `sha256:${"4".repeat(64)}`,
+    createdAt: NOW,
+    expiresAt: "2026-09-01T00:05:00.000Z",
+    decision: "allow",
+    blockers: [],
+    approval: { action: "confirm", userConfirmationRequired: true },
+  };
+}
+
+function recoveryPlan(input: {
+  recipient: string;
+  amountWei: string;
+}): RecoveryTransferPlan {
+  return {
+    version: 1,
+    decisionId: RECOVERY_DECISION_ID,
+    wallet: AUTHORIZATION,
+    recipient: input.recipient,
+    amountWei: input.amountWei,
+    withdrawalAmountWei: "100000000000000000",
+    feeReserveWei: "10000000000000000",
+    maxRecipientAmountWei: "90000000000000000",
+    privateBalanceSnapshotWei: "250000000000000000",
+    remainingPrivateBalanceEstimateWei: "150000000000000000",
+    balanceRevision: 4,
+    scope: "single_tornado_denomination",
+    feeModel: "reserved_from_wallet_controlled_remainder",
+    intentDigest: `sha256:${"5".repeat(64)}`,
+    createdAt: NOW,
+    expiresAt: "2026-09-01T00:05:00.000Z",
+    decision: "allow",
+    blockers: [],
+    approval: { action: "confirm", userConfirmationRequired: true },
+  };
+}
+
+function recoveryRequest(
+  phase: RecoveryTransferRequest["phase"],
+): RecoveryTransferRequest {
+  return {
+    version: 1,
+    requestId: RECOVERY_REQUEST_ID,
+    clientRequestId: `hermes:${RECOVERY_DECISION_ID}`,
+    decisionId: RECOVERY_DECISION_ID,
+    wallet: AUTHORIZATION,
+    recipient: RECIPIENT,
+    amountWei: "10000000000000000",
+    withdrawalAmountWei: "100000000000000000",
+    feeReserveWei: "10000000000000000",
+    remainingPrivateBalanceEstimateWei: "150000000000000000",
+    scope: "single_tornado_denomination",
+    feeModel: "reserved_from_wallet_controlled_remainder",
+    phase,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...(phase === "confirmed" ? { transactionHash: `0x${"c".repeat(64)}` } : {}),
   };
 }
 
@@ -500,28 +605,104 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
       };
     },
     async listWallets() {
-      return { active_wallet_id: AUTHORIZATION.walletId, wallets: [] };
+      const inactive = scenario === "wallet-ambiguous"
+        ? [
+            {
+              wallet_id: SAVED_WALLET_ID,
+              name: "saved-wallet",
+              status: "available",
+              active: false,
+              authorization_status: "inactive",
+            },
+            {
+              wallet_id: "wallet_travel_12345678",
+              name: "travel-wallet",
+              status: "available",
+              active: false,
+              authorization_status: "inactive",
+            },
+          ]
+        : [{
+            wallet_id: SAVED_WALLET_ID,
+            name: "saved-wallet",
+            status: "available",
+            active: false,
+            authorization_status: "inactive",
+          }];
+      return {
+        active_wallet_id: AUTHORIZATION.walletId,
+        wallets: [
+          {
+            wallet_id: AUTHORIZATION.walletId,
+            name: "agent-boost",
+            status: "available",
+            active: true,
+            authorization_status: "active",
+          },
+          ...inactive,
+        ],
+        unregistered_local_wallets: [{
+          name: "imported-wallet",
+          network: "sepolia",
+          adoptable: true,
+        }],
+        local_inventory_status: "ready",
+        counts: {
+          registered: 1 + inactive.length,
+          available: 1 + inactive.length,
+          archived: 0,
+          unregistered_local: 1,
+          adoptable_local: 1,
+        },
+      };
     },
-    async createWallet() {
-      throw new Error("wallet creation is outside this conversation eval");
+    async createWallet(input) {
+      assert.equal(input.name, "travel-wallet");
+      assert.equal(input.userConfirmed, true);
+      return {
+        wallet: { name: input.name, active: true, authorization_status: "missing" },
+        setup_phase: "awaiting_funding",
+        authorization_required: true,
+      };
     },
-    async adoptWallet() {
-      throw new Error("wallet adoption is outside this conversation eval");
+    async adoptWallet(input) {
+      assert.equal(input.name, "imported-wallet");
+      assert.equal(input.userConfirmed, true);
+      return {
+        wallet: { name: input.name, active: true, authorization_status: "missing" },
+        changed: true,
+        setup_phase: "awaiting_funding",
+        authorization_required: true,
+      };
     },
-    async selectWallet() {
-      throw new Error("wallet selection is outside this conversation eval");
+    async selectWallet(input) {
+      assert.equal(input.walletId, SAVED_WALLET_ID);
+      assert.equal(input.userConfirmed, true);
+      return {
+        wallet: { name: "saved-wallet", active: true, authorization_status: "missing" },
+        changed: true,
+        setup_phase: "private_ready",
+        authorization_required: true,
+      };
     },
-    async archiveWallet() {
-      throw new Error("wallet archival is outside this conversation eval");
+    async archiveWallet(input) {
+      assert.equal(input.walletId, SAVED_WALLET_ID);
+      assert.equal(input.userConfirmed, true);
+      return { wallet: { name: "saved-wallet", active: false, status: "archived" } };
     },
     async planWalletReauthorization() {
-      throw new Error("wallet reauthorization is outside this conversation eval");
+      return walletReauthorizationPlan();
     },
     async getWalletReauthorizationPlan() {
-      throw new Error("wallet reauthorization is outside this conversation eval");
+      return walletReauthorizationPlan();
     },
-    async reauthorizeWallet() {
-      throw new Error("wallet reauthorization is outside this conversation eval");
+    async reauthorizeWallet(input) {
+      assert.equal(input.decisionId, REAUTHORIZATION_ID);
+      assert.equal(input.userConfirmed, true);
+      return {
+        wallet: { name: "saved-wallet", active: true, authorization_status: "active" },
+        delegation: walletReauthorizationPlan().proposedPolicy,
+      };
     },
     async planRegularTransfer(input) {
       assert.ok(
@@ -579,17 +760,23 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
         ? paymentRequest("indeterminate")
         : paymentRequest("confirmed");
     },
-    async planRecoveryTransfer() {
-      throw new Error("wallet recovery is outside this conversation eval");
+    async planRecoveryTransfer(input) {
+      assert.equal(scenario, "recovery-confirmed");
+      return recoveryPlan(input);
     },
     async getRecoveryPlan() {
-      throw new Error("wallet recovery is outside this conversation eval");
+      return recoveryPlan({ recipient: RECIPIENT, amountWei: "10000000000000000" });
     },
-    async executeRecoveryTransfer() {
-      throw new Error("wallet recovery is outside this conversation eval");
+    async executeRecoveryTransfer(input) {
+      assert.equal(scenario, "recovery-confirmed");
+      assert.equal(input.decisionId, RECOVERY_DECISION_ID);
+      assert.equal(input.clientRequestId, `hermes:${RECOVERY_DECISION_ID}`);
+      assert.equal(input.userConfirmed, true);
+      return recoveryRequest("submitted");
     },
-    async getRecoveryRequest() {
-      throw new Error("wallet recovery is outside this conversation eval");
+    async getRecoveryRequest(input) {
+      assert.equal(input, RECOVERY_REQUEST_ID);
+      return recoveryRequest("confirmed");
     },
     async egressCapabilities() {
       return {
@@ -652,8 +839,13 @@ function assertIdealVisibleResponse(step: AssistantStep, flow: EvalFlow): void {
 
 function assertClientInteraction(step: ClientStep, flow: EvalFlow): void {
   assert.ok(
-    step.title === "Confirm private test payment" ||
-      step.title === "Confirm regular testnet transfer",
+    [
+      "Confirm private test payment",
+      "Confirm regular testnet transfer",
+      "Switch to the saved Sepolia wallet",
+      "Authorize bounded regular and private Sepolia transfers",
+      "Recover exactly 0.01 Sepolia ETH",
+    ].includes(step.title),
     `${flow.id}: native title drifted`,
   );
   assert.equal(step.approve_label, "Approve", `${flow.id}: native approve label drifted`);
@@ -694,18 +886,36 @@ test("ideal conversation flows replay through the real MCP contract", async (t) 
 
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       const server = await createMcpServer(evalRuntime(flow.scenario));
-      const interaction = flow.steps.find(
+      const interactions = flow.steps.filter(
         (step): step is ClientStep => step.actor === "client",
       );
       const client = testMcpClient(new Client(
         { name: "agent-boost-eval", version: "1.0.0" },
-        interaction ? { capabilities: { elicitation: { form: {} } } } : undefined,
+        interactions.length > 0
+          ? { capabilities: { elicitation: { form: {} } } }
+          : undefined,
       ));
-      if (interaction) {
+      let interactionIndex = 0;
+      if (interactions.length > 0) {
         client.setRequestHandler(ElicitRequestSchema, async (request) => {
+          const interaction = interactions[interactionIndex++];
+          assert.ok(interaction, `${flow.id}: unexpected native confirmation`);
           assert.match(request.params.message, new RegExp(interaction.title, "u"));
-          assert.match(request.params.message, /0\.01 Sepolia ETH/u);
-          assert.match(request.params.message, new RegExp(RECIPIENT, "u"));
+          if (
+            interaction.title.startsWith("Switch") ||
+            interaction.title.startsWith("Authorize")
+          ) {
+            assert.match(request.params.message, /saved-wallet/u);
+          } else {
+            assert.match(request.params.message, /0\.01 Sepolia ETH/u);
+          }
+          if (
+            interaction.title.startsWith("Confirm private") ||
+            interaction.title.startsWith("Confirm regular") ||
+            interaction.title.startsWith("Recover")
+          ) {
+            assert.match(request.params.message, new RegExp(RECIPIENT, "u"));
+          }
           return { action: interaction.decision };
         });
       }
@@ -759,6 +969,11 @@ test("ideal conversation flows replay through the real MCP contract", async (t) 
             `${flow.id}: ${step.name} image mismatch`,
           );
         }
+        assert.equal(
+          interactionIndex,
+          interactions.length,
+          `${flow.id}: native confirmation count drifted`,
+        );
       } finally {
         await client.close();
         await server.close();

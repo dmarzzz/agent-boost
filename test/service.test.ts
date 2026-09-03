@@ -10,6 +10,7 @@ import type {
   OnboardingPhase,
   OnboardingRecord,
   WalletAdapter,
+  WalletInventoryItem,
 } from "../src/contracts.js";
 import { createLocalRuntime, readLocalStatus } from "../src/service.js";
 import type { RpcFetch } from "../src/rpc/sepolia.js";
@@ -71,6 +72,27 @@ class SnapshotWallet extends SetupWallet {
       publicBalanceWei: this.publicBalanceWei,
       privateBalanceWei: this.privateBalanceWei,
     };
+  }
+}
+
+class ManagedWallet extends SetupWallet {
+  readonly inventory = new Map<string, WalletInventoryItem["network"]>([
+    ["agent-boost", "sepolia"],
+  ]);
+  failInventory = false;
+
+  override async ensureWallet(): Promise<void> {
+    await super.ensureWallet();
+    this.inventory.set(this.activeWallet, "sepolia");
+  }
+
+  async listWallets(): Promise<WalletInventoryItem[]> {
+    if (this.failInventory) throw new Error("temporary Kohaku inventory failure");
+    return [...this.inventory].map(([name, network]) => ({ name, network }));
+  }
+
+  async executeRegularTransfer(): Promise<Record<string, never>> {
+    return {};
   }
 }
 
@@ -239,6 +261,180 @@ test("new demo confirmation archives old state and opens a fresh funding flow", 
       (status.onboarding as { setupId: string }).setupId,
       reset.record.setupId,
     );
+  } finally {
+    await runtime.shutdown();
+  }
+});
+
+test("wallet listing discovers adoptable local wallets without losing registered profiles", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-boost-wallet-list-"));
+  const wallet = new ManagedWallet();
+  wallet.inventory.set("imported-sepolia", "sepolia");
+  wallet.inventory.set("mainnet-wallet", "mainnet");
+  const runtime = await createLocalRuntime(
+    { ...loadConfig({ AGENT_BOOST_STATE_DIR: root }, root), uiPort: 0 },
+    {
+      wallet,
+      chain: {
+        async assertSepolia() {},
+        async getBalanceWei() {
+          return 0n;
+        },
+      },
+      openBrowser: async () => false,
+    },
+  );
+  try {
+    const listed = await runtime.listWallets() as {
+      wallets: Array<{ name: string; active: boolean }>;
+      unregistered_local_wallets: Array<{
+        name: string;
+        network: string;
+        adoptable: boolean;
+      }>;
+      local_inventory_status: string;
+      counts: { registered: number; adoptable_local: number };
+    };
+    assert.deepEqual(listed.wallets.map(({ name }) => name), ["agent-boost"]);
+    assert.equal(listed.wallets[0]?.active, true);
+    assert.equal(listed.local_inventory_status, "ready");
+    assert.deepEqual(listed.unregistered_local_wallets, [
+      { name: "imported-sepolia", network: "sepolia", adoptable: true },
+      { name: "mainnet-wallet", network: "mainnet", adoptable: false },
+    ]);
+    assert.equal(listed.counts.registered, 1);
+    assert.equal(listed.counts.adoptable_local, 1);
+
+    wallet.failInventory = true;
+    const degraded = await runtime.listWallets() as {
+      wallets: Array<{ name: string }>;
+      unregistered_local_wallets: unknown[];
+      local_inventory_status: string;
+    };
+    assert.deepEqual(degraded.wallets.map(({ name }) => name), ["agent-boost"]);
+    assert.deepEqual(degraded.unregistered_local_wallets, []);
+    assert.equal(degraded.local_inventory_status, "unavailable");
+  } finally {
+    await runtime.shutdown();
+  }
+});
+
+test("a previous wallet restores its setup, requires reauthorization, and becomes usable again", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-boost-wallet-restore-"));
+  await seedOnboarding(
+    root,
+    "private_ready",
+    2_000_000_000_000_000_000n,
+    100_000_000_000_000_000n,
+  );
+  const wallet = new ManagedWallet();
+  const runtime = await createLocalRuntime(
+    {
+      ...loadConfig({
+        AGENT_BOOST_STATE_DIR: root,
+        AGENT_BOOST_FUNDING_POLL_MS: "1",
+      }, root),
+      uiPort: 0,
+    },
+    {
+      wallet,
+      chain: {
+        async assertSepolia() {},
+        async getBalanceWei(address) {
+          return address === "0x1111111111111111111111111111111111111111"
+            ? 2_000_000_000_000_000_000n
+            : 0n;
+        },
+      },
+      openBrowser: async () => false,
+    },
+  );
+  try {
+    const before = await runtime.listWallets() as {
+      wallets: Array<{ wallet_id: string; name: string; authorization_status: string }>;
+    };
+    const original = before.wallets.find(({ name }) => name === "agent-boost");
+    assert.ok(original);
+    assert.equal(original.authorization_status, "expired");
+
+    const created = await runtime.createWallet({
+      name: "second-wallet",
+      userConfirmed: true,
+    }) as { wallet: { name: string }; authorization_required: boolean };
+    assert.equal(created.wallet.name, "second-wallet");
+    assert.equal(created.authorization_required, true);
+    assert.equal(wallet.activeWallet, "second-wallet");
+
+    const restored = await runtime.selectWallet({
+      walletId: original.wallet_id,
+      userConfirmed: true,
+    }) as {
+      wallet: { name: string; authorization_status: string };
+      setup_phase: string;
+      authorization_required: boolean;
+    };
+    assert.equal(restored.wallet.name, "agent-boost");
+    assert.equal(restored.wallet.authorization_status, "missing");
+    assert.equal(restored.setup_phase, "private_ready");
+    assert.equal(restored.authorization_required, true);
+    assert.equal(wallet.activeWallet, "agent-boost");
+
+    const context = await runtime.walletContext();
+    assert.equal(context.setup_phase, "private_ready");
+    assert.equal(context.address, "0x1111111111111111111111111111111111111111");
+    assert.equal(context.balance_atomic, "2000000000000000000");
+
+    const reauthorization = await runtime.planWalletReauthorization();
+    assert.equal(reauthorization.decision, "allow");
+    assert.deepEqual(reauthorization.blockers, []);
+    await runtime.reauthorizeWallet({
+      decisionId: reauthorization.decisionId,
+      userConfirmed: true,
+    });
+
+    const transfer = await runtime.planRegularTransfer({
+      recipient: "0x2222222222222222222222222222222222222222",
+      amountWei: "10000000000000000",
+    });
+    assert.equal(transfer.decision, "allow", JSON.stringify(transfer.blockers));
+    assert.deepEqual(transfer.blockers, []);
+
+    const after = await runtime.listWallets() as {
+      wallets: Array<{
+        wallet_id: string;
+        name: string;
+        active: boolean;
+        authorization_status: string;
+      }>;
+    };
+    assert.deepEqual(after.wallets.map(({ name }) => name), [
+      "agent-boost",
+      "second-wallet",
+    ]);
+    assert.equal(after.wallets[0]?.active, true);
+    assert.equal(after.wallets[0]?.authorization_status, "active");
+    const second = after.wallets.find(({ name }) => name === "second-wallet");
+    assert.ok(second);
+    await runtime.archiveWallet({ walletId: second.wallet_id, userConfirmed: true });
+    const archived = await runtime.listWallets() as {
+      wallets: Array<{ name: string; status: string }>;
+    };
+    assert.equal(
+      archived.wallets.find(({ name }) => name === "second-wallet")?.status,
+      "archived",
+    );
+
+    const reopened = await runtime.selectWallet({
+      walletId: second.wallet_id,
+      userConfirmed: true,
+    }) as {
+      wallet: { name: string; status: string; authorization_status: string };
+      setup_phase: string;
+    };
+    assert.equal(reopened.wallet.name, "second-wallet");
+    assert.equal(reopened.wallet.status, "available");
+    assert.equal(reopened.wallet.authorization_status, "missing");
+    assert.equal(reopened.setup_phase, "awaiting_funding");
   } finally {
     await runtime.shutdown();
   }

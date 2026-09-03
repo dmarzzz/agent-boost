@@ -444,6 +444,215 @@ function buildPresentation(
     };
   }
 
+  if (code === "WALLET_LIST") {
+    const counts = asRecord(data.counts);
+    const registered = typeof counts.registered === "number" ? counts.registered : 0;
+    const adoptable = typeof counts.adoptable_local === "number"
+      ? counts.adoptable_local
+      : 0;
+    return {
+      version: "1.0",
+      kind: "status",
+      title: "Saved wallets",
+      state: "complete",
+      fields: [
+        { label: "Registered", value: String(registered), format: "text" },
+        { label: "Ready to adopt", value: String(adoptable), format: "text" },
+        { label: "Network", value: "Sepolia", format: "text" },
+      ],
+      notice: {
+        tone: "info",
+        text: "Wallet names are safe to show. Internal wallet IDs and signing material stay hidden.",
+      },
+      next_action: "Select, adopt, create, or archive by friendly wallet name.",
+    };
+  }
+
+  if (
+    code === "WALLET_CREATE_CONFIRMATION_REQUIRED" ||
+    code === "WALLET_ADOPT_CONFIRMATION_REQUIRED" ||
+    code === "WALLET_SELECT_CONFIRMATION_REQUIRED" ||
+    code === "WALLET_ARCHIVE_CONFIRMATION_REQUIRED"
+  ) {
+    const cancelled = data.reason === "decline" || data.reason === "cancel";
+    const verb = code === "WALLET_CREATE_CONFIRMATION_REQUIRED"
+      ? "Create and select"
+      : code === "WALLET_ADOPT_CONFIRMATION_REQUIRED"
+        ? "Adopt and select"
+        : code === "WALLET_SELECT_CONFIRMATION_REQUIRED"
+          ? "Switch to"
+          : "Archive";
+    return {
+      version: "1.0",
+      kind: cancelled ? "status" : "confirmation",
+      title: `${verb} wallet`,
+      state: cancelled ? "cancelled" : "pending",
+      fields: [{
+        label: "Wallet",
+        value: stringField(data, "wallet_name") ?? stringField(data, "name") ?? "Selected profile",
+        format: "text",
+      }],
+      notice: {
+        tone: "warning",
+        text: code === "WALLET_ARCHIVE_CONFIRMATION_REQUIRED"
+          ? "The encrypted wallet and audit history will be retained."
+          : "Changing wallets archives the current workflow and disables delegated signing.",
+      },
+      next_action: cancelled
+        ? "No wallet state changed."
+        : "Request approval through the client’s native confirmation surface or wait for explicit chat approval.",
+    };
+  }
+
+  if (
+    code === "WALLET_CREATED" ||
+    code === "WALLET_ADOPTED" ||
+    code === "WALLET_SELECTED" ||
+    code === "WALLET_ARCHIVED"
+  ) {
+    const wallet = asRecord(data.wallet);
+    const archived = code === "WALLET_ARCHIVED";
+    return {
+      version: "1.0",
+      kind: "receipt",
+      title: archived
+        ? "Wallet archived"
+        : code === "WALLET_CREATED"
+          ? "Wallet created"
+          : code === "WALLET_ADOPTED"
+            ? "Wallet adopted"
+            : "Wallet selected",
+      state: "complete",
+      fields: [{
+        label: "Wallet",
+        value: stringField(wallet, "name") ?? "Selected profile",
+        format: "text",
+      }],
+      notice: {
+        tone: "info",
+        text: archived
+          ? "Encrypted wallet data and audit history were retained."
+          : "Selection is complete. Delegated signing has not been authorized.",
+      },
+      next_action: archived
+        ? "No further action is required."
+        : "Plan and separately confirm wallet reauthorization before any transfer.",
+    };
+  }
+
+  if (
+    code === "WALLET_REAUTHORIZATION_PLANNED" ||
+    code === "WALLET_REAUTHORIZATION_DENIED" ||
+    code === "WALLET_REAUTHORIZATION_CONFIRMATION_REQUIRED" ||
+    code === "WALLET_REAUTHORIZED"
+  ) {
+    const plan = asRecord(data.plan);
+    const receipt = asRecord(data.wallet);
+    const wallet = asRecord(plan.wallet);
+    const denied = code === "WALLET_REAUTHORIZATION_DENIED";
+    const applied = code === "WALLET_REAUTHORIZED";
+    const cancelled = code === "WALLET_REAUTHORIZATION_CONFIRMATION_REQUIRED" &&
+      (data.reason === "decline" || data.reason === "cancel");
+    return {
+      version: "1.0",
+      kind: applied ? "receipt" : denied || cancelled ? "status" : "confirmation",
+      title: applied
+        ? "Wallet authorized"
+        : cancelled
+          ? "Wallet authorization cancelled"
+          : denied
+            ? "Wallet authorization blocked"
+            : "Authorize wallet transfers",
+      state: applied ? "complete" : cancelled ? "cancelled" : denied ? "attention" : "pending",
+      fields: [{
+        label: "Wallet",
+        value: stringField(receipt, "name") ?? stringField(wallet, "walletName") ?? "Active profile",
+        format: "text",
+      }],
+      notice: {
+        tone: denied || cancelled ? "warning" : "info",
+        text: applied
+          ? "Fresh Sepolia-only authority is active."
+          : cancelled
+            ? "No signing authority was granted."
+            : denied
+              ? "No signing authority was granted."
+              : "This grants bounded regular and private transfer authority; it does not move funds.",
+      },
+      next_action: applied
+        ? "The selected wallet may now use its confirmed limits."
+        : cancelled
+          ? "No further action is required."
+          : denied
+            ? "Explain the blocker; do not request approval."
+            : "Show the exact limits and request separate approval.",
+    };
+  }
+
+  if (
+    code === "RECOVERY_PLANNED" ||
+    code === "RECOVERY_DENIED" ||
+    code === "RECOVERY_CONFIRMATION_REQUIRED"
+  ) {
+    const plan = asRecord(data.plan);
+    const recipient = stringField(plan, "recipient") ?? "Unknown recipient";
+    const amountWei = stringField(plan, "amountWei");
+    const amount = amountWei ? `${formatEthWei(BigInt(amountWei))} Sepolia ETH` : "Unknown amount";
+    const denied = code === "RECOVERY_DENIED";
+    const cancelled = code === "RECOVERY_CONFIRMATION_REQUIRED" &&
+      (data.reason === "decline" || data.reason === "cancel");
+    return {
+      version: "1.0",
+      kind: denied || cancelled ? "status" : "confirmation",
+      title: denied
+        ? "Recovery transfer blocked"
+        : cancelled
+          ? "Recovery transfer cancelled"
+          : "Confirm recovery transfer",
+      state: cancelled ? "cancelled" : denied ? "attention" : "pending",
+      fields: paymentFields(amount, recipient),
+      notice: {
+        tone: "warning",
+        text: denied || cancelled
+          ? "Nothing was signed or submitted."
+          : "This exact amount leaves the private balance and becomes public on Sepolia.",
+      },
+      next_action: cancelled
+        ? "No recovery transfer was sent."
+        : denied
+          ? "Explain the blocker; do not execute."
+          : "Request explicit approval for this exact recovery plan.",
+    };
+  }
+
+  if (code === "RECOVERY_REQUEST" || code === "RECOVERY_STATUS") {
+    const request = asRecord(data.request);
+    const phase = stringField(request, "phase") ?? outcome;
+    const recipient = stringField(request, "recipient") ?? "Unknown recipient";
+    const amountWei = stringField(request, "amountWei");
+    const amount = amountWei ? `${formatEthWei(BigInt(amountWei))} Sepolia ETH` : "Unknown amount";
+    const confirmed = phase === "confirmed";
+    const failed = phase === "failed";
+    return {
+      version: "1.0",
+      kind: "receipt",
+      title: confirmed ? "Recovery transfer sent" : failed ? "Recovery transfer not sent" : "Recovery transfer unresolved",
+      state: confirmed ? "complete" : "attention",
+      fields: paymentFields(amount, recipient),
+      notice: {
+        tone: confirmed ? "info" : "warning",
+        text: confirmed
+          ? "Confirmed publicly on Sepolia."
+          : failed
+            ? "The recovery transfer failed and was not retried."
+            : "The result is unresolved. Retrying could transfer twice.",
+      },
+      next_action: confirmed || failed
+        ? "No further action is required."
+        : "Check this exact request again; do not create a replacement.",
+    };
+  }
+
   if (code === "PAYMENT_REQUEST" || code === "PAYMENT_STATUS") {
     const request = asRecord(data.request);
     const phase = stringField(request, "phase") ?? outcome;
@@ -645,20 +854,94 @@ function compactToolText(structured: Record<string, unknown>): string {
   }
 
   if (code === "WALLET_LIST") {
-    const wallets = Array.isArray(data.wallets) ? data.wallets.length : 0;
-    return `${wallets} local Sepolia wallet profile${wallets === 1 ? "" : "s"} found. No seed, password, or private key was read or returned.`;
+    const wallets = Array.isArray(data.wallets)
+      ? data.wallets.map(asRecord)
+      : [];
+    const local = Array.isArray(data.unregistered_local_wallets)
+      ? data.unregistered_local_wallets.map(asRecord)
+      : [];
+    const registeredSummary = wallets.length === 0
+      ? "No registered Sepolia wallets."
+      : `Registered Sepolia wallets: ${wallets.map((wallet) => {
+          const name = stringField(wallet, "name") ?? "unnamed";
+          const active = wallet.active === true ? "active" : stringField(wallet, "status") ?? "available";
+          const authorization = stringField(wallet, "authorization_status") ?? "unknown authorization";
+          return `${name} (${active}; ${authorization})`;
+        }).join(", ")}.`;
+    const localSummary = local.length === 0
+      ? ""
+      : ` Other local Kohaku wallets: ${local.map((wallet) => {
+          const name = stringField(wallet, "name") ?? "unnamed";
+          const network = stringField(wallet, "network") ?? "unknown network";
+          return `${name} (${network}${wallet.adoptable === true ? "; can adopt" : "; cannot adopt"})`;
+        }).join(", ")}.`;
+    const inventoryStatus = stringField(data, "local_inventory_status");
+    const inventoryWarning = inventoryStatus === "unavailable"
+      ? " Local Kohaku discovery is temporarily unavailable; registered wallets are still selectable."
+      : "";
+    return `${registeredSummary}${localSummary}${inventoryWarning} Use exact wallet IDs only from org.agentboost/model-context; never show or ask the user for them. No signing material was read or returned.`;
+  }
+
+  if (
+    code === "WALLET_CREATE_CONFIRMATION_REQUIRED" ||
+    code === "WALLET_ADOPT_CONFIRMATION_REQUIRED" ||
+    code === "WALLET_SELECT_CONFIRMATION_REQUIRED" ||
+    code === "WALLET_ARCHIVE_CONFIRMATION_REQUIRED"
+  ) {
+    const name = stringField(data, "wallet_name") ?? stringField(data, "name") ?? "the selected wallet";
+    if (data.reason === "decline" || data.reason === "cancel") {
+      return `Wallet action cancelled for ${name}. No wallet state changed and no signing authority was granted.`;
+    }
+    const action = code === "WALLET_ARCHIVE_CONFIRMATION_REQUIRED"
+      ? "archive"
+      : code === "WALLET_CREATE_CONFIRMATION_REQUIRED"
+        ? "create and select"
+        : code === "WALLET_ADOPT_CONFIRMATION_REQUIRED"
+          ? "adopt and select"
+          : "switch to";
+    return `Approval is required to ${action} ${name}. Show the friendly wallet name, never an internal wallet ID, and wait for explicit approval before retrying with user_confirmed true.`;
   }
 
   if (code === "WALLET_CREATED" || code === "WALLET_ADOPTED" || code === "WALLET_SELECTED") {
-    return "Wallet selection updated. Delegated signing remains disabled until the user separately confirms wallet reauthorization.";
+    const wallet = asRecord(data.wallet);
+    const name = stringField(wallet, "name") ?? "the selected wallet";
+    return `${name} is now selected. Delegated signing remains disabled until the user separately confirms the exact wallet reauthorization plan.`;
   }
 
   if (code === "WALLET_ARCHIVED") {
-    return "Inactive wallet profile archived locally. Its encrypted Kohaku data was not deleted.";
+    const wallet = asRecord(data.wallet);
+    const name = stringField(wallet, "name") ?? "Inactive wallet profile";
+    return `${name} was archived locally. Its encrypted Kohaku data was not deleted.`;
   }
 
   if (code === "WALLET_REAUTHORIZED") {
-    return "The active wallet has a fresh, explicitly confirmed Sepolia-only authorization.";
+    const wallet = asRecord(data.wallet);
+    const name = stringField(wallet, "name") ?? "The active wallet";
+    return `${name} has a fresh, explicitly confirmed Sepolia-only authorization. No funds moved.`;
+  }
+
+  if (
+    code === "WALLET_REAUTHORIZATION_PLANNED" ||
+    code === "WALLET_REAUTHORIZATION_DENIED" ||
+    code === "WALLET_REAUTHORIZATION_CONFIRMATION_REQUIRED"
+  ) {
+    const plan = asRecord(data.plan);
+    const wallet = asRecord(plan.wallet);
+    const name = stringField(wallet, "walletName") ?? "the active wallet";
+    const proposed = asRecord(plan.proposedPolicy);
+    if (
+      code === "WALLET_REAUTHORIZATION_CONFIRMATION_REQUIRED" &&
+      (data.reason === "decline" || data.reason === "cancel")
+    ) {
+      return `Wallet reauthorization cancelled for ${name}. No signing authority was granted and no funds moved.`;
+    }
+    if (code === "WALLET_REAUTHORIZATION_DENIED") {
+      return `Reauthorization is blocked for ${name}.${formatBlockers(plan)} No signing authority was granted.`;
+    }
+    const lead = code === "WALLET_REAUTHORIZATION_PLANNED"
+      ? "Reauthorization is ready for separate approval"
+      : "Reauthorization still needs explicit approval";
+    return `${lead} for ${name}: ${formatPolicyText(proposed)}. This replaces prior authority and resets its spend and payment counters; it does not move funds. Use the exact decision ID only from org.agentboost/model-context and never show it to the user.`;
   }
 
   if (code === "WALLET_CONTEXT") {
@@ -795,15 +1078,28 @@ function compactToolText(structured: Record<string, unknown>): string {
     const amount = amountWei ? formatEthWei(BigInt(amountWei)) : "unknown";
     return code === "RECOVERY_DENIED"
       ? `Recovery transfer blocked. Explain the blocker concisely; do not show internal IDs.`
-      : `Recovery transfer ready for approval: the exact private balance snapshot of ${amount} Sepolia ETH will be unshielded directly to ${recipient}. Ask for explicit confirmation.`;
+      : `Recovery transfer ready for approval: exactly ${amount} Sepolia ETH will leave the private balance and become public at ${recipient}. Any remaining private balance stays in place. Ask for explicit confirmation and do not show internal IDs.`;
+  }
+
+  if (code === "RECOVERY_CONFIRMATION_REQUIRED") {
+    const plan = asRecord(data.plan);
+    const recipient = stringField(plan, "recipient") ?? "unknown recipient";
+    const amountWei = stringField(plan, "amountWei");
+    const amount = amountWei ? formatEthWei(BigInt(amountWei)) : "unknown";
+    if (data.reason === "decline" || data.reason === "cancel") {
+      return `Recovery transfer cancelled for exactly ${amount} Sepolia ETH to ${recipient}. Nothing was signed or submitted.`;
+    }
+    return `Recovery confirmation is required for exactly ${amount} Sepolia ETH to ${recipient}. Wait for explicit approval, then execute only this same plan with user_confirmed true.`;
   }
 
   if (code === "RECOVERY_REQUEST" || code === "RECOVERY_STATUS") {
     const request = asRecord(data.request);
     const phase = stringField(request, "phase") ?? outcome;
-    return phase === "confirmed"
-      ? "Recovery transfer confirmed."
-      : `Recovery transfer is ${phase}. Use wallet_get_recovery_request with the exact request ID from structuredContent or org.agentboost/model-context; never submit a replacement.`;
+    if (phase === "confirmed") return "Recovery transfer confirmed.";
+    if (phase === "failed") {
+      return "Recovery transfer failed. Nothing was retried; start a new plan only after a new user request.";
+    }
+    return `Recovery transfer is ${phase}. Use wallet_get_recovery_request with the exact request ID from structuredContent or org.agentboost/model-context; never submit a replacement.`;
   }
 
   return `Agent Boost result: ${outcome}. Use structuredContent or org.agentboost/model-context internally and show only the user's next action.`;
@@ -817,6 +1113,20 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function stringField(record: Record<string, unknown>, key: string): string | undefined {
   return typeof record[key] === "string" ? record[key] : undefined;
+}
+
+function walletNameForId(
+  listing: Record<string, unknown>,
+  walletId: string,
+): string | undefined {
+  if (!Array.isArray(listing.wallets)) return undefined;
+  for (const value of listing.wallets) {
+    const wallet = asRecord(value);
+    if (stringField(wallet, "wallet_id") === walletId) {
+      return stringField(wallet, "name");
+    }
+  }
+  return undefined;
 }
 
 function formatBlockers(record: Record<string, unknown>): string {
@@ -1617,13 +1927,16 @@ export async function createMcpServer(
     },
     async ({ wallet_id, user_confirmed }) => {
       try {
+        const walletName = walletNameForId(await runtime.listWallets(), wallet_id);
+        if (!walletName) throw new Error("WALLET_NOT_FOUND");
         const confirmation = await observeConfirmation(
-          `Select wallet ${wallet_id}? In-flight wallet work will drain, the current workflow will be archived, and delegated payment authority will be disabled.`,
+          `Switch to the saved Sepolia wallet named “${walletName}”? In-flight wallet work will drain, the current workflow will be archived, and delegated payment authority will be disabled.`,
           user_confirmed,
         );
         if (!confirmation.accepted) {
           return result(envelope(digest, "blocked", "WALLET_SELECT_CONFIRMATION_REQUIRED", {
             wallet_id,
+            wallet_name: walletName,
             confirmation_mode: confirmation.mode,
             ...(confirmation.reason ? { reason: confirmation.reason } : {}),
           }));
@@ -1652,13 +1965,16 @@ export async function createMcpServer(
     },
     async ({ wallet_id, user_confirmed }) => {
       try {
+        const walletName = walletNameForId(await runtime.listWallets(), wallet_id);
+        if (!walletName) throw new Error("WALLET_NOT_FOUND");
         const confirmation = await observeConfirmation(
-          `Archive inactive wallet profile ${wallet_id}? Encrypted wallet data and audit history will be retained.`,
+          `Archive the inactive wallet profile named “${walletName}”? Encrypted wallet data and audit history will be retained.`,
           user_confirmed,
         );
         if (!confirmation.accepted) {
           return result(envelope(digest, "blocked", "WALLET_ARCHIVE_CONFIRMATION_REQUIRED", {
             wallet_id,
+            wallet_name: walletName,
             confirmation_mode: confirmation.mode,
             ...(confirmation.reason ? { reason: confirmation.reason } : {}),
           }));
@@ -1713,7 +2029,7 @@ export async function createMcpServer(
       try {
         const plan = await runtime.getWalletReauthorizationPlan(decision_id);
         const confirmation = await observeConfirmation(
-          `Authorize Sepolia payments for wallet ${plan.wallet.walletName} (selection epoch ${plan.wallet.selectionEpoch}) with per-payment limit ${plan.proposedPolicy.perPaymentLimitWei} wei, lifetime limit ${plan.proposedPolicy.lifetimeLimitWei} wei, at most ${plan.proposedPolicy.maxPayments} payments, until ${plan.proposedPolicy.expiresAt}? This replaces the prior authorization and resets its spend and payment counters.`,
+          `Authorize bounded regular and private Sepolia transfers for wallet “${plan.wallet.walletName}”: up to ${plan.proposedPolicy.maxPayments} sends, ${formatEthWei(BigInt(plan.proposedPolicy.perPaymentLimitWei))} Sepolia ETH max each, ${formatEthWei(BigInt(plan.proposedPolicy.lifetimeLimitWei))} Sepolia ETH total, ${formatPolicyExpiry(plan.proposedPolicy.expiresAt)}? This replaces prior authority and resets its spend and payment counters. It does not move funds.`,
           user_confirmed,
         );
         if (!confirmation.accepted) {
@@ -2213,7 +2529,7 @@ export async function createMcpServer(
       try {
         const plan = await runtime.getRecoveryPlan(decision_id);
         const confirmation = await observeConfirmation(
-          `Recover exactly ${plan.amountWei} wei to ${plan.recipient} from wallet ${plan.wallet.walletName} (selection epoch ${plan.wallet.selectionEpoch}) by consuming one ${plan.withdrawalAmountWei}-wei Tornado denomination? ${plan.feeReserveWei} wei is conservatively reserved for fees and about ${plan.remainingPrivateBalanceEstimateWei} wei of private balance may remain unrecovered.`,
+          `Recover exactly ${formatEthWei(BigInt(plan.amountWei))} Sepolia ETH to ${plan.recipient} from wallet “${plan.wallet.walletName}”? This consumes one ${formatEthWei(BigInt(plan.withdrawalAmountWei))} Sepolia ETH private denomination, reserves ${formatEthWei(BigInt(plan.feeReserveWei))} Sepolia ETH for fees, and may leave about ${formatEthWei(BigInt(plan.remainingPrivateBalanceEstimateWei))} Sepolia ETH private. The recovered amount becomes public on Sepolia.`,
           user_confirmed,
         );
         if (!confirmation.accepted) {

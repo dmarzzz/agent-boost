@@ -227,6 +227,39 @@ It excludes addresses, account IDs, wallet IDs, raw atomic values, secrets, and
 aggregate totals. Folder indentation is organizational and does not imply
 custody, ownership, recovery, revocation, or control.
 
+### `wallet_list`
+
+No input. Returns registered profiles with friendly names, status, active and
+authorization state, plus local Kohaku inventory entries that are not yet
+registered. Each local entry is explicitly marked adoptable only when Kohaku
+reports Sepolia. Inventory failure never hides registered profiles. Wallet IDs
+are internal continuation handles and are excluded from compact user text.
+
+### `wallet_create` and `wallet_adopt_existing`
+
+Both require confirmation, select the resulting profile, archive the prior
+workflow, and leave signing disabled. Creation accepts one safe friendly name.
+Adoption accepts the exact name of an already-local Kohaku Sepolia wallet; its
+schema has no seed, password, private-key, or filesystem-path input.
+
+### `wallet_select` and `wallet_archive`
+
+Selection requires a registered wallet ID from `wallet_list`. It drains active
+work, privately archives the current state, restores the selected profile's
+durable onboarding state, advances its selection epoch, and deletes stale
+authorization. Archived profiles become available when selected again.
+
+Archival applies only to an inactive profile and retains encrypted Kohaku data,
+private workflow state, and audit history. The active profile is rejected.
+
+### `wallet_plan_reauthorization` and `wallet_reauthorize`
+
+After selection, the planner creates a five-minute decision bound to the exact
+active profile and new selection epoch. It previews count, per-send, total, and
+expiry limits and cannot authorize signing. The apply tool requires separate
+confirmation, compares live state to the plan, replaces prior authority, and
+resets its spend and send counters. It moves no funds.
+
 ### `wallet_start_new_demo`
 
 ```json
@@ -327,6 +360,19 @@ Returns one durable, redacted request in `executing`, `submitted`,
 read also attempts reconciliation from a real transaction receipt or the
 recipient-balance checkpoint persisted before execution. Reconciliation never
 broadcasts. Internal checkpoints and attempt metadata are omitted from MCP.
+
+### `wallet_plan_recovery_transfer`, `wallet_execute_recovery_transfer`, and `wallet_get_recovery_request`
+
+Recovery is one exact-amount Sepolia operation, not a whole-wallet sweep and
+not delegated-payment authority. The five-minute plan binds the active profile
+and selection epoch, recipient, amount, private-balance snapshot, configured
+denomination, fee reserve, remaining-balance estimate, and state revision.
+
+Execution requires separate confirmation and consumes the durable request
+before Kohaku is called. The recovered amount becomes publicly visible at the
+recipient, while any remainder stays private. The status read preserves
+`submitted` and `indeterminate` as unresolved and never broadcasts a
+replacement.
 
 ## Model-visible authority
 

@@ -261,6 +261,91 @@
       ]
     },
     {
+      "id": "saved-wallet-inventory",
+      "title": "Saved and adoptable wallets are discoverable by friendly name",
+      "scenario": "wallet-lifecycle",
+      "steps": [
+        {"actor": "user", "text": "Which wallets can I load?"},
+        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["Registered Sepolia wallets", "saved-wallet", "imported-wallet", "can adopt", "never show or ask the user"], "image": false, "presentation": {"kind": "status", "state": "complete"}}},
+        {"actor": "assistant", "max_lines": 4, "text": "**Saved wallets**\n- agent-boost — active\n- saved-wallet — available\n- imported-wallet — local and ready to adopt"}
+      ]
+    },
+    {
+      "id": "ambiguous-old-wallet",
+      "title": "An ambiguous old-wallet request asks using names only",
+      "scenario": "wallet-ambiguous",
+      "steps": [
+        {"actor": "user", "text": "Load my old wallet."},
+        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet", "travel-wallet"], "image": false}},
+        {"actor": "assistant", "max_lines": 2, "text": "I found two inactive saved wallets: **saved-wallet** and **travel-wallet**.\nWhich one should I load?"}
+      ]
+    },
+    {
+      "id": "load-and-reauthorize-previous-wallet",
+      "title": "Loading a previous wallet restores state but requires fresh authority",
+      "scenario": "wallet-lifecycle",
+      "steps": [
+        {"actor": "user", "text": "Load my old wallet."},
+        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet", "inactive"], "image": false}},
+        {"actor": "client", "surface": "native_confirmation", "title": "Switch to the saved Sepolia wallet", "approve_label": "Approve", "decline_label": "Cancel", "decision": "accept"},
+        {"actor": "tool", "name": "wallet_select", "arguments": {"wallet_id": "wallet_saved_12345678"}, "expect": {"code": "WALLET_SELECTED", "outcome": "ready", "text_includes": ["saved-wallet is now selected", "signing remains disabled"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
+        {"actor": "tool", "name": "wallet_plan_reauthorization", "arguments": {}, "expect": {"code": "WALLET_REAUTHORIZATION_PLANNED", "outcome": "ready", "text_includes": ["separate approval", "saved-wallet", "0.05 Sepolia ETH each", "does not move funds"], "image": false, "presentation": {"kind": "confirmation", "state": "pending"}}},
+        {"actor": "client", "surface": "native_confirmation", "title": "Authorize bounded regular and private Sepolia transfers", "approve_label": "Approve", "decline_label": "Cancel", "decision": "accept"},
+        {"actor": "tool", "name": "wallet_reauthorize", "arguments": {"decision_id": "wra_eval_12345678"}, "expect": {"code": "WALLET_REAUTHORIZED", "outcome": "ready", "text_includes": ["saved-wallet has a fresh", "No funds moved"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
+        {"actor": "assistant", "max_lines": 3, "text": "**✓ Wallet loaded and authorized**\n**saved-wallet** is active with fresh bounded Sepolia transfer permission.\nNo funds moved."}
+      ]
+    },
+    {
+      "id": "cancel-wallet-switch",
+      "title": "Cancelling a wallet switch changes nothing",
+      "scenario": "wallet-lifecycle",
+      "steps": [
+        {"actor": "user", "text": "Load saved-wallet."},
+        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet"], "image": false}},
+        {"actor": "client", "surface": "native_confirmation", "title": "Switch to the saved Sepolia wallet", "approve_label": "Approve", "decline_label": "Cancel", "decision": "decline"},
+        {"actor": "tool", "name": "wallet_select", "arguments": {"wallet_id": "wallet_saved_12345678"}, "expect": {"code": "WALLET_SELECT_CONFIRMATION_REQUIRED", "outcome": "blocked", "text_includes": ["cancelled", "No wallet state changed"], "image": false, "presentation": {"kind": "status", "state": "cancelled"}}},
+        {"actor": "assistant", "max_lines": 2, "text": "**✕ Wallet switch cancelled**\nNothing changed."}
+      ]
+    },
+    {
+      "id": "adopt-local-wallet",
+      "title": "A local Sepolia wallet can be adopted without secret input",
+      "scenario": "wallet-lifecycle",
+      "steps": [
+        {"actor": "user", "text": "Adopt imported-wallet."},
+        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["imported-wallet", "can adopt"], "image": false}},
+        {"actor": "assistant", "max_lines": 3, "text": "**Confirm wallet adoption**\nAdopt and select **imported-wallet**? The current workflow will be archived and signing will stay disabled.\n**Next:** Reply ✅ to approve or ✕ to cancel."},
+        {"actor": "user", "text": "✅"},
+        {"actor": "tool", "name": "wallet_adopt_existing", "arguments": {"name": "imported-wallet", "user_confirmed": true}, "expect": {"code": "WALLET_ADOPTED", "outcome": "ready", "text_includes": ["imported-wallet is now selected", "signing remains disabled"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
+        {"actor": "assistant", "max_lines": 3, "text": "**✓ Wallet adopted**\n**imported-wallet** is selected and its setup is starting.\nSigning remains disabled until separate authorization."}
+      ]
+    },
+    {
+      "id": "create-named-wallet",
+      "title": "A named wallet can be created without replacing old profiles",
+      "scenario": "wallet-lifecycle",
+      "steps": [
+        {"actor": "user", "text": "Create a wallet named travel-wallet."},
+        {"actor": "assistant", "max_lines": 3, "text": "**Confirm new wallet**\nCreate and select **travel-wallet**? Existing profiles remain saved; the current workflow will be archived.\n**Next:** Reply ✅ to approve or ✕ to cancel."},
+        {"actor": "user", "text": "Yes."},
+        {"actor": "tool", "name": "wallet_create", "arguments": {"name": "travel-wallet", "user_confirmed": true}, "expect": {"code": "WALLET_CREATED", "outcome": "ready", "text_includes": ["travel-wallet is now selected", "signing remains disabled"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
+        {"actor": "assistant", "max_lines": 3, "text": "**✓ Wallet created**\n**travel-wallet** is selected and ready for setup.\nYour earlier wallets remain saved."}
+      ]
+    },
+    {
+      "id": "archive-inactive-wallet",
+      "title": "An inactive profile archives without deleting encrypted data",
+      "scenario": "wallet-lifecycle",
+      "steps": [
+        {"actor": "user", "text": "Archive saved-wallet."},
+        {"actor": "tool", "name": "wallet_list", "arguments": {}, "expect": {"code": "WALLET_LIST", "outcome": "ready", "text_includes": ["saved-wallet"], "image": false}},
+        {"actor": "assistant", "max_lines": 3, "text": "**Confirm wallet archive**\nArchive **saved-wallet**? Its encrypted data and history will stay on this device.\n**Next:** Reply ✅ to archive or ✕ to cancel."},
+        {"actor": "user", "text": "✅"},
+        {"actor": "tool", "name": "wallet_archive", "arguments": {"wallet_id": "wallet_saved_12345678", "user_confirmed": true}, "expect": {"code": "WALLET_ARCHIVED", "outcome": "ready", "text_includes": ["archived locally", "not deleted"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
+        {"actor": "assistant", "max_lines": 2, "text": "**✓ Wallet archived**\nThe encrypted wallet and its history were retained."}
+      ]
+    },
+    {
       "id": "ambiguous-amount-clarification",
       "title": "Hermes never invents an amount",
       "scenario": "payment-confirmed",
@@ -843,6 +928,19 @@
         {"actor": "tool", "name": "wallet_get_context", "arguments": {}, "expect": {"code": "WALLET_CONTEXT", "outcome": "ready", "text_includes": ["Main account balance: 0.1 Sepolia ETH"], "image": false}},
         {"actor": "tool", "name": "wallet_plan_private_payment", "arguments": {"recipient": "0x2222222222222222222222222222222222222222", "amount_native": "0.01"}, "expect": {"code": "PAYMENT_DENIED", "outcome": "blocked", "text_includes": ["Payment plan blocked", "0.01 Sepolia ETH"], "image": false, "presentation": {"kind": "status", "state": "attention"}}},
         {"actor": "assistant", "max_lines": 3, "text": "**! Payment blocked**\nThe delegated payment window has expired; your wallet and balance still remain.\n**Next:** Start a new demo before requesting another payment."}
+      ]
+    },
+    {
+      "id": "confirmed-exact-recovery",
+      "title": "Exact recovery is separately confirmed and never treated as a sweep",
+      "scenario": "recovery-confirmed",
+      "steps": [
+        {"actor": "user", "text": "Recover 0.01 Sepolia ETH privately held in my wallet to 0x2222222222222222222222222222222222222222."},
+        {"actor": "tool", "name": "wallet_plan_recovery_transfer", "arguments": {"recipient": "0x2222222222222222222222222222222222222222", "amount_native": "0.01"}, "expect": {"code": "RECOVERY_PLANNED", "outcome": "ready", "text_includes": ["exactly 0.01 Sepolia ETH", "become public", "remaining private balance stays"], "image": false, "presentation": {"kind": "confirmation", "state": "pending"}}},
+        {"actor": "client", "surface": "native_confirmation", "title": "Recover exactly 0.01 Sepolia ETH", "approve_label": "Approve", "decline_label": "Cancel", "decision": "accept"},
+        {"actor": "tool", "name": "wallet_execute_recovery_transfer", "arguments": {"decision_id": "wr_eval_12345678"}, "expect": {"code": "RECOVERY_REQUEST", "outcome": "submitted", "text_includes": ["Recovery transfer is submitted", "never submit a replacement"], "image": false, "presentation": {"kind": "receipt", "state": "attention"}}},
+        {"actor": "tool", "name": "wallet_get_recovery_request", "arguments": {"request_id": "wrr_eval_12345678"}, "expect": {"code": "RECOVERY_STATUS", "outcome": "confirmed", "text_includes": ["Recovery transfer confirmed"], "image": false, "presentation": {"kind": "receipt", "state": "complete"}}},
+        {"actor": "assistant", "max_lines": 3, "text": "**✓ Recovery transfer sent**\n0.01 Sepolia ETH to 0x2222222222222222222222222222222222222222\nPublicly confirmed on Sepolia; the remaining private balance stayed in place."}
       ]
     },
     {

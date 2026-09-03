@@ -1,7 +1,7 @@
 ---
 name: agent-boost
-description: Manage regular and private Sepolia transfers.
-version: 0.6.0
+description: Manage Sepolia wallets and transfers.
+version: 0.7.0
 platforms: [macos, linux]
 metadata:
   hermes:
@@ -39,8 +39,10 @@ contact an operator. Finish the requested read, plan, or apply flow first.
 
 ## When to use
 
-Use this operational skill after Agent Boost setup reaches `private_ready`. It
-allows bounded regular public transfers and private payments of valueless Sepolia ETH. In
+Use this operational skill to list, create, adopt, select, archive, and
+reauthorize local Sepolia wallets, and after setup reaches `private_ready`, to
+make bounded regular public transfers, private payments, and exact recovery
+transfers of valueless Sepolia ETH. In
 `testnet_delegated` mode Agent Boost has bounded signing authority: the agent
 may plan and execute tools for the user, subject to the active local security
 policy and the non-overridable per-payment, lifetime, network, routing, and
@@ -59,6 +61,13 @@ redeemable value.
 - **The tree rule wins.** Never call `wallet_get_context` first—or answer from
   its result—when the request says wallets plural, all balances, accounts,
   subwallets, map, or tree. `wallet_get_tree` is the single complete read.
+- **Saved-wallet management has its own read.** For “which wallet can I load?”,
+  “show saved wallets,” “switch back,” “use the old wallet,” wallet creation,
+  adoption, selection, archival, or authorization status, call `wallet_list`.
+  Use friendly `name` values in chat. Use an exact `wallet_id` only from
+  `structuredContent` or `org.agentboost/model-context` when calling a tool;
+  never show it or ask the user to type it. `wallet_list` can also report
+  unregistered local Kohaku wallets that are safe to adopt by name.
 - **Every single-account balance is a live read.** For a question specifically
   about the current main wallet balance, ETH held there, funds, available ETH,
   or affordability, call `wallet_get_context` in that same turn. Conversation
@@ -93,9 +102,10 @@ redeemable value.
   ask whether they want a regular public transfer or a private payment.
 - Accept natural requests. If the destination or amount is ambiguous, ask only
   for the missing human detail. Never invent an amount from words like “small.”
-- **First gate:** resolve missing human details before calling any Agent Boost
-  tool, including `capabilities`. If amount or destination is missing or
-  ambiguous, no tool call is allowed. Ask for only the missing value. For an
+- **First transfer gate:** resolve missing human details before calling any
+  Agent Boost tool for a transfer or recovery request, including `capabilities`.
+  If amount or destination is missing or ambiguous, no transfer-related tool
+  call is allowed. Ask for only the missing value. For an
   ambiguous amount, ask for the exact amount in Sepolia ETH, include any
   already-supplied full destination address in the question, and do not ask the
   user to repeat it or offer atomic-unit/wei examples.
@@ -189,6 +199,73 @@ too. The short names are display aliases; never replace them with full or
 truncated addresses. Do not total the rows because the balances occupy distinct
 wallet contexts and a sum would imply spendability that does not exist. Preserve
 the tool's `live`, `last known`, and `unavailable` labels exactly.
+
+## Manage saved wallets
+
+### List or load a previous wallet
+
+1. For saved profiles, available wallets, or a request to load, open, use, or
+   switch back to a wallet, call `wallet_list`. Do not substitute
+   `wallet_get_tree`: the tree is a balance view and intentionally omits the
+   internal selection handles.
+2. Resolve the requested friendly name against the returned registered
+   profiles. “The old wallet” or “the previous wallet” is unambiguous when
+   exactly one inactive registered profile exists. If several match, list only
+   their friendly names and ask which one. Never guess an internal ID.
+3. For a registered profile, call `wallet_select` with its exact internal
+   `wallet_id` and omit `user_confirmed` so the client can request native
+   approval. For a Sepolia wallet reported under
+   `unregistered_local_wallets`, call `wallet_adopt_existing` with its exact
+   friendly `name`; this never accepts a seed, password, key, or path.
+4. If native approval is unavailable, say:
+
+   ```text
+   **Confirm wallet switch**
+   **Wallet:** <friendly name>
+   This archives the current workflow and disables delegated signing.
+   **Next:** Reply ✅ to switch or ✕ to cancel.
+   ```
+
+   End the turn. After approval, repeat the same select/adopt call with
+   `user_confirmed: true`. A changed wallet name needs a new confirmation.
+5. Selection restores that profile's durable setup and request state, but
+   deliberately disables signing. If the returned setup is `private_ready`,
+   immediately call `wallet_plan_reauthorization`, show its exact count,
+   per-send amount, total, and friendly expiry, then call `wallet_reauthorize`
+   with the exact decision ID and omit `user_confirmed` for a second native
+   approval. Never treat wallet-switch approval as reauthorization approval.
+6. If native reauthorization is unavailable, end the turn after this fallback:
+
+   ```text
+   **Authorize wallet transfers**
+   **Wallet:** <friendly name>
+   **Permission:** Up to <count> regular or private sends
+   **Limits:** <per-send> Sepolia ETH each · <total> Sepolia ETH total
+   **Expires:** <friendly expiry>
+   This resets the prior spend and send counters. No funds move.
+   **Next:** Reply ✅ to authorize or ✕ to cancel.
+   ```
+
+   On approval call the same `wallet_reauthorize` decision with
+   `user_confirmed: true`. If the restored setup is not `private_ready`, call
+   `onboarding_start` to resume it and follow the setup flow before planning
+   reauthorization.
+
+### Create or archive a wallet
+
+- To create a durable named wallet, get a friendly name if the user did not
+  supply one, then call `wallet_create` without `user_confirmed` for native
+  approval. Creating selects the new wallet, archives the current workflow,
+  starts its setup, and still requires separate reauthorization when ready.
+- Use `wallet_start_new_demo` only when the user explicitly asks to start over
+  with an automatically named disposable demo. A generic request for another
+  named wallet uses `wallet_create`.
+- To archive a named inactive profile, call `wallet_list`, resolve its internal
+  ID, then call `wallet_archive` without `user_confirmed`. The active profile
+  cannot be archived; switch first. Archival retains encrypted wallet data,
+  private state, and audit history and can be reversed by selecting it later.
+- Creating, adopting, selecting, archiving, and reauthorizing are distinct
+  confirmations. A yes applies only to the immediately preceding exact action.
 
 ## Regular public transfer procedure
 
@@ -285,6 +362,36 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
    and that it is unsafe to retry. For `failed`, say **✕ Not sent** and give the
    single actionable reason.
 
+## Exact recovery transfer procedure
+
+1. Use this only when the user explicitly asks to recover or unshield a private
+   amount to a public recipient. It is not a whole-wallet sweep. Require one
+   exact Sepolia ETH amount and one full recipient address before any tool call.
+2. Call `wallet_plan_recovery_transfer` with the unchanged `amount_native` and
+   recipient. Branch only on the returned decision and blockers. State that the
+   recovered amount becomes public and any remaining private balance stays in
+   place.
+3. For an allowed plan, immediately call
+   `wallet_execute_recovery_transfer` with the exact internal decision ID and
+   omit `user_confirmed`, allowing native approval. If native confirmation is
+   unavailable, show exactly:
+
+   ```text
+   **Confirm recovery transfer**
+   **Amount:** <amount> Sepolia ETH
+   **To:** <full recipient address>
+   **Network:** Sepolia testnet · no monetary value
+   **Visibility:** The recovered amount becomes public on-chain
+   **Next:** Reply ✅ to approve or ✕ to cancel.
+   ```
+
+   End the turn. After approval, execute the same decision with
+   `user_confirmed: true`. Never invent or expose a decision ID.
+4. Preserve the returned request ID. For a non-terminal result call
+   `wallet_get_recovery_request` for that exact request. Report success only for
+   `confirmed`; `submitted` and `indeterminate` are unresolved and must never
+   be replaced or retried with a new request.
+
 ## Pitfalls
 
 - Never request or accept a seed, private key, unlock value, or signing data.
@@ -314,9 +421,9 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
   password, or signing material.
 - The delegation expiry disables new delegated payments; it does not make the
   address disappear. The encrypted wallet, balance reads, and funds remain.
-  Do not call it a wallet expiration. The current POC does not expose a
-  recovery transfer through Hermes yet, so state that limitation instead of
-  implying that the funds were deleted or became inaccessible.
+  Do not call it a wallet expiration. Use the separately confirmed exact
+  recovery path when the user explicitly requests it; never imply that expiry
+  deleted the wallet or made funds inaccessible.
 
 ## Covered public web reads
 

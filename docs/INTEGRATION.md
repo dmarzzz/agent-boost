@@ -48,14 +48,30 @@ mcp_servers:
         - onboarding_start
         - onboarding_status
         - wallet_get_context
+        - wallet_list
         - wallet_get_tree
+        - wallet_create
+        - wallet_adopt_existing
+        - wallet_select
+        - wallet_archive
+        - wallet_plan_reauthorization
+        - wallet_reauthorize
         - wallet_get_policy
         - wallet_plan_policy_update
         - wallet_apply_policy_update
         - wallet_start_new_demo
+        - wallet_plan_regular_transfer
+        - wallet_execute_regular_transfer
+        - wallet_get_regular_transfer_request
         - wallet_plan_private_payment
         - wallet_execute_private_payment
         - wallet_get_request
+        - wallet_plan_recovery_transfer
+        - wallet_execute_recovery_transfer
+        - wallet_get_recovery_request
+        - egress_capabilities
+        - egress_status
+        - egress_fetch
       resources: false
       prompts: false
 ```
@@ -74,20 +90,22 @@ gives reload guidance, starts onboarding with no arguments, preserves the setup
 ID and revision, presents the browser/QR/address fallback honestly, and
 long-polls with `wait_ms: 90000`.
 
-`agent-boost` requires the Agent Boost MCP toolset. It teaches the policy and
-payment sequences:
+`agent-boost` requires the Agent Boost MCP toolset. It teaches wallet lifecycle,
+policy, and transfer sequences:
 
-1. read capabilities and live wallet context;
-2. inspect or preview wallet-policy changes in ordinary native-token units;
-3. confirm and apply policy changes separately from payments;
-4. plan an exact recipient and wei amount;
-5. immediately execute the immutable plan with
-   `client_request_id: hermes:<decision_id>` and omit `user_confirmed`, allowing
-   the MCP client to render the exact one-shot **Approve** / **Cancel** receipt;
-6. only when native elicitation is unavailable, read back the returned receipt,
-   obtain unambiguous verbal confirmation, and retry that same decision with
+1. list saved and discoverable local profiles by friendly name;
+2. create, adopt, select, or archive only after exact confirmation;
+3. separately preview and confirm fresh authority after wallet selection;
+4. inspect or preview wallet-policy changes in ordinary native-token units;
+5. keep regular, private, and exact recovery routes distinct;
+6. plan an exact recipient and ordinary Sepolia ETH amount;
+7. immediately execute an immutable allowed plan without `user_confirmed`,
+   allowing the MCP client to render one-shot **Approve** / **Cancel** controls;
+8. only when native elicitation is unavailable, read back the returned receipt,
+   obtain unambiguous chat confirmation, and retry the same decision with
    `user_confirmed: true`;
-7. preserve the returned request ID until terminal.
+9. preserve the returned request ID until terminal and never replace an
+   unresolved request.
 
 The skills are choreography. Sepolia enforcement, adjustable hard ceilings,
 expiry, payment-count use, balance checks, policy-plan binding, and idempotency
@@ -161,6 +179,16 @@ reconciles on restart/status reads without rebroadcast.
 confirmation it archives current state, keeps the prior Kohaku wallet, creates
 a new wallet profile, and returns a fresh funding QR. `onboarding_start` alone
 always resumes the current wallet.
+
+`wallet_list` is the selection inventory. It returns registered profiles and,
+when Kohaku inventory is healthy, local unregistered wallets with an explicit
+Sepolia adoption flag. Hermes speaks only friendly names; internal wallet IDs
+stay in structured model context. `wallet_select` restores the target profile's
+durable setup, advances its selection epoch, and disables prior authority.
+`wallet_plan_reauthorization` plus separately confirmed `wallet_reauthorize`
+mint fresh bounded authority before another transfer can be planned. An
+archived profile retains encrypted data and can be made available by selecting
+it later.
 
 ## Process and state lifetime
 

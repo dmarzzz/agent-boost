@@ -21,30 +21,38 @@ How a payment works, in the order the tools are called:
    on-chain balance, delegation state, and live Tor route status.
 4. `wallet_get_tree` renders every available wallet profile as one canonical,
    address-free folder tree with honest balance freshness labels.
-5. `wallet_get_policy`, `wallet_plan_policy_update`, and
+5. `wallet_list`, `wallet_create`, `wallet_adopt_existing`, `wallet_select`,
+   and `wallet_archive` provide the complete local profile lifecycle. Selecting
+   a prior profile restores its durable setup but disables signing until
+   `wallet_plan_reauthorization` and `wallet_reauthorize` are separately
+   confirmed.
+6. `wallet_get_policy`, `wallet_plan_policy_update`, and
    `wallet_apply_policy_update` let the user inspect and change send count,
    per-send amount, total amount, expiry, and enabled state in conversation.
    Every update is immutable, five-minute, separately confirmed, bounded, and
    idempotent. It changes authority only; it never moves funds.
-6. `wallet_plan_regular_transfer` validates one recipient and exact ordinary
+7. `wallet_plan_regular_transfer` validates one recipient and exact ordinary
    Sepolia ETH amount against the selected main account's live balance, a
    conservative gas reserve, and the shared delegated limits. Its matching
    execute and status tools remain strictly on the public transfer path.
-7. `wallet_plan_private_payment` validates one recipient and one exact amount
+8. `wallet_plan_private_payment` validates one recipient and one exact amount
    (a canonical wei string) against readiness, the active count and amount
    limits, and balance, then returns a five-minute immutable plan with a SHA-256
    digest over chain, recipient, asset, amount, and operation. Plans never
    sign, submit, or reserve funds.
-8. `wallet_execute_private_payment` takes the decision ID and asks a capable MCP
+9. `wallet_execute_private_payment` takes the decision ID and asks a capable MCP
    client for one native **Approve** or **Cancel** decision. Acceptance atomically
    consumes one send and its amount allowance before Kohaku is called. If the client
    cannot elicit, the tool returns a structured receipt for Hermes to read back
    and accepts `user_confirmed: true` only on the retry. Recipient and amount
    always come from the plan. An uncertain outcome never restores authority for
    an automatic retry.
-9. `wallet_get_request` reads the durable, redacted result and reconciles a
+10. `wallet_get_request` reads the durable, redacted result and reconciles a
    non-terminal request from a real receipt or the recipient-balance checkpoint.
    Reconciliation never rebroadcasts.
+11. `wallet_plan_recovery_transfer`, `wallet_execute_recovery_transfer`, and
+    `wallet_get_recovery_request` provide a separately confirmed exact-amount
+    recovery path. It is not a sweep, and unresolved execution is never retried.
 
 `wallet_start_new_demo` archives the current wallet with private permissions
 and starts a fresh funding flow. It needs explicit confirmation and returns a
@@ -56,6 +64,13 @@ public archive ID and a new QR, never a path or a secret.
 | `onboarding_status` | `setup_id`, `since_revision`, `wait_ms` | latest durable state, or waits for a newer revision |
 | `wallet_get_context` | optional `amount_native` affordability comparison | main address and live balance, delegation, route status |
 | `wallet_get_tree` | none | address-free profile tree, decimal balances, freshness labels |
+| `wallet_list` | none | registered profiles plus unregistered local Kohaku wallets that may be adopted |
+| `wallet_create` | friendly `name`, confirmation | newly selected named wallet and setup state |
+| `wallet_adopt_existing` | exact local `name`, confirmation | registered and selected Sepolia wallet; never accepts secrets or paths |
+| `wallet_select` | internal `wallet_id`, confirmation | restored profile state with signing disabled pending reauthorization |
+| `wallet_archive` | internal `wallet_id`, confirmation | retained inactive profile marked archived |
+| `wallet_plan_reauthorization` | none | exact fresh authority preview bound to active wallet and selection epoch |
+| `wallet_reauthorize` | exact `decision_id`, confirmation | fresh authorization and reset send/spend counters |
 | `wallet_get_policy` | none | active send count, amount limits, use, expiry, enabled state |
 | `wallet_plan_policy_update` | any of `max_payments`, `per_payment_limit_native`, `lifetime_limit_native`, `expires_in_hours`, `enabled` | `wpd_` preview with current and proposed policies |
 | `wallet_apply_policy_update` | `user_confirmed`; optional exact `decision_id` | idempotent receipt for the latest or named policy preview |
@@ -65,6 +80,9 @@ public archive ID and a new QR, never a path or a secret.
 | `wallet_plan_private_payment` | `recipient`, `amount_native` in ordinary Sepolia ETH | `wd_` decision, digest, expiry, whether confirmation is required |
 | `wallet_execute_private_payment` | `decision_id`, `client_request_id`, optional `user_confirmed` fallback | native confirmation, cancellation, fallback receipt, or a `req_` request in `executing` or later |
 | `wallet_get_request` | `request_id` | one redacted request state |
+| `wallet_plan_recovery_transfer` | `recipient`, `amount_native` | exact-amount recovery decision and remaining-private-balance estimate |
+| `wallet_execute_recovery_transfer` | `decision_id`, optional stable request ID and fallback confirmation | native confirmation or durable `wrr_` request |
+| `wallet_get_recovery_request` | `request_id` | one redacted recovery request state |
 | `wallet_start_new_demo` | `user_confirmed` | archive ID, new setup, new QR |
 
 ## Anonymous egress

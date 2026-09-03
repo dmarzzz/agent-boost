@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Exposed the complete safe wallet lifecycle to Hermes: list and discover local
+  profiles, create, adopt, select, archive, separately reauthorize, and execute
+  exact recovery transfers. Loading a prior wallet restores its durable setup
+  without restoring stale signing authority.
 - Added confirmation-gated regular Sepolia ETH transfers from the selected main
   public account, with a live balance recheck, conservative gas reserve,
   durable idempotent requests, and strict separation from private payments.

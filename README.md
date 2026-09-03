@@ -64,6 +64,13 @@ Hermes prints one live, address-free map using friendly wallet names. Public
 balances and the active private balance are refreshed; inactive private
 balances are clearly marked last known.
 
+> Load my old wallet.
+
+Hermes lists saved profiles, switches by friendly name after approval, restores
+that wallet's durable setup, and separately confirms fresh bounded transfer
+authority. You can create, adopt, archive, and switch among local Sepolia
+wallets without entering a seed, password, key, path, or internal wallet ID.
+
 > Send 0.02 Sepolia ETH privately to 0x2222…2222.
 
 Hermes reads the live balance, reads the exact plan back, waits for your yes,
