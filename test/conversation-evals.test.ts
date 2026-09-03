@@ -4,7 +4,10 @@ import test from "node:test";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  ElicitRequestSchema,
+  type CallToolResult,
+} from "@modelcontextprotocol/sdk/types.js";
 
 import type {
   OnboardingRecord,
@@ -28,6 +31,7 @@ type Scenario =
   | "setup-failed"
   | "payment-confirmed"
   | "regular-transfer"
+  | "regular-transfer-denied"
   | "payment-indeterminate"
   | "payment-denied"
   | "payment-allowed"
@@ -95,6 +99,23 @@ const REQUEST_ID = "req_eval_12345678";
 const REGULAR_DECISION_ID = "rwd_eval_12345678";
 const REGULAR_REQUEST_ID = "rreq_eval_12345678";
 const NOW = "2026-09-01T00:00:00.000Z";
+const AUTHORIZATION = {
+  walletId: "wallet_eval_12345678",
+  walletName: "agent-boost",
+  selectionEpoch: 1,
+  authorizationId: "auth_eval_12345678",
+};
+
+type TestMcpClient = Omit<Client, "callTool"> & {
+  callTool(input: {
+    name: string;
+    arguments?: Record<string, unknown>;
+  }): Promise<CallToolResult>;
+};
+
+function testMcpClient(client: Client): TestMcpClient {
+  return client as unknown as TestMcpClient;
+}
 
 const expectedToolTraces: Record<string, string[]> = {
   "setup-funding-qr": ["onboarding_start"],
@@ -118,6 +139,16 @@ const expectedToolTraces: Record<string, string[]> = {
     "wallet_plan_regular_transfer",
     "wallet_execute_regular_transfer",
     "wallet_get_regular_transfer_request",
+  ],
+  "ambiguous-transfer-mode": [],
+  "regular-transfer-gas-reserve-blocked": [
+    "wallet_get_context",
+    "wallet_plan_regular_transfer",
+  ],
+  "native-regular-transfer-cancelled": [
+    "wallet_get_context",
+    "wallet_plan_regular_transfer",
+    "wallet_execute_regular_transfer",
   ],
   "indeterminate-payment-stays-unresolved": [
     "wallet_get_context",
@@ -221,6 +252,7 @@ function paymentPlan(
     decisionId: DECISION_ID,
     recipient: input.recipient,
     amountWei: input.amountWei,
+    authorization: AUTHORIZATION,
     intentDigest: `sha256:${"0".repeat(64)}`,
     createdAt: NOW,
     expiresAt: "2026-09-01T00:05:00.000Z",
@@ -244,6 +276,7 @@ function paymentRequest(
     decisionId: DECISION_ID,
     recipient: RECIPIENT,
     amountWei: "10000000000000000",
+    authorization: AUTHORIZATION,
     phase,
     createdAt: NOW,
     updatedAt: NOW,
@@ -262,7 +295,7 @@ function paymentRequest(
 function regularTransferPlan(input: {
   recipient: string;
   amountWei: string;
-}): RegularTransferPlan {
+}, denied = false): RegularTransferPlan {
   return {
     version: 1,
     decisionId: REGULAR_DECISION_ID,
@@ -270,17 +303,12 @@ function regularTransferPlan(input: {
     amountWei: input.amountWei,
     mainBalanceSnapshotWei: "100000000000000000",
     gasReserveWei: "1000000000000000",
-    authorization: {
-      walletId: "wallet_eval_12345678",
-      walletName: "agent-boost",
-      selectionEpoch: 1,
-      authorizationId: "auth_eval_12345678",
-    },
+    authorization: AUTHORIZATION,
     intentDigest: `sha256:${"3".repeat(64)}`,
     createdAt: NOW,
     expiresAt: "2026-09-01T00:05:00.000Z",
-    decision: "allow",
-    blockers: [],
+    decision: denied ? "deny" : "allow",
+    blockers: denied ? ["INSUFFICIENT_MAIN_BALANCE_WITH_GAS_RESERVE"] : [],
     approval: { action: "confirm", userConfirmationRequired: true },
   };
 }
@@ -453,6 +481,11 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
       return {
         version: 1,
         decisionId: input.decisionId,
+        wallet: {
+          walletId: AUTHORIZATION.walletId,
+          walletName: AUTHORIZATION.walletName,
+          selectionEpoch: AUTHORIZATION.selectionEpoch,
+        },
         appliedAt: NOW,
         policy: {
           ...ready.delegation,
@@ -462,11 +495,39 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
           paymentsUsed: 0,
           paymentsRemaining: 10,
         },
+        authorizationEffect: "preserved" as const,
+        counterEffect: "preserved" as const,
       };
     },
+    async listWallets() {
+      return { active_wallet_id: AUTHORIZATION.walletId, wallets: [] };
+    },
+    async createWallet() {
+      throw new Error("wallet creation is outside this conversation eval");
+    },
+    async adoptWallet() {
+      throw new Error("wallet adoption is outside this conversation eval");
+    },
+    async selectWallet() {
+      throw new Error("wallet selection is outside this conversation eval");
+    },
+    async archiveWallet() {
+      throw new Error("wallet archival is outside this conversation eval");
+    },
+    async planWalletReauthorization() {
+      throw new Error("wallet reauthorization is outside this conversation eval");
+    },
+    async getWalletReauthorizationPlan() {
+      throw new Error("wallet reauthorization is outside this conversation eval");
+    },
+    async reauthorizeWallet() {
+      throw new Error("wallet reauthorization is outside this conversation eval");
+    },
     async planRegularTransfer(input) {
-      assert.equal(scenario, "regular-transfer");
-      return regularTransferPlan(input);
+      assert.ok(
+        scenario === "regular-transfer" || scenario === "regular-transfer-denied",
+      );
+      return regularTransferPlan(input, scenario === "regular-transfer-denied");
     },
     async getRegularTransferPlan() {
       return regularTransferPlan({
@@ -517,6 +578,18 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
       return scenario === "payment-indeterminate"
         ? paymentRequest("indeterminate")
         : paymentRequest("confirmed");
+    },
+    async planRecoveryTransfer() {
+      throw new Error("wallet recovery is outside this conversation eval");
+    },
+    async getRecoveryPlan() {
+      throw new Error("wallet recovery is outside this conversation eval");
+    },
+    async executeRecoveryTransfer() {
+      throw new Error("wallet recovery is outside this conversation eval");
+    },
+    async getRecoveryRequest() {
+      throw new Error("wallet recovery is outside this conversation eval");
     },
     async egressCapabilities() {
       return {
@@ -624,10 +697,10 @@ test("ideal conversation flows replay through the real MCP contract", async (t) 
       const interaction = flow.steps.find(
         (step): step is ClientStep => step.actor === "client",
       );
-      const client = new Client(
+      const client = testMcpClient(new Client(
         { name: "agent-boost-eval", version: "1.0.0" },
         interaction ? { capabilities: { elicitation: { form: {} } } } : undefined,
-      );
+      ));
       if (interaction) {
         client.setRequestHandler(ElicitRequestSchema, async (request) => {
           assert.match(request.params.message, new RegExp(interaction.title, "u"));

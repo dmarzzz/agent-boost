@@ -19,6 +19,7 @@ type Scenario =
   | "setup-failed"
   | "payment-confirmed"
   | "regular-transfer"
+  | "regular-transfer-denied"
   | "payment-indeterminate"
   | "payment-denied"
   | "payment-allowed"
@@ -38,6 +39,7 @@ const scenarios = new Set<Scenario>([
   "setup-failed",
   "payment-confirmed",
   "regular-transfer",
+  "regular-transfer-denied",
   "payment-indeterminate",
   "payment-denied",
   "payment-allowed",
@@ -57,6 +59,12 @@ const DECISION_ID = "wd_eval_12345678";
 const REQUEST_ID = "req_eval_12345678";
 const REGULAR_DECISION_ID = "rwd_eval_12345678";
 const REGULAR_REQUEST_ID = "rreq_eval_12345678";
+const AUTHORIZATION = {
+  walletId: "wallet_eval_12345678",
+  walletName: "agent-boost",
+  selectionEpoch: 1,
+  authorizationId: "auth_eval_12345678",
+};
 const nowMs = Date.now();
 const NOW = new Date(nowMs).toISOString();
 const DEFAULT_EXPIRY = new Date(nowMs + 7 * 24 * 60 * 60_000).toISOString();
@@ -115,6 +123,7 @@ function request(phase: PaymentRequest["phase"]): PaymentRequest {
     decisionId: DECISION_ID,
     recipient: RECIPIENT,
     amountWei: "10000000000000000",
+    authorization: AUTHORIZATION,
     phase,
     createdAt: NOW,
     updatedAt: NOW,
@@ -330,6 +339,11 @@ const runtime: AgentBoostRuntime = {
     return {
       version: 1,
       decisionId: input.decisionId,
+      wallet: {
+        walletId: AUTHORIZATION.walletId,
+        walletName: AUTHORIZATION.walletName,
+        selectionEpoch: AUTHORIZATION.selectionEpoch,
+      },
       appliedAt: NOW,
       policy: {
         ...ready.delegation,
@@ -339,12 +353,43 @@ const runtime: AgentBoostRuntime = {
         paymentsUsed: 0,
         paymentsRemaining: 10,
       },
+      authorizationEffect: "preserved" as const,
+      counterEffect: "preserved" as const,
     };
+  },
+  async listWallets() {
+    return { active_wallet_id: AUTHORIZATION.walletId, wallets: [] };
+  },
+  async createWallet() {
+    throw new Error("wallet creation is outside this eval");
+  },
+  async adoptWallet() {
+    throw new Error("wallet adoption is outside this eval");
+  },
+  async selectWallet() {
+    throw new Error("wallet selection is outside this eval");
+  },
+  async archiveWallet() {
+    throw new Error("wallet archival is outside this eval");
+  },
+  async planWalletReauthorization() {
+    throw new Error("wallet reauthorization is outside this eval");
+  },
+  async getWalletReauthorizationPlan() {
+    throw new Error("wallet reauthorization is outside this eval");
+  },
+  async reauthorizeWallet() {
+    throw new Error("wallet reauthorization is outside this eval");
   },
   async planRegularTransfer(input): Promise<RegularTransferPlan> {
     await trace("wallet_plan_regular_transfer", input);
-    if (scenario !== "regular-transfer" || input.recipient !== RECIPIENT ||
-      input.amountWei !== "10000000000000000") {
+    const denied = scenario === "regular-transfer-denied";
+    const expectedAmountWei = denied
+      ? "100000000000000000"
+      : "10000000000000000";
+    if ((scenario !== "regular-transfer" && scenario !== "regular-transfer-denied") ||
+      input.recipient !== RECIPIENT ||
+      input.amountWei !== expectedAmountWei) {
       throw new Error("Eval model planned the wrong regular transfer");
     }
     return {
@@ -354,17 +399,12 @@ const runtime: AgentBoostRuntime = {
       amountWei: input.amountWei,
       mainBalanceSnapshotWei: "100000000000000000",
       gasReserveWei: "1000000000000000",
-      authorization: {
-        walletId: "wallet_eval_12345678",
-        walletName: "agent-boost",
-        selectionEpoch: 1,
-        authorizationId: "auth_eval_12345678",
-      },
+      authorization: AUTHORIZATION,
       intentDigest: `sha256:${"3".repeat(64)}`,
       createdAt: NOW,
       expiresAt: PLAN_EXPIRY,
-      decision: "allow",
-      blockers: [],
+      decision: denied ? "deny" : "allow",
+      blockers: denied ? ["INSUFFICIENT_MAIN_BALANCE_WITH_GAS_RESERVE"] : [],
       approval: { action: "confirm", userConfirmationRequired: true },
     };
   },
@@ -379,12 +419,7 @@ const runtime: AgentBoostRuntime = {
       amountWei: "10000000000000000",
       mainBalanceSnapshotWei: "100000000000000000",
       gasReserveWei: "1000000000000000",
-      authorization: {
-        walletId: "wallet_eval_12345678",
-        walletName: "agent-boost",
-        selectionEpoch: 1,
-        authorizationId: "auth_eval_12345678",
-      },
+      authorization: AUTHORIZATION,
       intentDigest: `sha256:${"3".repeat(64)}`,
       createdAt: NOW,
       expiresAt: PLAN_EXPIRY,
@@ -447,6 +482,7 @@ const runtime: AgentBoostRuntime = {
       decisionId: DECISION_ID,
       recipient: input.recipient,
       amountWei: input.amountWei,
+      authorization: AUTHORIZATION,
       intentDigest: `sha256:${"0".repeat(64)}`,
       createdAt: NOW,
       expiresAt: PLAN_EXPIRY,
@@ -471,6 +507,7 @@ const runtime: AgentBoostRuntime = {
       decisionId: DECISION_ID,
       recipient: RECIPIENT,
       amountWei: "10000000000000000",
+      authorization: AUTHORIZATION,
       intentDigest: `sha256:${"0".repeat(64)}`,
       createdAt: NOW,
       expiresAt: PLAN_EXPIRY,
@@ -502,6 +539,18 @@ const runtime: AgentBoostRuntime = {
     return scenario === "payment-indeterminate"
       ? request("indeterminate")
       : request("confirmed");
+  },
+  async planRecoveryTransfer() {
+    throw new Error("wallet recovery is outside this eval");
+  },
+  async getRecoveryPlan() {
+    throw new Error("wallet recovery is outside this eval");
+  },
+  async executeRecoveryTransfer() {
+    throw new Error("wallet recovery is outside this eval");
+  },
+  async getRecoveryRequest() {
+    throw new Error("wallet recovery is outside this eval");
   },
   async egressCapabilities() {
     if (egressCapabilityReads > 0) await trace("egress_capabilities", {});

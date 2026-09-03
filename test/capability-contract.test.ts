@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import Ajv2020 from "ajv/dist/2020.js";
+import { Ajv2020 } from "ajv/dist/2020.js";
 
 import { loadConfig } from "../src/config.js";
 import type { ChainClient, WalletAdapter } from "../src/contracts.js";

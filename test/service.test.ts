@@ -99,6 +99,7 @@ async function seedOnboarding(
       perPaymentLimitWei: "50000000000000000",
       lifetimeLimitWei: "50000000000000000",
       spentWei: "0",
+      maxPayments: 1,
       expiresAt: new Date(86_400_000).toISOString(),
       enabled: true,
     },

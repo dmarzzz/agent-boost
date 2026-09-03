@@ -26,7 +26,11 @@ class FakeTorClient implements TorClientPort {
     url: string,
     init?: { method?: string; body?: string | Uint8Array | ArrayBuffer },
   ): Promise<Response> {
-    this.calls.push({ url, method: init?.method, body: init?.body });
+    this.calls.push({
+      url,
+      ...(init?.method === undefined ? {} : { method: init.method }),
+      ...(init?.body === undefined ? {} : { body: init.body }),
+    });
     if (this.hangFetch) return new Promise<Response>(() => undefined);
     if (this.failFetch) throw new Error("direct fallback bait https://secret.invalid");
     if (url.includes("check.torproject.org")) {

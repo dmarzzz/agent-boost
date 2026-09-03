@@ -35,6 +35,7 @@ function snapshot(phase: OnboardingPhase = "awaiting_funding"): PublicOnboarding
       perPaymentLimitWei: "100000000000000000",
       lifetimeLimitWei: FUNDING_WEI,
       spentWei: "0",
+      maxPayments: 1,
       expiresAt: "2026-09-02T00:00:00.000Z",
       enabled: phase === "private_ready",
     },

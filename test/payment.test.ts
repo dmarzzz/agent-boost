@@ -22,9 +22,13 @@ class PaymentWallet implements WalletAdapter {
   async getPrivateBalanceWei(): Promise<bigint> {
     return this.privateBalance;
   }
-  async executePrivatePayment(): Promise<{
-    transactionHash: string;
-    confirmed: boolean;
+  async executePrivatePayment(_input: {
+    recipient: string;
+    amountWei: bigint;
+  }): Promise<{
+    transactionHash?: string;
+    userOperationHash?: string;
+    confirmed?: boolean;
   }> {
     this.calls += 1;
     this.privateBalance = 0n;
@@ -56,6 +60,7 @@ async function readyStore(): Promise<StateStore> {
         perPaymentLimitWei: "100000000000000000",
         lifetimeLimitWei: "100000000000000000",
         spentWei: "0",
+        maxPayments: 1,
         expiresAt: new Date(86_400_000).toISOString(),
         enabled: true,
       },

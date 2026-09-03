@@ -25,6 +25,17 @@ const WALLET_SELECTION = {
   selectionEpoch: AUTHORIZATION.selectionEpoch,
 };
 
+type TestMcpClient = Omit<Client, "callTool"> & {
+  callTool(input: {
+    name: string;
+    arguments?: Record<string, unknown>;
+  }): Promise<CallToolResult>;
+};
+
+function testMcpClient(client: Client): TestMcpClient {
+  return client as unknown as TestMcpClient;
+}
+
 function simulateHermesContentArbitration(result: CallToolResult): {
   result: string;
   _meta?: Record<string, unknown>;
@@ -215,6 +226,7 @@ function fakeRuntime(): AgentBoostRuntime {
       return {
         version: 1,
         decisionId: input.decisionId,
+        wallet: WALLET_SELECTION,
         appliedAt: new Date(1_000).toISOString(),
         policy: {
           ...setup.delegation,
@@ -224,6 +236,8 @@ function fakeRuntime(): AgentBoostRuntime {
           paymentsUsed: 0,
           paymentsRemaining: 10,
         },
+        authorizationEffect: "preserved" as const,
+        counterEffect: "preserved" as const,
       };
     },
     async listWallets() {
@@ -318,7 +332,21 @@ function fakeRuntime(): AgentBoostRuntime {
       };
     },
     async getRegularTransferRequest() {
-      throw new Error("not used");
+      return {
+        version: 1,
+        requestId: "rreq_12345678",
+        clientRequestId: "hermes:rwd_12345678",
+        decisionId: "rwd_12345678",
+        recipient: "0x2222222222222222222222222222222222222222",
+        amountWei: "1000000000000000000",
+        gasReserveWei: "1000000000000000",
+        authorization: AUTHORIZATION,
+        phase: "submitted" as const,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        recipientBalanceBeforeWei: "123",
+        reconciliation: { attempts: 1, checkedAt: new Date(0).toISOString() },
+      };
     },
     async planPrivatePayment(input) {
       return {
@@ -364,6 +392,7 @@ function fakeRuntime(): AgentBoostRuntime {
         decisionId: input.decisionId,
         recipient: "0x2222222222222222222222222222222222222222",
         amountWei: "20000000000000000",
+        authorization: AUTHORIZATION,
         phase: "submitted",
         createdAt: new Date(0).toISOString(),
         updatedAt: new Date(0).toISOString(),
@@ -375,17 +404,36 @@ function fakeRuntime(): AgentBoostRuntime {
       };
     },
     async getRequest() {
-      throw new Error("not used");
+      return {
+        version: 1,
+        requestId: "req_12345678",
+        clientRequestId: "hermes:wd_12345678",
+        decisionId: "wd_12345678",
+        recipient: "0x2222222222222222222222222222222222222222",
+        amountWei: "20000000000000000",
+        authorization: AUTHORIZATION,
+        phase: "submitted" as const,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        recipientBalanceBeforeWei: "123",
+        reconciliation: { attempts: 2, checkedAt: new Date(0).toISOString() },
+      };
     },
     async planRecoveryTransfer(input) {
       return {
         version: 1,
         decisionId: "wr_12345678",
-        authorization: AUTHORIZATION,
+        wallet: WALLET_SELECTION,
         recipient: input.recipient,
         amountWei: "100000000000000000",
+        withdrawalAmountWei: "110000000000000000",
+        feeReserveWei: "10000000000000000",
+        maxRecipientAmountWei: "100000000000000000",
         privateBalanceSnapshotWei: "100000000000000000",
+        remainingPrivateBalanceEstimateWei: "0",
         balanceRevision: 4,
+        scope: "single_tornado_denomination" as const,
+        feeModel: "reserved_from_wallet_controlled_remainder" as const,
         intentDigest: `sha256:${"1".repeat(64)}`,
         createdAt: new Date(0).toISOString(),
         expiresAt: new Date(300_000).toISOString(),
@@ -394,22 +442,49 @@ function fakeRuntime(): AgentBoostRuntime {
         approval: { action: "confirm", userConfirmationRequired: true },
       };
     },
+    async getRecoveryPlan() {
+      return this.planRecoveryTransfer({
+        recipient: "0x2222222222222222222222222222222222222222",
+        amountWei: "100000000000000000",
+      });
+    },
     async executeRecoveryTransfer(input) {
       return {
         version: 1,
         requestId: "wrr_12345678",
         clientRequestId: input.clientRequestId,
         decisionId: input.decisionId,
-        authorization: AUTHORIZATION,
+        wallet: WALLET_SELECTION,
         recipient: "0x2222222222222222222222222222222222222222",
         amountWei: "100000000000000000",
+        withdrawalAmountWei: "110000000000000000",
+        feeReserveWei: "10000000000000000",
+        remainingPrivateBalanceEstimateWei: "0",
+        scope: "single_tornado_denomination" as const,
+        feeModel: "reserved_from_wallet_controlled_remainder" as const,
         phase: "submitted",
         createdAt: new Date(0).toISOString(),
         updatedAt: new Date(0).toISOString(),
       };
     },
     async getRecoveryRequest() {
-      throw new Error("not used");
+      return {
+        version: 1,
+        requestId: "wrr_12345678",
+        clientRequestId: "hermes:wr_12345678",
+        decisionId: "wr_12345678",
+        wallet: WALLET_SELECTION,
+        recipient: "0x2222222222222222222222222222222222222222",
+        amountWei: "100000000000000000",
+        withdrawalAmountWei: "110000000000000000",
+        feeReserveWei: "10000000000000000",
+        remainingPrivateBalanceEstimateWei: "0",
+        scope: "single_tornado_denomination" as const,
+        feeModel: "reserved_from_wallet_controlled_remainder" as const,
+        phase: "submitted" as const,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      };
     },
     async egressCapabilities() {
       return {
@@ -453,7 +528,7 @@ function fakeRuntime(): AgentBoostRuntime {
 test("MCP exposes wallet-first tools and structured onboarding", async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = await createMcpServer(fakeRuntime());
-  const client = new Client({ name: "test", version: "1.0.0" });
+  const client = testMcpClient(new Client({ name: "test", version: "1.0.0" }));
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
   const tools = await client.listTools();
@@ -966,10 +1041,10 @@ test("MCP native payment confirmation accepts, declines, and fails closed", asyn
     };
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = await createMcpServer(runtime);
-    const client = new Client(
+    const client = testMcpClient(new Client(
       { name: "elicitation-test", version: "1.0.0" },
       { capabilities: { elicitation: { form: {} } } },
-    );
+    ));
     let prompt = "";
     client.setRequestHandler(ElicitRequestSchema, async (request) => {
       assert.equal(request.params.mode, "form");
@@ -1006,10 +1081,10 @@ test("MCP native payment confirmation accepts, declines, and fails closed", asyn
     };
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = await createMcpServer(runtime);
-    const client = new Client(
+    const client = testMcpClient(new Client(
       { name: "elicitation-test", version: "1.0.0" },
       { capabilities: { elicitation: { form: {} } } },
-    );
+    ));
     client.setRequestHandler(ElicitRequestSchema, async () => ({ action: "decline" }));
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
@@ -1041,7 +1116,7 @@ test("MCP native payment confirmation accepts, declines, and fails closed", asyn
     };
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = await createMcpServer(runtime);
-    const client = new Client({ name: "legacy-test", version: "1.0.0" });
+    const client = testMcpClient(new Client({ name: "legacy-test", version: "1.0.0" }));
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
       const response = await client.callTool({
@@ -1087,10 +1162,10 @@ test("MCP regular transfer confirmation stays on the public path", async () => {
   };
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = await createMcpServer(runtime);
-  const client = new Client(
+  const client = testMcpClient(new Client(
     { name: "regular-elicitation-test", version: "1.0.0" },
     { capabilities: { elicitation: { form: {} } } },
-  );
+  ));
   let prompt = "";
   client.setRequestHandler(ElicitRequestSchema, async (request) => {
     prompt = request.params.message;
@@ -1117,6 +1192,574 @@ test("MCP regular transfer confirmation stays on the public path", async () => {
   }
 });
 
+test("every shipped MCP tool has at least two contract-level flows", async () => {
+  const runtime = fakeRuntime();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client({ name: "flow-matrix", version: "1.0.0" }));
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const coverage = new Map<string, Set<string>>();
+  const exercise = async (
+    name: string,
+    flow: string,
+    arguments_: Record<string, unknown> = {},
+  ): Promise<CallToolResult> => {
+    const flows = coverage.get(name) ?? new Set<string>();
+    flows.add(flow);
+    coverage.set(name, flows);
+    return await client.callTool({ name, arguments: arguments_ }) as CallToolResult;
+  };
+  const structured = (response: CallToolResult): {
+    code: string;
+    outcome: string;
+    data: Record<string, unknown>;
+  } => response.structuredContent as {
+    code: string;
+    outcome: string;
+    data: Record<string, unknown>;
+  };
+  const expectCode = (
+    response: CallToolResult,
+    code: string,
+    outcome?: string,
+  ): void => {
+    assert.equal(structured(response).code, code);
+    if (outcome !== undefined) assert.equal(structured(response).outcome, outcome);
+  };
+  const recipient = "0x2222222222222222222222222222222222222222";
+  const tradeArguments = {
+    chain_id: "eip155:11155111",
+    sell_asset_id: "eip155:11155111/slip44:60",
+    buy_asset_id: "eip155:11155111/erc20:0x3333333333333333333333333333333333333333",
+    sell_amount_atomic: "1000000000000000",
+    max_slippage_bps: 50,
+    recipient,
+  };
+
+  try {
+    expectCode(await exercise("capabilities", "initial snapshot"), "CAPABILITIES", "ready");
+    const originalCapabilities = runtime.capabilities.bind(runtime);
+    runtime.capabilities = async () => ({
+      ...(await originalCapabilities()),
+      regular_transfer_probe: "second_snapshot",
+    });
+    expectCode(await exercise("capabilities", "refreshed snapshot"), "CAPABILITIES", "ready");
+
+    const firstTradeCapabilities = await exercise(
+      "trade_capabilities",
+      "regular readiness inspection",
+    );
+    const secondTradeCapabilities = await exercise(
+      "trade_capabilities",
+      "private readiness inspection",
+    );
+    expectCode(firstTradeCapabilities, "TRADE_CAPABILITIES", "ready");
+    expectCode(secondTradeCapabilities, "TRADE_CAPABILITIES", "ready");
+    assert.deepEqual(
+      structured(firstTradeCapabilities).data,
+      structured(secondTradeCapabilities).data,
+      "static trade readiness must be deterministic",
+    );
+
+    for (const mode of ["regular", "private"] as const) {
+      const planned = await exercise("trade_plan", `${mode} unavailable`, {
+        mode,
+        ...tradeArguments,
+      });
+      expectCode(planned, "TRADE_NOT_CONFIGURED", "blocked");
+      assert.equal(
+        (structured(planned).data as { requested_mode: string }).requested_mode,
+        mode,
+      );
+      assert.equal(
+        (structured(planned).data as { effects: { network_request_attempted: boolean } })
+          .effects.network_request_attempted,
+        false,
+      );
+
+      const executed = await exercise("trade_execute", `${mode} execution inert`, {
+        mode,
+        decision_id: "td_12345678",
+      });
+      expectCode(executed, "TRADE_NOT_CONFIGURED", "blocked");
+      assert.equal(
+        (structured(executed).data as { effects: { transaction_submitted: boolean } })
+          .effects.transaction_submitted,
+        false,
+      );
+
+      const status = await exercise("trade_get_request", `${mode} status inert`, {
+        mode,
+        request_id: "tr_12345678",
+      });
+      expectCode(status, "TRADE_NOT_CONFIGURED", "blocked");
+      assert.equal(
+        (structured(status).data as { requested_mode: string }).requested_mode,
+        mode,
+      );
+    }
+
+    expectCode(
+      await exercise("egress_capabilities", "initial policy"),
+      "EGRESS_CAPABILITIES",
+      "ready",
+    );
+    runtime.egressCapabilities = async () => ({
+      contract: "org.agentboost.egress/0.1",
+      mode: "explicit_fetch",
+      policy: { direct_fallback: false, refreshed: true },
+    });
+    expectCode(
+      await exercise("egress_capabilities", "refreshed policy"),
+      "EGRESS_CAPABILITIES",
+      "ready",
+    );
+
+    expectCode(await exercise("egress_status", "ready"), "EGRESS_STATUS", "ready");
+    runtime.egressStatus = async () => ({
+      status: "degraded",
+      code: "SHADE_TREE_DEGRADED",
+      detail: "covered route is unavailable",
+      direct_fallback: false,
+    });
+    expectCode(await exercise("egress_status", "degraded"), "EGRESS_STATUS", "blocked");
+
+    let observedMethod: "GET" | "HEAD" | undefined;
+    runtime.egressFetch = async (input) => {
+      observedMethod = input.method;
+      return {
+        status: 200,
+        finalUrl: input.url,
+        contentType: "application/json",
+        body: input.method === "HEAD" ? "" : "{}",
+        bytes: input.method === "HEAD" ? 0 : 2,
+        redirects: 0,
+        route: "shade-tree",
+      };
+    };
+    expectCode(
+      await exercise("egress_fetch", "GET text", { url: "https://example.com/data" }),
+      "EGRESS_FETCHED",
+      "ready",
+    );
+    assert.equal(observedMethod, undefined, "omitted method must preserve the GET default");
+    expectCode(
+      await exercise("egress_fetch", "HEAD metadata", {
+        url: "https://example.com/data",
+        method: "HEAD",
+      }),
+      "EGRESS_FETCHED",
+      "ready",
+    );
+    assert.equal(observedMethod, "HEAD");
+
+    expectCode(
+      await exercise("onboarding_start", "resume awaiting funding"),
+      "ONBOARDING_STARTED",
+      "awaiting_funding",
+    );
+    runtime.startOnboarding = async () => {
+      throw new Error("WALLET_BACKEND_UNAVAILABLE");
+    };
+    expectCode(
+      await exercise("onboarding_start", "backend failure"),
+      "REQUEST_BLOCKED",
+      "blocked",
+    );
+
+    const waiting = await runtime.onboardingStatus({ setupId: "setup_12345678" });
+    expectCode(
+      await exercise("onboarding_status", "awaiting funding", {
+        setup_id: "setup_12345678",
+        since_revision: 2,
+        wait_ms: 0,
+      }),
+      "ONBOARDING_STATUS",
+      "awaiting_funding",
+    );
+    runtime.onboardingStatus = async () => ({
+      ...waiting,
+      phase: "failed",
+      revision: waiting.revision + 1,
+      error: { code: "SHIELD_FAILED", message: "test failure", retryable: false },
+    });
+    expectCode(
+      await exercise("onboarding_status", "terminal failure", {
+        setup_id: "setup_12345678",
+      }),
+      "ONBOARDING_STATUS",
+      "failed",
+    );
+
+    const affordable = await exercise("wallet_get_context", "affordable amount", {
+      amount_native: "1",
+    });
+    const unaffordable = await exercise("wallet_get_context", "unaffordable amount", {
+      amount_native: "2",
+    });
+    expectCode(affordable, "WALLET_CONTEXT", "ready");
+    expectCode(unaffordable, "WALLET_CONTEXT", "ready");
+    assert.equal(
+      (structured(affordable).data as {
+        affordability_check: { main_account_covers_requested: boolean };
+      }).affordability_check.main_account_covers_requested,
+      true,
+    );
+    assert.equal(
+      (structured(unaffordable).data as {
+        affordability_check: { main_account_covers_requested: boolean };
+      }).affordability_check.main_account_covers_requested,
+      false,
+    );
+
+    expectCode(await exercise("wallet_list", "empty inventory"), "WALLET_LIST", "ready");
+    runtime.listWallets = async () => ({
+      active_wallet_id: AUTHORIZATION.walletId,
+      wallets: [{ short_name: "agent-boost", active: true }],
+    });
+    expectCode(await exercise("wallet_list", "active inventory"), "WALLET_LIST", "ready");
+
+    expectCode(await exercise("wallet_get_tree", "live tree"), "WALLET_TREE", "ready");
+    runtime.walletTree = async () => {
+      throw new Error("TREE_REFRESH_FAILED");
+    };
+    expectCode(
+      await exercise("wallet_get_tree", "refresh failure"),
+      "REQUEST_BLOCKED",
+      "blocked",
+    );
+
+    expectCode(await exercise("wallet_get_policy", "enabled policy"), "WALLET_POLICY", "ready");
+    const enabledPolicy = await runtime.walletPolicy();
+    runtime.walletPolicy = async () => ({ ...enabledPolicy, enabled: false });
+    const disabledPolicy = await exercise("wallet_get_policy", "disabled policy");
+    expectCode(disabledPolicy, "WALLET_POLICY", "ready");
+    assert.equal(
+      (structured(disabledPolicy).data as { policy: { enabled: boolean } }).policy.enabled,
+      false,
+    );
+
+    for (const walletMutation of [
+      {
+        name: "wallet_create",
+        args: { name: "fresh-wallet" },
+        blockedCode: "WALLET_CREATE_CONFIRMATION_REQUIRED",
+        readyCode: "WALLET_CREATED",
+      },
+      {
+        name: "wallet_adopt_existing",
+        args: { name: "existing-wallet" },
+        blockedCode: "WALLET_ADOPT_CONFIRMATION_REQUIRED",
+        readyCode: "WALLET_ADOPTED",
+      },
+      {
+        name: "wallet_select",
+        args: { wallet_id: "wallet_87654321" },
+        blockedCode: "WALLET_SELECT_CONFIRMATION_REQUIRED",
+        readyCode: "WALLET_SELECTED",
+      },
+      {
+        name: "wallet_archive",
+        args: { wallet_id: "wallet_87654321" },
+        blockedCode: "WALLET_ARCHIVE_CONFIRMATION_REQUIRED",
+        readyCode: "WALLET_ARCHIVED",
+      },
+    ]) {
+      expectCode(
+        await exercise(walletMutation.name, "confirmation missing", walletMutation.args),
+        walletMutation.blockedCode,
+        "blocked",
+      );
+      expectCode(
+        await exercise(walletMutation.name, "trusted confirmation", {
+          ...walletMutation.args,
+          user_confirmed: true,
+        }),
+        walletMutation.readyCode,
+        "ready",
+      );
+    }
+
+    const originalReauthorizationPlan = runtime.planWalletReauthorization.bind(runtime);
+    expectCode(
+      await exercise("wallet_plan_reauthorization", "allowed plan"),
+      "WALLET_REAUTHORIZATION_PLANNED",
+      "ready",
+    );
+    runtime.planWalletReauthorization = async () => ({
+      ...(await originalReauthorizationPlan()),
+      decision: "deny",
+      blockers: ["WALLET_NOT_READY"],
+    });
+    expectCode(
+      await exercise("wallet_plan_reauthorization", "denied plan"),
+      "WALLET_REAUTHORIZATION_DENIED",
+      "blocked",
+    );
+    runtime.planWalletReauthorization = originalReauthorizationPlan;
+
+    expectCode(
+      await exercise("wallet_reauthorize", "confirmation missing", {
+        decision_id: "wra_12345678",
+      }),
+      "WALLET_REAUTHORIZATION_CONFIRMATION_REQUIRED",
+      "blocked",
+    );
+    expectCode(
+      await exercise("wallet_reauthorize", "trusted confirmation", {
+        decision_id: "wra_12345678",
+        user_confirmed: true,
+      }),
+      "WALLET_REAUTHORIZED",
+      "ready",
+    );
+
+    expectCode(
+      await exercise("wallet_start_new_demo", "confirmation missing"),
+      "DEMO_RESET_CONFIRMATION_REQUIRED",
+      "blocked",
+    );
+    const originalStartOnboarding = fakeRuntime().startOnboarding;
+    runtime.startOnboarding = originalStartOnboarding;
+    expectCode(
+      await exercise("wallet_start_new_demo", "trusted confirmation", {
+        user_confirmed: true,
+      }),
+      "DEMO_RESET_STARTED",
+      "awaiting_funding",
+    );
+
+    const originalPolicyPlan = runtime.planPolicyUpdate.bind(runtime);
+    expectCode(
+      await exercise("wallet_plan_policy_update", "allowed update", {
+        max_payments: 20,
+        per_payment_limit_native: "0.5",
+      }),
+      "POLICY_UPDATE_PLANNED",
+      "ready",
+    );
+    runtime.planPolicyUpdate = async (input) => ({
+      ...(await originalPolicyPlan(input)),
+      decision: "deny",
+      blockers: ["POLICY_OUTSIDE_HARD_BOUNDS"],
+    });
+    expectCode(
+      await exercise("wallet_plan_policy_update", "denied update", {
+        max_payments: 100,
+      }),
+      "POLICY_UPDATE_DENIED",
+      "blocked",
+    );
+    runtime.planPolicyUpdate = originalPolicyPlan;
+
+    expectCode(
+      await exercise("wallet_apply_policy_update", "confirmation missing", {
+        decision_id: "wpd_12345678",
+      }),
+      "POLICY_UPDATE_CONFIRMATION_REQUIRED",
+      "blocked",
+    );
+    expectCode(
+      await exercise("wallet_apply_policy_update", "confirmed latest plan", {
+        user_confirmed: true,
+      }),
+      "POLICY_UPDATED",
+      "confirmed",
+    );
+
+    const originalRegularPlan = runtime.planRegularTransfer.bind(runtime);
+    expectCode(
+      await exercise("wallet_plan_regular_transfer", "allowed regular transfer", {
+        recipient,
+        amount_native: "1",
+      }),
+      "REGULAR_TRANSFER_PLANNED",
+      "ready",
+    );
+    runtime.planRegularTransfer = async (input) => ({
+      ...(await originalRegularPlan(input)),
+      decision: "deny",
+      blockers: ["INSUFFICIENT_MAIN_BALANCE_WITH_GAS_RESERVE"],
+    });
+    expectCode(
+      await exercise("wallet_plan_regular_transfer", "denied regular transfer", {
+        recipient,
+        amount_native: "2",
+      }),
+      "REGULAR_TRANSFER_DENIED",
+      "blocked",
+    );
+    runtime.planRegularTransfer = originalRegularPlan;
+
+    expectCode(
+      await exercise("wallet_execute_regular_transfer", "confirmation missing", {
+        decision_id: "rwd_12345678",
+      }),
+      "REGULAR_TRANSFER_CONFIRMATION_REQUIRED",
+      "blocked",
+    );
+    expectCode(
+      await exercise("wallet_execute_regular_transfer", "trusted confirmation", {
+        decision_id: "rwd_12345678",
+        user_confirmed: true,
+      }),
+      "REGULAR_TRANSFER_REQUEST",
+      "submitted",
+    );
+
+    const originalRegularStatus = runtime.getRegularTransferRequest.bind(runtime);
+    expectCode(
+      await exercise("wallet_get_regular_transfer_request", "submitted", {
+        request_id: "rreq_12345678",
+      }),
+      "REGULAR_TRANSFER_STATUS",
+      "submitted",
+    );
+    runtime.getRegularTransferRequest = async () => ({
+      ...(await originalRegularStatus("rreq_12345678")),
+      phase: "confirmed",
+      confirmation: { method: "transaction_receipt", checkedAt: new Date(1_000).toISOString() },
+    });
+    expectCode(
+      await exercise("wallet_get_regular_transfer_request", "confirmed", {
+        request_id: "rreq_12345678",
+      }),
+      "REGULAR_TRANSFER_STATUS",
+      "confirmed",
+    );
+
+    const originalPrivatePlan = runtime.planPrivatePayment.bind(runtime);
+    expectCode(
+      await exercise("wallet_plan_private_payment", "allowed private payment", {
+        recipient,
+        amount_native: "0.01",
+      }),
+      "PAYMENT_PLANNED",
+      "ready",
+    );
+    runtime.planPrivatePayment = async (input) => ({
+      ...(await originalPrivatePlan(input)),
+      decision: "deny",
+      blockers: ["PRIVATE_BALANCE_LIMIT"],
+    });
+    expectCode(
+      await exercise("wallet_plan_private_payment", "denied private payment", {
+        recipient,
+        amount_native: "1",
+      }),
+      "PAYMENT_DENIED",
+      "blocked",
+    );
+    runtime.planPrivatePayment = originalPrivatePlan;
+
+    expectCode(
+      await exercise("wallet_execute_private_payment", "confirmation missing", {
+        decision_id: "wd_12345678",
+      }),
+      "PAYMENT_CONFIRMATION_REQUIRED",
+      "blocked",
+    );
+    expectCode(
+      await exercise("wallet_execute_private_payment", "trusted confirmation", {
+        decision_id: "wd_12345678",
+        user_confirmed: true,
+      }),
+      "PAYMENT_REQUEST",
+      "submitted",
+    );
+
+    const originalPrivateStatus = runtime.getRequest.bind(runtime);
+    expectCode(
+      await exercise("wallet_get_request", "submitted", { request_id: "req_12345678" }),
+      "PAYMENT_STATUS",
+      "submitted",
+    );
+    runtime.getRequest = async () => ({
+      ...(await originalPrivateStatus("req_12345678")),
+      phase: "failed",
+      error: { code: "TRANSACTION_REVERTED", message: "test revert" },
+    });
+    expectCode(
+      await exercise("wallet_get_request", "failed", { request_id: "req_12345678" }),
+      "PAYMENT_STATUS",
+      "failed",
+    );
+
+    const originalRecoveryPlan = runtime.planRecoveryTransfer.bind(runtime);
+    expectCode(
+      await exercise("wallet_plan_recovery_transfer", "allowed recovery", {
+        recipient,
+        amount_native: "0.1",
+      }),
+      "RECOVERY_PLANNED",
+      "ready",
+    );
+    runtime.planRecoveryTransfer = async (input) => ({
+      ...(await originalRecoveryPlan(input)),
+      decision: "deny",
+      blockers: ["RECOVERY_AMOUNT_EXCEEDS_MAX"],
+    });
+    expectCode(
+      await exercise("wallet_plan_recovery_transfer", "denied recovery", {
+        recipient,
+        amount_native: "0.2",
+      }),
+      "RECOVERY_DENIED",
+      "blocked",
+    );
+    runtime.planRecoveryTransfer = originalRecoveryPlan;
+
+    expectCode(
+      await exercise("wallet_execute_recovery_transfer", "confirmation missing", {
+        decision_id: "wr_12345678",
+      }),
+      "RECOVERY_CONFIRMATION_REQUIRED",
+      "blocked",
+    );
+    expectCode(
+      await exercise("wallet_execute_recovery_transfer", "trusted confirmation", {
+        decision_id: "wr_12345678",
+        user_confirmed: true,
+      }),
+      "RECOVERY_REQUEST",
+      "submitted",
+    );
+
+    const originalRecoveryStatus = runtime.getRecoveryRequest.bind(runtime);
+    expectCode(
+      await exercise("wallet_get_recovery_request", "submitted", {
+        request_id: "wrr_12345678",
+      }),
+      "RECOVERY_STATUS",
+      "submitted",
+    );
+    runtime.getRecoveryRequest = async () => ({
+      ...(await originalRecoveryStatus("wrr_12345678")),
+      phase: "indeterminate",
+      error: { code: "EXECUTION_INTERRUPTED", message: "do not retry" },
+    });
+    expectCode(
+      await exercise("wallet_get_recovery_request", "indeterminate", {
+        request_id: "wrr_12345678",
+      }),
+      "RECOVERY_STATUS",
+      "indeterminate",
+    );
+
+    const shippedTools = (await client.listTools()).tools.map((tool) => tool.name).sort();
+    assert.equal(shippedTools.length, 32);
+    assert.deepEqual(
+      shippedTools.filter((name) => (coverage.get(name)?.size ?? 0) < 2),
+      [],
+      "every shipped tool must retain at least two named contract-level flows",
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("MCP error envelopes redact RPC credentials and local paths", async () => {
   const runtime = fakeRuntime();
   runtime.walletContext = async () => {
@@ -1126,7 +1769,7 @@ test("MCP error envelopes redact RPC credentials and local paths", async () => {
   };
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = await createMcpServer(runtime);
-  const client = new Client({ name: "test", version: "1.0.0" });
+  const client = testMcpClient(new Client({ name: "test", version: "1.0.0" }));
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
   const response = await client.callTool({
@@ -1153,7 +1796,7 @@ test("MCP rejects additional balance fields at the public contract boundary", as
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = await createMcpServer(runtime);
-  const client = new Client({ name: "test", version: "1.0.0" });
+  const client = testMcpClient(new Client({ name: "test", version: "1.0.0" }));
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
   const response = await client.callTool({
@@ -1183,7 +1826,7 @@ test("MCP rejects any claim that the main account controls subaccounts", async (
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = await createMcpServer(runtime);
-  const client = new Client({ name: "test", version: "1.0.0" });
+  const client = testMcpClient(new Client({ name: "test", version: "1.0.0" }));
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
   const response = await client.callTool({
