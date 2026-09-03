@@ -717,6 +717,22 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   };
   assert.equal(hermesPolicyContext.data.plan.decisionId, "wpd_12345678");
 
+  const policyStillNeedsChatConfirmation = await client.callTool({
+    name: "wallet_apply_policy_update",
+    arguments: { decision_id: "wpd_12345678" },
+  });
+  assert.equal(
+    (policyStillNeedsChatConfirmation.structuredContent as { code: string }).code,
+    "POLICY_UPDATE_CONFIRMATION_REQUIRED",
+  );
+  const policyConfirmationText = policyStillNeedsChatConfirmation.content.find(
+    (block) => block.type === "text",
+  );
+  assert.match(
+    policyConfirmationText?.type === "text" ? policyConfirmationText.text : "",
+    /new user message[\s\S]*Do not plan again/u,
+  );
+
   const policyApplied = await client.callTool({
     name: "wallet_apply_policy_update",
     arguments: { decision_id: "wpd_12345678", user_confirmed: true },

@@ -144,7 +144,9 @@ Tor fail-closed routing, delegation limits, expiry, or adapter readiness.
    `Your main balance will not move into the private pocket.`
    End the turn after this preview. Never call `wallet_apply_policy_update` in
    the same turn as `wallet_plan_policy_update`, and never use a native tool
-   confirmation prompt as a substitute for a new user chat message.
+   confirmation prompt as a substitute for a new user chat message. If an
+   early apply call returns `POLICY_UPDATE_CONFIRMATION_REQUIRED`, show the
+   preview and stop; do not plan again.
 4. After ordinary approval, call `wallet_apply_policy_update` with the exact
    `data.plan.decisionId` from `structuredContent` or
    `_meta["org.agentboost/model-context"]` and `user_confirmed: true`. Never use

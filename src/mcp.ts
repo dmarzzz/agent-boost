@@ -563,6 +563,12 @@ function compactToolText(structured: Record<string, unknown>): string {
     return `Wallet policy updated: ${formatPolicyText(asRecord(receipt.policy))}. This did not move funds. Keep the user-facing receipt concise.`;
   }
 
+  if (code === "POLICY_UPDATE_CONFIRMATION_REQUIRED") {
+    const plan = asRecord(data.plan);
+    const proposed = asRecord(plan.proposed);
+    return `Wallet policy confirmation is still required: ${formatPolicyText(proposed)}. Show the permission preview, then end this turn. After a new user message confirms it, call wallet_apply_policy_update with the exact decision from org.agentboost/model-context and user_confirmed true. Do not plan again unless the user changes a setting.`;
+  }
+
   if (code === "PAYMENT_PLANNED" || code === "PAYMENT_DENIED") {
     const plan = asRecord(data.plan);
     const recipient = stringField(plan, "recipient") ?? "unknown recipient";
@@ -1665,7 +1671,7 @@ export async function createMcpServer(
     {
       title: "Apply an approved wallet permission change",
       description:
-        "The agent—not the user—calls this only after showing the exact permission card from wallet_plan_policy_update, ending that turn, and receiving ordinary confirmation such as yes or ✅ in a new user message. Never call this in the same turn as wallet_plan_policy_update or use native tool elicitation as a substitute for the chat confirmation. This changes local delegated authority but never sends funds, moves funds, changes networks, enables mainnet, or exposes keys. Never ask the user for tool syntax, an ID, or a boolean.",
+        "The agent—not the user—calls this only after showing the exact permission card from wallet_plan_policy_update, ending that turn, and receiving ordinary confirmation such as yes or ✅ in a new user message. Calls without user_confirmed true never open native approval and never apply; they return the same plan for a later chat confirmation. Never call this in the same turn as wallet_plan_policy_update or replan after confirmation. This changes local delegated authority but never sends funds, moves funds, changes networks, enables mainnet, or exposes keys. Never ask the user for tool syntax, an ID, or a boolean.",
       inputSchema: z.object({
         decision_id: z.string().startsWith("wpd_"),
         user_confirmed: z.boolean().optional(),
@@ -1679,15 +1685,11 @@ export async function createMcpServer(
     async ({ decision_id, user_confirmed }) => {
       try {
         const plan = await runtime.getPolicyUpdatePlan(decision_id);
-        const confirmation = await observeConfirmation(
-          `Apply this Sepolia wallet policy to ${plan.wallet.walletName}: ${plan.proposed.maxPayments} payments, ${formatEthWei(BigInt(plan.proposed.perPaymentLimitWei))} Sepolia ETH per payment, ${formatEthWei(BigInt(plan.proposed.lifetimeLimitWei))} Sepolia ETH total, enabled=${plan.proposed.enabled}, expires ${plan.proposed.expiresAt}? The existing authorization, amount already spent, and payment count are preserved.`,
-          user_confirmed,
-        );
-        if (!confirmation.accepted) {
+        if (user_confirmed !== true) {
           return result(envelope(digest, "blocked", "POLICY_UPDATE_CONFIRMATION_REQUIRED", {
             plan,
-            confirmation_mode: confirmation.mode,
-            ...(confirmation.reason ? { reason: confirmation.reason } : {}),
+            confirmation_mode: "chat",
+            reason: "A new user chat message must confirm the displayed policy preview.",
           }));
         }
         const receipt = await runtime.applyPolicyUpdate({
