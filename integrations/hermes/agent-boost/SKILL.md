@@ -1,7 +1,7 @@
 ---
 name: agent-boost
-description: Check balances and make private Sepolia test payments.
-version: 0.2.0
+description: Manage a private Sepolia wallet and its permissions.
+version: 0.3.0
 platforms: [macos, linux]
 metadata:
   hermes:
@@ -36,6 +36,13 @@ redeemable value.
 - **The agent operates every tool.** Never ask the user to type a tool name,
   MCP command, decision ID, request ID, idempotency key, boolean, or atomic-unit
   amount.
+- **Wallet permissions are conversational.** When the user asks to inspect or
+  change send count, per-send amount, total amount, expiry, or enabled state,
+  use the policy tools yourself. Never send them to a config file or operator.
+  A policy change always gets its own exact preview and ordinary confirmation.
+- **Permission is not funding.** A policy update changes what Hermes may do; it
+  does not move the main-account balance into the private payment pocket and it
+  does not add a public-payment route. Say this plainly when it matters.
 - Accept natural requests. If the destination or amount is ambiguous, ask only
   for the missing human detail. Never invent an amount from words like “small.”
 - **First gate:** resolve missing human details before calling any Agent Boost
@@ -65,6 +72,44 @@ or `data.plan.approval`:
 
 Do not treat a policy override as authority to bypass Sepolia-only operation,
 Tor fail-closed routing, delegation limits, expiry, or adapter readiness.
+
+## Change the wallet permission
+
+1. If the user asks what the current permission is, call `wallet_get_policy`
+   and answer in Sepolia ETH—not wei—with sends used and sends remaining.
+2. For a requested change, call `wallet_plan_policy_update` yourself using
+   ordinary native-token decimals. Preserve settings the user did not mention.
+   When per-send amount or send count changes and no total is requested, the
+   tool intentionally makes the total their product. Do not make the user
+   calculate it.
+3. For an allowed preview, show exactly this compact shape with the returned
+   values:
+
+   ```text
+   🔐 New wallet permission
+   Up to <count> private sends
+   <per-send> Sepolia ETH max each · <total> Sepolia ETH total
+   <duration or expiry in friendly words>
+
+   This changes the guardrails—not where funds live.
+   Reply ✅ or say yes to approve.
+   ```
+
+   If the main balance was part of the conversation, add one short sentence:
+   `Your main balance will not move into the private pocket.`
+4. After ordinary approval, call `wallet_apply_policy_update` with the exact
+   structured decision and `user_confirmed: true`. Then report `✅ Permission
+   updated` plus the new count and limits. Never imply that a payment happened.
+5. A changed amount, count, total, expiry, or enabled state requires a new
+   preview and confirmation. Policy previews expire; plan again instead of
+   reusing one. Policy update confirmation never doubles as payment
+   confirmation.
+
+The adjustable hard ceiling is intentionally separate from the sane default.
+The default is 10 private sends, up to 1 Sepolia ETH per send and 10 Sepolia
+ETH total, for seven days. Advanced users may change it conversationally up to
+the tool-reported testnet bounds. Never describe those adjustable bounds as
+mainnet support or recommend raising them without a user request.
 
 ## Procedure
 
@@ -119,6 +164,9 @@ Tor fail-closed routing, delegation limits, expiry, or adapter readiness.
   destination, amount, or expired decision requires a new plan and
   confirmation.
 - Never use these delegated payment tools for mainnet or real-value assets.
+- Never claim changing policy unlocks, shields, transfers, or consolidates a
+  balance. If private spendable funds are insufficient, explain that separately
+  after the policy update.
 - Never offer to reveal, export, or accept the wallet seed, private key,
   password, or signing material.
 - The delegation expiry disables new delegated payments; it does not make the

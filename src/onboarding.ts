@@ -102,8 +102,9 @@ export class OnboardingController {
         mode: "testnet_delegated",
         chainId: SEPOLIA_CHAIN_ID,
         perPaymentLimitWei: this.#config.paymentLimitWei.toString(),
-        lifetimeLimitWei: this.#config.paymentLimitWei.toString(),
+        lifetimeLimitWei: this.#config.paymentLifetimeLimitWei.toString(),
         spentWei: "0",
+        maxPayments: this.#config.maxPayments,
         expiresAt: new Date(
           now.getTime() + this.#config.delegationTtlMs,
         ).toISOString(),

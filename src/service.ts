@@ -8,13 +8,22 @@ import type {
   OnboardingRecord,
   PaymentPlan,
   PaymentRequest,
+  PolicyUpdatePlan,
+  PolicyUpdateReceipt,
   PublicOnboardingSnapshot,
   WalletAdapter,
+} from "./contracts.js";
+import {
+  MAX_POLICY_LIFETIME_LIMIT_WEI,
+  MAX_POLICY_PAYMENT_LIMIT_WEI,
+  MAX_POLICY_PAYMENTS,
+  MAX_POLICY_TTL_MS,
 } from "./contracts.js";
 import { KohakuWalletAdapter } from "./kohaku/index.js";
 import type { AgentBoostRuntime } from "./mcp.js";
 import { OnboardingController } from "./onboarding.js";
 import { PaymentController } from "./payment.js";
+import { WalletPolicyController } from "./policy.js";
 import { SepoliaRpcClient } from "./rpc/index.js";
 import {
   ShadeTreeEgress,
@@ -65,6 +74,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   readonly #chain: ChainClient;
   readonly #onboarding: OnboardingController;
   readonly #payments: PaymentController;
+  readonly #policy: WalletPolicyController;
   readonly #ui: OnboardingUiServer;
   readonly #openBrowser: (url: string) => Promise<boolean>;
   readonly #egress: CoveredEgressPort;
@@ -124,8 +134,12 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       wallet: this.#wallet,
       chain: this.#chain,
       executeEnabled: config.executeEnabled,
-      executionLimitWei: config.paymentLimitWei,
+      executionLimitWei: MAX_POLICY_PAYMENT_LIMIT_WEI,
       paymentApproval: config.security.effective["payment.execute"],
+    });
+    this.#policy = new WalletPolicyController({
+      store: this.#store,
+      defaultTtlMs: config.delegationTtlMs,
     });
     this.#ui = new OnboardingUiServer({
       getSnapshot: () => this.#getPublicSnapshot(),
@@ -182,7 +196,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     const setup = state.onboarding;
     const egress = await this.#egress.status();
     return {
-      contract: "org.agentboost.wallet/1.3",
+      contract: "org.agentboost.wallet/1.4",
       chain_id: "eip155:11155111",
       network_name: "Sepolia",
       asset_type: "eip155:11155111/slip44:60",
@@ -194,14 +208,24 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         can_cause_signing: true,
         mainnet_available: false,
         per_payment_limit_atomic: this.#config.paymentLimitWei.toString(),
-        lifetime_limit_atomic: this.#config.paymentLimitWei.toString(),
-        max_payments: 1,
+        lifetime_limit_atomic: this.#config.paymentLifetimeLimitWei.toString(),
+        max_payments: this.#config.maxPayments,
         default_lifetime_seconds: Math.floor(
           this.#config.delegationTtlMs / 1_000,
         ),
         requires_exact_verbal_confirmation: false,
         requires_user_confirmation:
           this.#config.security.effective["payment.execute"] === "confirm",
+        policy_editing: {
+          available: true,
+          requires_user_confirmation: true,
+          hard_max_per_payment_atomic:
+            MAX_POLICY_PAYMENT_LIMIT_WEI.toString(),
+          hard_max_lifetime_atomic:
+            MAX_POLICY_LIFETIME_LIMIT_WEI.toString(),
+          hard_max_payments: MAX_POLICY_PAYMENTS,
+          hard_max_lifetime_seconds: Math.floor(MAX_POLICY_TTL_MS / 1_000),
+        },
       },
       security: {
         default: this.#config.security.default,
@@ -211,9 +235,9 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
           chain_id: "eip155:11155111",
           mainnet_available: false,
           rpc_direct_fallback: false,
-          per_payment_limit_atomic: this.#config.paymentLimitWei.toString(),
-          lifetime_limit_atomic: this.#config.paymentLimitWei.toString(),
-          max_payments: 1,
+          per_payment_limit_atomic: MAX_POLICY_PAYMENT_LIMIT_WEI.toString(),
+          lifetime_limit_atomic: MAX_POLICY_LIFETIME_LIMIT_WEI.toString(),
+          max_payments: MAX_POLICY_PAYMENTS,
         },
       },
       privacy: {
@@ -402,6 +426,27 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     amountWei: string;
   }): Promise<PaymentPlan> {
     return this.#payments.plan(input);
+  }
+
+  walletPolicy() {
+    return this.#policy.get();
+  }
+
+  planPolicyUpdate(input: {
+    perPaymentLimitWei?: string;
+    lifetimeLimitWei?: string;
+    maxPayments?: number;
+    ttlMs?: number;
+    enabled?: boolean;
+  }): Promise<PolicyUpdatePlan> {
+    return this.#policy.plan(input);
+  }
+
+  applyPolicyUpdate(input: {
+    decisionId: string;
+    userConfirmed: boolean;
+  }): Promise<PolicyUpdateReceipt> {
+    return this.#policy.apply(input);
   }
 
   executePrivatePayment(input: {

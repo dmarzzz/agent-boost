@@ -62,6 +62,7 @@ The vault combination stays home. I’m printing Hermes a tiny permission slip i
 🧅 Adding layers to the wallet route…
 🌳 Leaving covered web asleep… shhh
 🙋 Payments will knock first.
+🔐 Default permission: 10 sends · up to 1 Sepolia ETH each.
 Like turning knobs? Say advanced setup ⚙️
 ```
 
@@ -189,7 +190,7 @@ describe it as deleting or retrying the prior payment.
    [View your agent’s loadout 🎒](<capability-receipt URL>)
 
    Ready to take Dark Mode for a spin? 🚀
-   You can say advanced setup anytime.
+   You can say advanced setup anytime to change send limits or expiry.
    ```
 5. Preserve the newest revision after every status result. Narrate only the four
    participant-facing states above; do not print raw phase names or wei unless

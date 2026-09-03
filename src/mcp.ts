@@ -9,7 +9,10 @@ import type {
   OnboardingRecord,
   PaymentPlan,
   PaymentRequest,
+  PolicyUpdatePlan,
+  PolicyUpdateReceipt,
   PublicOnboardingSnapshot,
+  WalletPolicySnapshot,
 } from "./contracts.js";
 import type { CoveredFetchResult } from "./shade-tree/index.js";
 import { buildSepoliaFundingUri } from "./ui/index.js";
@@ -28,6 +31,18 @@ export interface AgentBoostRuntime {
     waitMs?: number;
   }): Promise<OnboardingRecord>;
   walletContext(): Promise<Record<string, unknown>>;
+  walletPolicy(): Promise<WalletPolicySnapshot>;
+  planPolicyUpdate(input: {
+    perPaymentLimitWei?: string;
+    lifetimeLimitWei?: string;
+    maxPayments?: number;
+    ttlMs?: number;
+    enabled?: boolean;
+  }): Promise<PolicyUpdatePlan>;
+  applyPolicyUpdate(input: {
+    decisionId: string;
+    userConfirmed: boolean;
+  }): Promise<PolicyUpdateReceipt>;
   planPrivatePayment(input: {
     recipient: string;
     amountWei: string;
@@ -177,6 +192,25 @@ function compactToolText(structured: Record<string, unknown>): string {
     return `Live wallet read complete (${phase}). Quote exactly: Main account balance: ${amount} Sepolia ETH. Do not recalculate this amount from balance_atomic or reuse a prior balance. “Main” means the funding source; it has no control over subaccounts. Do not reveal the address or raw atomic value unless asked.`;
   }
 
+  if (code === "WALLET_POLICY") {
+    const policy = asRecord(data.policy);
+    return `Current private-payment permission: ${formatPolicyText(policy)}. This is permission only; the main account and private payment pocket remain separate.`;
+  }
+
+  if (code === "POLICY_UPDATE_PLANNED" || code === "POLICY_UPDATE_DENIED") {
+    const plan = asRecord(data.plan);
+    const proposed = asRecord(plan.proposed);
+    if (code === "POLICY_UPDATE_DENIED") {
+      return `Wallet policy change blocked: ${formatPolicyText(proposed)}. Explain the blocker in plain language and do not show internal IDs.`;
+    }
+    return `Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes; the agent must apply the structured decision after approval.`;
+  }
+
+  if (code === "POLICY_UPDATED") {
+    const receipt = asRecord(data.receipt);
+    return `Wallet policy updated: ${formatPolicyText(asRecord(receipt.policy))}. This did not move funds. Keep the user-facing receipt concise.`;
+  }
+
   if (code === "PAYMENT_PLANNED" || code === "PAYMENT_DENIED") {
     const plan = asRecord(data.plan);
     const recipient = stringField(plan, "recipient") ?? "unknown recipient";
@@ -322,6 +356,47 @@ function formatEthWei(wei: bigint): string {
     .padStart(18, "0")
     .replace(/0+$/u, "");
   return fractional ? `${whole.toString()}.${fractional}` : whole.toString();
+}
+
+function parseEthToWei(amount: string): string {
+  if (!/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/u.test(amount)) {
+    throw new Error(
+      "Native-token amounts must be ordinary positive decimals with at most 18 places",
+    );
+  }
+  const [whole, fraction = ""] = amount.split(".");
+  const wei = BigInt(whole ?? "0") * 1_000_000_000_000_000_000n +
+    BigInt(fraction.padEnd(18, "0") || "0");
+  if (wei <= 0n) throw new Error("Native-token amounts must be greater than zero");
+  return wei.toString();
+}
+
+function formatPolicyText(policy: Record<string, unknown>): string {
+  const perPayment = stringField(policy, "perPaymentLimitWei");
+  const lifetime = stringField(policy, "lifetimeLimitWei");
+  const maximum = typeof policy.maxPayments === "number"
+    ? policy.maxPayments
+    : "unknown";
+  const used = typeof policy.paymentsUsed === "number" ? policy.paymentsUsed : 0;
+  const remaining = typeof policy.paymentsRemaining === "number"
+    ? policy.paymentsRemaining
+    : "unknown";
+  const spent = stringField(policy, "spentWei");
+  const expiresAt = stringField(policy, "expiresAt");
+  const status = policy.enabled === false ? "disabled" : "enabled";
+  return `${status}; up to ${String(maximum)} payments, ${perPayment ? formatEthWei(BigInt(perPayment)) : "unknown"} Sepolia ETH each, ${lifetime ? formatEthWei(BigInt(lifetime)) : "unknown"} Sepolia ETH total; ${used} used, ${String(remaining)} remaining; ${spent ? formatEthWei(BigInt(spent)) : "unknown"} Sepolia ETH spent; ${expiresAt ? formatPolicyExpiry(expiresAt) : "expiry unknown"}`;
+}
+
+function formatPolicyExpiry(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "expiry unavailable";
+  const months = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  ];
+  const hour = date.getUTCHours().toString().padStart(2, "0");
+  const minute = date.getUTCMinutes().toString().padStart(2, "0");
+  return `expires ${months[date.getUTCMonth()]} ${date.getUTCDate()}, ${date.getUTCFullYear()} at ${hour}:${minute} UTC`;
 }
 
 function fundingDetails(
@@ -593,6 +668,118 @@ export async function createMcpServer(
             { mode: "wait", safeWithSameArguments: false, afterMs: 2_000 },
           ),
           started.qrPngBase64,
+        );
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_get_policy",
+    {
+      title: "Read the wallet permission",
+      description:
+        "Read the current private-payment policy without exposing an address or balance. Use this whenever the user asks what Hermes may send, how many sends remain, whether the permission is enabled, or when it expires. The agent translates the result into ordinary native-token units; never ask the user for atomic units or configuration files.",
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      try {
+        const policy = await runtime.walletPolicy();
+        return result(envelope(digest, "ready", "WALLET_POLICY", { policy }));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_plan_policy_update",
+    {
+      title: "Preview a wallet permission change",
+      description:
+        "The agent calls this after the user asks to change the private-payment policy. Inputs use ordinary native-token decimals, never wei. Any subset may change. If max_payments or per_payment_limit_native changes and lifetime_limit_native is omitted, the total becomes their product. Expired permissions renew for the default seven days unless a duration is supplied. Planning changes nothing. Show one plain-English permission card and request ordinary confirmation. Explain that policy changes do not move funds between the main account and private payment pocket.",
+      inputSchema: z.object({
+        max_payments: z.number().int().positive().max(100).optional(),
+        per_payment_limit_native: z.string().regex(
+          /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/,
+        ).optional(),
+        lifetime_limit_native: z.string().regex(
+          /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/,
+        ).optional(),
+        expires_in_hours: z.number().int().positive().max(720).optional(),
+        enabled: z.boolean().optional(),
+      }).refine(
+        (value) => Object.values(value).some((entry) => entry !== undefined),
+        { message: "At least one wallet policy setting must change" },
+      ),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({
+      max_payments,
+      per_payment_limit_native,
+      lifetime_limit_native,
+      expires_in_hours,
+      enabled,
+    }) => {
+      try {
+        const plan = await runtime.planPolicyUpdate({
+          ...(max_payments === undefined ? {} : { maxPayments: max_payments }),
+          ...(per_payment_limit_native === undefined
+            ? {}
+            : { perPaymentLimitWei: parseEthToWei(per_payment_limit_native) }),
+          ...(lifetime_limit_native === undefined
+            ? {}
+            : { lifetimeLimitWei: parseEthToWei(lifetime_limit_native) }),
+          ...(expires_in_hours === undefined
+            ? {}
+            : { ttlMs: expires_in_hours * 60 * 60_000 }),
+          ...(enabled === undefined ? {} : { enabled }),
+        });
+        return result(
+          envelope(
+            digest,
+            plan.decision === "allow" ? "ready" : "blocked",
+            plan.decision === "allow"
+              ? "POLICY_UPDATE_PLANNED"
+              : "POLICY_UPDATE_DENIED",
+            { plan },
+            plan.decision === "allow"
+              ? { mode: "never", safeWithSameArguments: false }
+              : { mode: "refresh_plan", safeWithSameArguments: true },
+          ),
+        );
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_apply_policy_update",
+    {
+      title: "Apply an approved wallet permission change",
+      description:
+        "The agent—not the user—calls this only after showing the exact permission card from wallet_plan_policy_update and receiving ordinary confirmation such as yes or ✅. This changes local delegated authority but never sends funds, moves funds, changes networks, enables mainnet, or exposes keys. Never ask the user for tool syntax, an ID, or a boolean.",
+      inputSchema: z.object({
+        decision_id: z.string().startsWith("wpd_"),
+        user_confirmed: z.boolean(),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ decision_id, user_confirmed }) => {
+      try {
+        const receipt = await runtime.applyPolicyUpdate({
+          decisionId: decision_id,
+          userConfirmed: user_confirmed,
+        });
+        return result(
+          envelope(digest, "confirmed", "POLICY_UPDATED", { receipt }),
         );
       } catch (error) {
         return domainError(digest, error);

@@ -1,6 +1,6 @@
 # Tools
 
-Agent Boost is an MCP server. Hermes calls the eleven tools below over stdio.
+Agent Boost is an MCP server. Hermes calls the fourteen tools below over stdio.
 Every result is a structured envelope carrying an outcome (`ready`, `blocked`,
 `awaiting_funding`, `executing`, `submitted`, `confirmed`, `failed`, or
 `indeterminate`), retry advice, and public facts only. No result is a bearer
@@ -17,19 +17,23 @@ How a payment works, in the order the tools are called:
 2. `onboarding_status` long-polls the durable setup by revision through
    `creating_wallet`, `preparing_privacy`, `awaiting_funding`,
    `funding_pending`, `funded_public`, `shielding`, and `private_ready`.
-3. `wallet_get_context` refreshes the address, funding balance, aggregate
-   public ETH, private spendable ETH, delegation limit and expiry, and the live
-   Tor route status.
-4. `wallet_plan_private_payment` validates one recipient and one exact amount
-   (a canonical wei string) against readiness, delegation, the one-payment
-   rule, and balance, then returns a five-minute immutable plan with a SHA-256
+3. `wallet_get_context` refreshes the main account address and its exact
+   on-chain balance, delegation state, and live Tor route status.
+4. `wallet_get_policy`, `wallet_plan_policy_update`, and
+   `wallet_apply_policy_update` let the user inspect and change send count,
+   per-send amount, total amount, expiry, and enabled state in conversation.
+   Every update is immutable, five-minute, separately confirmed, bounded, and
+   idempotent. It changes authority only; it never moves funds.
+5. `wallet_plan_private_payment` validates one recipient and one exact amount
+   (a canonical wei string) against readiness, the active count and amount
+   limits, and balance, then returns a five-minute immutable plan with a SHA-256
    digest over chain, recipient, asset, amount, and operation. Plans never
    sign, submit, or reserve funds.
-5. `wallet_execute_private_payment` takes the decision ID and the user's
-   confirmation, atomically consumes the one-payment delegation, and only then
+6. `wallet_execute_private_payment` takes the decision ID and the user's
+   confirmation, atomically consumes one send and its amount allowance, then
    calls Kohaku. Recipient and amount come from the plan, never from the call.
    An uncertain outcome never restores authority for an automatic retry.
-6. `wallet_get_request` reads the durable, redacted result and reconciles a
+7. `wallet_get_request` reads the durable, redacted result and reconciles a
    non-terminal request from a real receipt or the recipient-balance checkpoint.
    Reconciliation never rebroadcasts.
 
@@ -41,7 +45,10 @@ public archive ID and a new QR, never a path or a secret.
 | --- | --- | --- |
 | `onboarding_start` | none | setup ID, phase, funding address, QR |
 | `onboarding_status` | `setup_id`, `since_revision`, `wait_ms` | latest durable state, or waits for a newer revision |
-| `wallet_get_context` | none | address, balances, delegation, route status |
+| `wallet_get_context` | none | main address and live balance, delegation, route status |
+| `wallet_get_policy` | none | active send count, amount limits, use, expiry, enabled state |
+| `wallet_plan_policy_update` | any of `max_payments`, `per_payment_limit_native`, `lifetime_limit_native`, `expires_in_hours`, `enabled` | `wpd_` preview with current and proposed policies |
+| `wallet_apply_policy_update` | `decision_id`, `user_confirmed` | idempotent policy-update receipt |
 | `wallet_plan_private_payment` | `recipient`, `amount_atomic` | `wd_` decision, digest, expiry, whether confirmation is required |
 | `wallet_execute_private_payment` | `decision_id`, `user_confirmed` | `req_` request in `executing` or later |
 | `wallet_get_request` | `request_id` | one redacted request state |
@@ -65,7 +72,7 @@ all other Hermes traffic keep their own routes. Content comes back marked
 
 ## Contract
 
-`capabilities` takes no input and returns `org.agentboost.wallet/1.3`: chain and
+`capabilities` takes no input and returns `org.agentboost.wallet/1.4`: chain and
 asset IDs, funding target, amount caps, the effective execution policy, live
 readiness, and `guarantees_anonymity: false`. It grants nothing. The same
 document is available as the resource `agent-boost://capabilities/wallet/v1`.
@@ -76,7 +83,7 @@ document is available as the resource `agent-boost://capabilities/wallet/v1`.
 | --- | --- |
 | Sepolia address and chain ID | Seed phrase and private keys |
 | Live funding-address balance | Kohaku wallet password |
-| Live aggregate public-wallet ETH | Raw Tornado notes and proofs |
-| Live private-payment spendable ETH | Raw signed transactions |
-| Delegation limits, expiry, and use | RPC URL and local filesystem paths |
-| Plan, request, and confirmation state | Arbitrary Kohaku command execution |
+| Active delegation limits, expiry, and use | Raw Tornado notes and proofs |
+| Policy previews and update receipts | Raw signed transactions |
+| Payment plan, request, and confirmation state | RPC URL and local filesystem paths |
+| Public transaction references | Arbitrary Kohaku command execution |

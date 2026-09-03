@@ -3,8 +3,14 @@ import { resolve } from "node:path";
 
 import {
   DEFAULT_FUNDING_WEI,
+  DEFAULT_LIFETIME_LIMIT_WEI,
+  DEFAULT_MAX_PAYMENTS,
   DEFAULT_PAYMENT_LIMIT_WEI,
   DEFAULT_SHIELD_WEI,
+  MAX_POLICY_LIFETIME_LIMIT_WEI,
+  MAX_POLICY_PAYMENT_LIMIT_WEI,
+  MAX_POLICY_PAYMENTS,
+  MAX_POLICY_TTL_MS,
   type PaymentApproval,
 } from "./contracts.js";
 import { AGENT_BOOST_RUNTIME_LOCK_PORT } from "./state/runtime-lock.js";
@@ -25,6 +31,8 @@ export interface AgentBoostConfig {
   fundingTargetWei: bigint;
   shieldAmountWei: bigint;
   paymentLimitWei: bigint;
+  paymentLifetimeLimitWei: bigint;
+  maxPayments: number;
   delegationTtlMs: number;
   autoOpenUi: boolean;
   autoShield: boolean;
@@ -176,6 +184,46 @@ export function loadConfig(
     );
   }
 
+  const paymentLimitWei = unsignedBigIntEnv(
+    env.AGENT_BOOST_PAYMENT_LIMIT_WEI,
+    DEFAULT_PAYMENT_LIMIT_WEI,
+    "AGENT_BOOST_PAYMENT_LIMIT_WEI",
+  );
+  const maxPayments = positiveIntegerEnv(
+    env.AGENT_BOOST_MAX_PAYMENTS,
+    DEFAULT_MAX_PAYMENTS,
+    "AGENT_BOOST_MAX_PAYMENTS",
+  );
+  const paymentLifetimeLimitWei = unsignedBigIntEnv(
+    env.AGENT_BOOST_LIFETIME_LIMIT_WEI,
+    env.AGENT_BOOST_PAYMENT_LIMIT_WEI === undefined &&
+        env.AGENT_BOOST_MAX_PAYMENTS === undefined
+      ? DEFAULT_LIFETIME_LIMIT_WEI
+      : paymentLimitWei * BigInt(maxPayments),
+    "AGENT_BOOST_LIFETIME_LIMIT_WEI",
+  );
+  const delegationTtlMs = positiveIntegerEnv(
+    env.AGENT_BOOST_DELEGATION_TTL_MS,
+    7 * 24 * 60 * 60_000,
+    "AGENT_BOOST_DELEGATION_TTL_MS",
+  );
+  if (paymentLimitWei <= 0n || paymentLimitWei > MAX_POLICY_PAYMENT_LIMIT_WEI) {
+    throw new Error("AGENT_BOOST_PAYMENT_LIMIT_WEI exceeds the adjustable testnet bounds");
+  }
+  if (maxPayments > MAX_POLICY_PAYMENTS) {
+    throw new Error("AGENT_BOOST_MAX_PAYMENTS exceeds the adjustable testnet bounds");
+  }
+  if (
+    paymentLifetimeLimitWei <= 0n ||
+    paymentLifetimeLimitWei > MAX_POLICY_LIFETIME_LIMIT_WEI ||
+    paymentLifetimeLimitWei > paymentLimitWei * BigInt(maxPayments)
+  ) {
+    throw new Error("AGENT_BOOST_LIFETIME_LIMIT_WEI exceeds the configured payment envelope");
+  }
+  if (delegationTtlMs > MAX_POLICY_TTL_MS) {
+    throw new Error("AGENT_BOOST_DELEGATION_TTL_MS exceeds the adjustable testnet bounds");
+  }
+
   return {
     stateDir,
     torDataDir: resolve(
@@ -210,16 +258,10 @@ export function loadConfig(
       DEFAULT_SHIELD_WEI,
       "AGENT_BOOST_SHIELD_WEI",
     ),
-    paymentLimitWei: unsignedBigIntEnv(
-      env.AGENT_BOOST_PAYMENT_LIMIT_WEI,
-      DEFAULT_PAYMENT_LIMIT_WEI,
-      "AGENT_BOOST_PAYMENT_LIMIT_WEI",
-    ),
-    delegationTtlMs: positiveIntegerEnv(
-      env.AGENT_BOOST_DELEGATION_TTL_MS,
-      7 * 24 * 60 * 60_000,
-      "AGENT_BOOST_DELEGATION_TTL_MS",
-    ),
+    paymentLimitWei,
+    paymentLifetimeLimitWei,
+    maxPayments,
+    delegationTtlMs,
     autoOpenUi: booleanEnv(env.AGENT_BOOST_OPEN_UI, false),
     autoShield: booleanEnv(env.AGENT_BOOST_AUTO_SHIELD, true),
     executeEnabled: booleanEnv(env.AGENT_BOOST_EXECUTE, true),

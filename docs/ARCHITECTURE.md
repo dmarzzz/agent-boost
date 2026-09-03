@@ -86,6 +86,8 @@ diagnosis rather than an automatic retry.
 ```text
 wallet_get_context
   → live main account address + its on-chain balance
+  → wallet_get_policy / wallet_plan_policy_update
+  → separate confirmation → wallet_apply_policy_update
   → wallet_plan_private_payment(recipient, amount)
   → verbal confirmation of immutable plan
   → wallet_execute_private_payment(decision_id, stable client ID)
@@ -98,13 +100,18 @@ wallet_get_context
 The plan checks balance and policy but creates no side effect. Immediately
 before signing, execution asserts Sepolia again, refreshes the spendable
 private balance, and rechecks the kill switch, delegation chain, expiry,
-per-payment limit, lifetime limit, and one-payment rule. It then writes an
-`executing` request and consumes the allowance before invoking Kohaku. This
-The recipient's pre-execution balance is stored in that same durable request
+per-payment limit, lifetime limit, and remaining payment count. It then writes an
+`executing` request and consumes the allowance before invoking Kohaku. The
+recipient's pre-execution balance is stored in that same durable request
 before the adapter call. This prevents a crash or error from making a possibly
 submitted payment look safely repeatable and makes later read-only
 reconciliation possible. UserOperation and transaction hashes are separate
 fields; only a true transaction hash is queried as a transaction receipt.
+
+Policy updates use the same plan/confirm/apply shape without touching the
+network. A policy preview binds current use and proposed limits. Apply fails
+closed if a payment or another policy update races it, while a repeated apply
+of the same successful decision returns the original receipt.
 
 Kohaku's Tornado path withdraws the configured `0.1` ETH note to the next fresh
 EIP-7702 payment subaccount. The recipient payment is an exact tail call;

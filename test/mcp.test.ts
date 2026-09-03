@@ -30,6 +30,7 @@ function fakeRuntime(): AgentBoostRuntime {
       perPaymentLimitWei: "100000000000000000",
       lifetimeLimitWei: "100000000000000000",
       spentWei: "0",
+      maxPayments: 10,
       expiresAt: new Date(86_400_000).toISOString(),
       enabled: true,
     },
@@ -59,6 +60,58 @@ function fakeRuntime(): AgentBoostRuntime {
         setup_phase: "private_ready",
         address: setup.address,
         balance_atomic: "1500000000000000000",
+      };
+    },
+    async walletPolicy() {
+      return {
+        ...setup.delegation,
+        paymentsUsed: 0,
+        paymentsRemaining: 10,
+      };
+    },
+    async planPolicyUpdate(input) {
+      const current = {
+        ...setup.delegation,
+        paymentsUsed: 0,
+        paymentsRemaining: 10,
+      };
+      const proposed = {
+        ...current,
+        perPaymentLimitWei:
+          input.perPaymentLimitWei ?? current.perPaymentLimitWei,
+        lifetimeLimitWei:
+          input.lifetimeLimitWei ?? "10000000000000000000",
+        maxPayments: input.maxPayments ?? current.maxPayments,
+        paymentsRemaining: input.maxPayments ?? current.maxPayments,
+        enabled: input.enabled ?? current.enabled,
+      };
+      return {
+        version: 1,
+        decisionId: "wpd_12345678",
+        createdAt: new Date(0).toISOString(),
+        expiresAt: new Date(300_000).toISOString(),
+        current,
+        proposed,
+        decision: "allow",
+        blockers: [],
+        approval: { action: "confirm", userConfirmationRequired: true },
+      };
+    },
+    async applyPolicyUpdate(input) {
+      assert.equal(input.decisionId, "wpd_12345678");
+      assert.equal(input.userConfirmed, true);
+      return {
+        version: 1,
+        decisionId: input.decisionId,
+        appliedAt: new Date(1_000).toISOString(),
+        policy: {
+          ...setup.delegation,
+          perPaymentLimitWei: "1000000000000000000",
+          lifetimeLimitWei: "10000000000000000000",
+          maxPayments: 10,
+          paymentsUsed: 0,
+          paymentsRemaining: 10,
+        },
       };
     },
     async planPrivatePayment(input) {
@@ -154,9 +207,12 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
       "egress_status",
       "onboarding_start",
       "onboarding_status",
+      "wallet_apply_policy_update",
       "wallet_execute_private_payment",
       "wallet_get_context",
+      "wallet_get_policy",
       "wallet_get_request",
+      "wallet_plan_policy_update",
       "wallet_plan_private_payment",
       "wallet_start_new_demo",
     ],
@@ -279,6 +335,40 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   assert.doesNotMatch(
     walletText?.type === "text" ? walletText.text : "",
     /funding address|public \+|private balance|spendable total/u,
+  );
+
+  const policy = await client.callTool({ name: "wallet_get_policy", arguments: {} });
+  const policyText = policy.content.find((block) => block.type === "text");
+  assert.match(
+    policyText?.type === "text" ? policyText.text : "",
+    /up to 10 payments, 0\.1 Sepolia ETH each/u,
+  );
+  assert.doesNotMatch(JSON.stringify(policy), new RegExp(WALLET_ADDRESS, "u"));
+
+  const policyPlan = await client.callTool({
+    name: "wallet_plan_policy_update",
+    arguments: {
+      max_payments: 10,
+      per_payment_limit_native: "1",
+    },
+  });
+  const plannedPolicy = (policyPlan.structuredContent as {
+    data: { plan: { proposed: { perPaymentLimitWei: string } } };
+  }).data.plan.proposed;
+  assert.equal(plannedPolicy.perPaymentLimitWei, "1000000000000000000");
+  const policyPlanText = policyPlan.content.find((block) => block.type === "text");
+  assert.match(
+    policyPlanText?.type === "text" ? policyPlanText.text : "",
+    /permission only(?:—|-)it does not move funds/u,
+  );
+
+  const policyApplied = await client.callTool({
+    name: "wallet_apply_policy_update",
+    arguments: { decision_id: "wpd_12345678", user_confirmed: true },
+  });
+  assert.equal(
+    (policyApplied.structuredContent as { code: string }).code,
+    "POLICY_UPDATED",
   );
 
   const plan = await client.callTool({

@@ -110,7 +110,7 @@ test("private payment is bounded, confirmation-gated, and idempotent", async () 
     amountWei: "10000000000000000",
   });
   assert.equal(laterPlan.decision, "deny");
-  assert.ok(laterPlan.blockers.includes("DELEGATION_ALREADY_USED"));
+  assert.ok(laterPlan.blockers.includes("PAYMENT_COUNT_LIMIT"));
   assert.ok(laterPlan.blockers.includes("INSUFFICIENT_PRIVATE_BALANCE"));
 });
 
@@ -165,6 +165,47 @@ test("private payment planning denies an amount above the delegated limit", asyn
   });
   assert.equal(plan.decision, "deny");
   assert.ok(plan.blockers.includes("PER_PAYMENT_LIMIT"));
+});
+
+test("a configurable delegation permits multiple bounded payments", async () => {
+  const store = await readyStore();
+  await store.update((draft) => {
+    if (!draft.onboarding) return;
+    draft.onboarding.delegation.maxPayments = 2;
+    draft.onboarding.delegation.lifetimeLimitWei = "40000000000000000";
+  });
+  const wallet = new PaymentWallet();
+  wallet.privateBalance = 40_000_000_000_000_000n;
+  wallet.executePrivatePayment = async ({ amountWei }) => {
+    wallet.calls += 1;
+    wallet.privateBalance -= amountWei;
+    return { transactionHash: `0x${wallet.calls.toString().padStart(64, "0")}`, confirmed: true };
+  };
+  const controller = new PaymentController({
+    store,
+    wallet,
+    clock: { now: () => new Date(1_000) },
+  });
+
+  for (const [index, recipient] of [
+    "0x2222222222222222222222222222222222222222",
+    "0x3333333333333333333333333333333333333333",
+  ].entries()) {
+    const plan = await controller.plan({ recipient, amountWei: "20000000000000000" });
+    assert.equal(plan.decision, "allow");
+    const request = await controller.execute({
+      decisionId: plan.decisionId,
+      clientRequestId: `multi-payment-${index}`,
+      userConfirmed: true,
+    });
+    assert.equal(request.phase, "confirmed");
+  }
+  const third = await controller.plan({
+    recipient: "0x4444444444444444444444444444444444444444",
+    amountWei: "1",
+  });
+  assert.equal(third.decision, "deny");
+  assert.ok(third.blockers.includes("PAYMENT_COUNT_LIMIT"));
 });
 
 test("private payment confirms delivery from the recipient balance delta", async () => {
@@ -332,7 +373,7 @@ test("a reverted receipt becomes failed without restoring payment authority", as
     recipient: "0x3333333333333333333333333333333333333333",
     amountWei: "10000000000000000",
   });
-  assert.ok(laterPlan.blockers.includes("DELEGATION_ALREADY_USED"));
+  assert.ok(laterPlan.blockers.includes("PAYMENT_COUNT_LIMIT"));
 });
 
 test("restart marks an interrupted payment indeterminate without restoring authority", async () => {
@@ -366,7 +407,7 @@ test("restart marks an interrupted payment indeterminate without restoring autho
     amountWei: "10000000000000000",
   });
   assert.equal(plan.decision, "deny");
-  assert.ok(plan.blockers.includes("DELEGATION_ALREADY_USED"));
+  assert.ok(plan.blockers.includes("PAYMENT_COUNT_LIMIT"));
 });
 
 test("an adapter error after authority handoff remains indeterminate", async () => {

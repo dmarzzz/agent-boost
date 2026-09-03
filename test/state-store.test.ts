@@ -66,6 +66,7 @@ test("StateStore archives a complete demo before starting fresh state", async ()
     version: 1,
     wallet: { activeName: "agent-boost-new" },
     plans: {},
+    policyPlans: {},
     requests: {},
   });
   const archivePath = join(root, "archives", reset.archiveId, "state.json");
@@ -75,4 +76,42 @@ test("StateStore archives a complete demo before starting fresh state", async ()
   assert.equal(archived.requests.req_unresolved?.phase, "indeterminate");
   assert.equal((await stat(archivePath)).mode & 0o777, 0o600);
   assert.equal((await stat(join(root, "archives", reset.archiveId))).mode & 0o777, 0o700);
+});
+
+test("StateStore conservatively migrates pre-policy-editor wallets", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-boost-state-legacy-"));
+  const store = new StateStore(root);
+  await store.initialize();
+  await store.update((draft) => {
+    draft.onboarding = {
+      version: 1,
+      setupId: "setup-legacy",
+      revision: 1,
+      phase: "private_ready",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      publicBalanceWei: "0",
+      privateBalanceWei: "0",
+      requiredFundingWei: "1",
+      shieldAmountWei: "1",
+      delegation: {
+        mode: "testnet_delegated",
+        chainId: 11_155_111,
+        perPaymentLimitWei: "50000000000000000",
+        lifetimeLimitWei: "50000000000000000",
+        spentWei: "0",
+        maxPayments: 1,
+        expiresAt: new Date(86_400_000).toISOString(),
+        enabled: true,
+      },
+    };
+    delete (draft.onboarding.delegation as Partial<
+      typeof draft.onboarding.delegation
+    >).maxPayments;
+    delete (draft as Partial<typeof draft>).policyPlans;
+  });
+
+  const migrated = await store.read();
+  assert.equal(migrated.onboarding?.delegation.maxPayments, 1);
+  assert.deepEqual(migrated.policyPlans, {});
 });

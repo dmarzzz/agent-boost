@@ -20,7 +20,7 @@
     "demo_reset"
   ],
   "properties": {
-    "contract": {"const": "org.agentboost.wallet/1.3"},
+    "contract": {"const": "org.agentboost.wallet/1.4"},
     "chain_id": {"const": "eip155:11155111"},
     "network_name": {"const": "Sepolia"},
     "asset_type": {"const": "eip155:11155111/slip44:60"},
@@ -43,7 +43,8 @@
         "max_payments",
         "default_lifetime_seconds",
         "requires_exact_verbal_confirmation",
-        "requires_user_confirmation"
+        "requires_user_confirmation",
+        "policy_editing"
       ],
       "properties": {
         "mode": {"const": "testnet_delegated"},
@@ -51,10 +52,30 @@
         "mainnet_available": {"const": false},
         "per_payment_limit_atomic": {"$ref": "#/$defs/atomic"},
         "lifetime_limit_atomic": {"$ref": "#/$defs/atomic"},
-        "max_payments": {"const": 1},
+        "max_payments": {"type": "integer", "minimum": 1, "maximum": 100},
         "default_lifetime_seconds": {"type": "integer", "minimum": 1},
         "requires_exact_verbal_confirmation": {"const": false},
-        "requires_user_confirmation": {"type": "boolean"}
+        "requires_user_confirmation": {"type": "boolean"},
+        "policy_editing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "available",
+            "requires_user_confirmation",
+            "hard_max_per_payment_atomic",
+            "hard_max_lifetime_atomic",
+            "hard_max_payments",
+            "hard_max_lifetime_seconds"
+          ],
+          "properties": {
+            "available": {"const": true},
+            "requires_user_confirmation": {"const": true},
+            "hard_max_per_payment_atomic": {"$ref": "#/$defs/atomic"},
+            "hard_max_lifetime_atomic": {"$ref": "#/$defs/atomic"},
+            "hard_max_payments": {"const": 100},
+            "hard_max_lifetime_seconds": {"const": 2592000}
+          }
+        }
       }
     },
     "security": {
@@ -88,7 +109,7 @@
             "rpc_direct_fallback": {"const": false},
             "per_payment_limit_atomic": {"$ref": "#/$defs/atomic"},
             "lifetime_limit_atomic": {"$ref": "#/$defs/atomic"},
-            "max_payments": {"const": 1}
+            "max_payments": {"const": 100}
           }
         }
       }

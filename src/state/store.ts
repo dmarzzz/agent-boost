@@ -7,6 +7,7 @@ import type {
   OnboardingRecord,
   PaymentPlan,
   PaymentRequest,
+  PolicyUpdatePlan,
 } from "../contracts.js";
 
 export interface StateDocument {
@@ -16,14 +17,26 @@ export interface StateDocument {
   };
   onboarding?: OnboardingRecord;
   plans: Record<string, PaymentPlan>;
+  policyPlans: Record<string, PolicyUpdatePlan>;
   requests: Record<string, PaymentRequest>;
 }
 
 const EMPTY_STATE: StateDocument = {
   version: 1,
   plans: {},
+  policyPlans: {},
   requests: {},
 };
+
+function normalizeState(parsed: StateDocument): StateDocument {
+  parsed.policyPlans ??= {};
+  if (parsed.onboarding && parsed.onboarding.delegation.maxPayments === undefined) {
+    // Existing installations authorized one payment. Never silently widen an
+    // already-issued permission when introducing configurable policies.
+    parsed.onboarding.delegation.maxPayments = 1;
+  }
+  return parsed;
+}
 
 function cloneState(state: StateDocument): StateDocument {
   return structuredClone(state);
@@ -62,7 +75,7 @@ export class StateStore {
     if (parsed.version !== 1 || !parsed.plans || !parsed.requests) {
       throw new Error("Unsupported or corrupt Agent Boost state document");
     }
-    return parsed;
+    return normalizeState(parsed);
   }
 
   async update(
@@ -103,6 +116,7 @@ export class StateStore {
         version: 1,
         wallet: { activeName: newWalletName },
         plans: {},
+        policyPlans: {},
         requests: {},
       };
       await this.#write(current);

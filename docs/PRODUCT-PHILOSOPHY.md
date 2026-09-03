@@ -58,6 +58,28 @@ Advanced controls can exist, but they must not leak into the sane default. The
 default experience should feel obvious: one clear next step, no ceremony, and
 no requirement to understand the machinery underneath it.
 
+Sane defaults must also be reversible. If the product exposes a permission, the
+user must be able to inspect and change it in the same conversational language
+that created it. “Ask an operator” is not an advanced mode; it is a broken
+control surface. Permission changes receive their own exact preview and
+confirmation, while network, real-value, and privacy boundaries remain in code.
+
+### Permission is not liquidity
+
+A spending ceiling, an account balance, and a transfer route are three different
+facts. Raising a ceiling does not move funds. Seeing funds in a main account does
+not make them spendable through a private subaccount. Supporting a private route
+does not imply a public route exists.
+
+The product names these separately, checks them separately, and explains the
+first unmet constraint without suggesting that changing an unrelated setting
+will solve it.
+
+Cross-chain defaults are semantic, not copied base units. The intended sane
+default is 10 sends of up to one chain-native token each: 1 ETH for an Ethereum
+wallet and, when Zcash execution ships, 1 ZEC for a Zcash wallet. Each adapter
+must own exact conversion and validation for its asset.
+
 ### Privacy is the default presentation
 
 Public-on-chain does not mean "display everywhere." A wallet address may be
@@ -111,6 +133,10 @@ Before merging a user-facing capability, ask:
 - What is the smallest result the model needs to see?
 - Can a private identifier be omitted from the default UI and reply?
 - Is an uncertain side effect represented as uncertain?
+- Can the user inspect and reverse every product-created permission without an
+  operator or config file?
+- Are permission, available funds, and transfer route presented as separate
+  concepts?
 - Does a retry remain safe?
 - Has this been exercised with the weakest supported model and the full tool
   catalog?

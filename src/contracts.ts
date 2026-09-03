@@ -2,7 +2,15 @@ export const SEPOLIA_CHAIN_ID = 11_155_111;
 export const SEPOLIA_CAIP2 = "eip155:11155111";
 export const DEFAULT_FUNDING_WEI = 200_000_000_000_000_000n;
 export const DEFAULT_SHIELD_WEI = 100_000_000_000_000_000n;
-export const DEFAULT_PAYMENT_LIMIT_WEI = 50_000_000_000_000_000n;
+export const DEFAULT_PAYMENT_LIMIT_WEI = 1_000_000_000_000_000_000n;
+export const DEFAULT_MAX_PAYMENTS = 10;
+export const DEFAULT_LIFETIME_LIMIT_WEI =
+  DEFAULT_PAYMENT_LIMIT_WEI * BigInt(DEFAULT_MAX_PAYMENTS);
+export const MAX_POLICY_PAYMENT_LIMIT_WEI = 100_000_000_000_000_000_000n;
+export const MAX_POLICY_PAYMENTS = 100;
+export const MAX_POLICY_LIFETIME_LIMIT_WEI =
+  MAX_POLICY_PAYMENT_LIMIT_WEI * BigInt(MAX_POLICY_PAYMENTS);
+export const MAX_POLICY_TTL_MS = 30 * 24 * 60 * 60_000;
 
 export type PaymentApproval = "allow" | "confirm" | "deny";
 
@@ -31,8 +39,37 @@ export interface DelegationPolicy {
   perPaymentLimitWei: string;
   lifetimeLimitWei: string;
   spentWei: string;
+  maxPayments: number;
   expiresAt: string;
   enabled: boolean;
+}
+
+export interface WalletPolicySnapshot extends DelegationPolicy {
+  paymentsUsed: number;
+  paymentsRemaining: number;
+}
+
+export interface PolicyUpdatePlan {
+  version: 1;
+  decisionId: string;
+  createdAt: string;
+  expiresAt: string;
+  current: WalletPolicySnapshot;
+  proposed: WalletPolicySnapshot;
+  decision: "allow" | "deny";
+  blockers: string[];
+  approval: {
+    action: "confirm";
+    userConfirmationRequired: true;
+  };
+  appliedAt?: string;
+}
+
+export interface PolicyUpdateReceipt {
+  version: 1;
+  decisionId: string;
+  appliedAt: string;
+  policy: WalletPolicySnapshot;
 }
 
 export interface OnboardingRecord {

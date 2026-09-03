@@ -11,6 +11,8 @@ import type {
   PaymentPhase,
   PaymentPlan,
   PaymentRequest,
+  PolicyUpdatePlan,
+  PolicyUpdateReceipt,
 } from "../src/contracts.js";
 import type { AgentBoostRuntime } from "../src/mcp.js";
 import { createMcpServer } from "../src/mcp.js";
@@ -21,6 +23,7 @@ type Scenario =
   | "payment-indeterminate"
   | "payment-denied"
   | "payment-allowed"
+  | "policy-update"
   | "egress-ready"
   | "egress-needs-enrollment";
 
@@ -94,6 +97,10 @@ const expectedToolTraces: Record<string, string[]> = {
     "wallet_plan_private_payment",
     "wallet_execute_private_payment",
   ],
+  "policy-update-with-confirmation": [
+    "wallet_plan_policy_update",
+    "wallet_apply_policy_update",
+  ],
   "covered-public-read": ["egress_status", "egress_fetch"],
   "covered-read-needs-enrollment": ["egress_status"],
 };
@@ -102,9 +109,9 @@ const forbiddenVisiblePatterns = [
   /\bmcp\b/iu,
   /\bwei\b/iu,
   /\b(?:decision_id|request_id|client_request_id|user_confirmed|amount_atomic|manifest_digest|setupId)\b/iu,
-  /\b(?:wallet_get_context|wallet_start_new_demo|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|egress_status|egress_fetch)\b/iu,
+  /\b(?:wallet_get_context|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_start_new_demo|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|egress_status|egress_fetch)\b/iu,
   /\b(?:private key|seed phrase|wallet password)\b/iu,
-  /\b(?:wd_|req_|sha256:)[A-Za-z0-9._:-]*/u,
+  /\b(?:wd_|wpd_|req_|sha256:)[A-Za-z0-9._:-]*/u,
 ];
 
 function approvalFor(scenario: Scenario): PaymentApproval {
@@ -134,6 +141,7 @@ function onboardingRecord(phase: OnboardingRecord["phase"]): OnboardingRecord {
       perPaymentLimitWei: "50000000000000000",
       lifetimeLimitWei: "50000000000000000",
       spentWei: "0",
+      maxPayments: 1,
       expiresAt: "2026-09-02T00:00:00.000Z",
       enabled: true,
     },
@@ -196,7 +204,7 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
   return {
     async capabilities() {
       return {
-        contract: "org.agentboost.wallet/1.3",
+        contract: "org.agentboost.wallet/1.4",
         chain_id: "eip155:11155111",
         security: {
           default: {
@@ -236,6 +244,56 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
         balance_atomic: "100000000000000000",
         delegation: ready.delegation,
         security: { payment_execute: approval },
+      };
+    },
+    async walletPolicy() {
+      return {
+        ...ready.delegation,
+        paymentsUsed: 0,
+        paymentsRemaining: 1,
+      };
+    },
+    async planPolicyUpdate(input): Promise<PolicyUpdatePlan> {
+      assert.equal(input.maxPayments, 10);
+      assert.equal(input.perPaymentLimitWei, "1000000000000000000");
+      const current = {
+        ...ready.delegation,
+        paymentsUsed: 0,
+        paymentsRemaining: 1,
+      };
+      return {
+        version: 1,
+        decisionId: "wpd_eval_12345678",
+        createdAt: NOW,
+        expiresAt: "2026-09-01T00:05:00.000Z",
+        current,
+        proposed: {
+          ...current,
+          perPaymentLimitWei: "1000000000000000000",
+          lifetimeLimitWei: "10000000000000000000",
+          maxPayments: 10,
+          paymentsRemaining: 10,
+        },
+        decision: "allow",
+        blockers: [],
+        approval: { action: "confirm", userConfirmationRequired: true },
+      };
+    },
+    async applyPolicyUpdate(input): Promise<PolicyUpdateReceipt> {
+      assert.equal(input.decisionId, "wpd_eval_12345678");
+      assert.equal(input.userConfirmed, true);
+      return {
+        version: 1,
+        decisionId: input.decisionId,
+        appliedAt: NOW,
+        policy: {
+          ...ready.delegation,
+          perPaymentLimitWei: "1000000000000000000",
+          lifetimeLimitWei: "10000000000000000000",
+          maxPayments: 10,
+          paymentsUsed: 0,
+          paymentsRemaining: 10,
+        },
       };
     },
     async planPrivatePayment(input) {

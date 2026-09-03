@@ -14,6 +14,7 @@ type Scenario =
   | "payment-indeterminate"
   | "payment-denied"
   | "payment-allowed"
+  | "policy-update"
   | "egress-ready"
   | "egress-needs-enrollment";
 
@@ -25,6 +26,7 @@ const scenarios = new Set<Scenario>([
   "payment-indeterminate",
   "payment-denied",
   "payment-allowed",
+  "policy-update",
   "egress-ready",
   "egress-needs-enrollment",
 ]);
@@ -62,6 +64,7 @@ function onboarding(phase: OnboardingRecord["phase"]): OnboardingRecord {
       perPaymentLimitWei: "50000000000000000",
       lifetimeLimitWei: "50000000000000000",
       spentWei: "0",
+      maxPayments: 1,
       expiresAt: "2026-09-02T00:00:00.000Z",
       enabled: true,
     },
@@ -114,7 +117,7 @@ const runtime: AgentBoostRuntime = {
     capabilityReads += 1;
     const action = approval();
     return {
-      contract: "org.agentboost.wallet/1.3",
+      contract: "org.agentboost.wallet/1.4",
       chain_id: "eip155:11155111",
       network_name: "Sepolia",
       authority: {
@@ -165,6 +168,64 @@ const runtime: AgentBoostRuntime = {
       delegation: ready.delegation,
       security: { payment_execute: approval() },
       rpc_route: { mode: "tor", status: "ready", direct_fallback: false },
+    };
+  },
+  async walletPolicy() {
+    await trace("wallet_get_policy", {});
+    return {
+      ...ready.delegation,
+      paymentsUsed: 0,
+      paymentsRemaining: 1,
+    };
+  },
+  async planPolicyUpdate(input) {
+    await trace("wallet_plan_policy_update", input);
+    if (
+      input.maxPayments !== 10 ||
+      input.perPaymentLimitWei !== "1000000000000000000"
+    ) {
+      throw new Error("Eval model planned the wrong wallet policy");
+    }
+    const current = {
+      ...ready.delegation,
+      paymentsUsed: 0,
+      paymentsRemaining: 1,
+    };
+    return {
+      version: 1,
+      decisionId: "wpd_eval_12345678",
+      createdAt: NOW,
+      expiresAt: "2026-09-01T00:05:00.000Z",
+      current,
+      proposed: {
+        ...current,
+        perPaymentLimitWei: "1000000000000000000",
+        lifetimeLimitWei: "10000000000000000000",
+        maxPayments: 10,
+        paymentsRemaining: 10,
+      },
+      decision: "allow" as const,
+      blockers: [],
+      approval: { action: "confirm" as const, userConfirmationRequired: true as const },
+    };
+  },
+  async applyPolicyUpdate(input) {
+    await trace("wallet_apply_policy_update", input);
+    if (input.decisionId !== "wpd_eval_12345678" || !input.userConfirmed) {
+      throw new Error("Eval policy update lacked the bound confirmation");
+    }
+    return {
+      version: 1,
+      decisionId: input.decisionId,
+      appliedAt: NOW,
+      policy: {
+        ...ready.delegation,
+        perPaymentLimitWei: "1000000000000000000",
+        lifetimeLimitWei: "10000000000000000000",
+        maxPayments: 10,
+        paymentsUsed: 0,
+        paymentsRemaining: 10,
+      },
     };
   },
   async planPrivatePayment(input) {

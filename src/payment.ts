@@ -7,7 +7,12 @@ import type {
   PaymentRequest,
   WalletAdapter,
 } from "./contracts.js";
-import { SEPOLIA_CHAIN_ID } from "./contracts.js";
+import {
+  MAX_POLICY_LIFETIME_LIMIT_WEI,
+  MAX_POLICY_PAYMENT_LIMIT_WEI,
+  MAX_POLICY_PAYMENTS,
+  SEPOLIA_CHAIN_ID,
+} from "./contracts.js";
 import { StateStore } from "./state/store.js";
 
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
@@ -117,8 +122,11 @@ export class PaymentController {
       blockers.push("PRIVATE_BALANCE_NOT_READY");
     }
     if (!onboarding?.delegation.enabled) blockers.push("DELEGATION_DISABLED");
-    if (Object.keys(state.requests).length > 0) {
-      blockers.push("DELEGATION_ALREADY_USED");
+    if (
+      onboarding &&
+      Object.keys(state.requests).length >= (onboarding.delegation.maxPayments ?? 1)
+    ) {
+      blockers.push("PAYMENT_COUNT_LIMIT");
     }
     if (
       onboarding &&
@@ -127,6 +135,15 @@ export class PaymentController {
       blockers.push("DELEGATION_EXPIRED");
     }
     if (onboarding) {
+      if (
+        (onboarding.delegation.maxPayments ?? 1) > MAX_POLICY_PAYMENTS ||
+        BigInt(onboarding.delegation.perPaymentLimitWei) >
+          MAX_POLICY_PAYMENT_LIMIT_WEI ||
+        BigInt(onboarding.delegation.lifetimeLimitWei) >
+          MAX_POLICY_LIFETIME_LIMIT_WEI
+      ) {
+        blockers.push("POLICY_OUTSIDE_HARD_BOUNDS");
+      }
       const remaining =
         BigInt(onboarding.delegation.lifetimeLimitWei) -
         BigInt(onboarding.delegation.spentWei);
@@ -355,12 +372,23 @@ export class PaymentController {
       if (onboarding.delegation.chainId !== SEPOLIA_CHAIN_ID) {
         throw new Error("CHAIN_NOT_SEPOLIA");
       }
-      if (Object.keys(draft.requests).length > 0) {
-        throw new Error("DELEGATION_ALREADY_USED");
+      if (
+        Object.keys(draft.requests).length >=
+        (onboarding.delegation.maxPayments ?? 1)
+      ) {
+        throw new Error("PAYMENT_COUNT_LIMIT");
       }
       const amount = BigInt(plan.amountWei);
       const spent = BigInt(onboarding.delegation.spentWei);
       const limit = BigInt(onboarding.delegation.lifetimeLimitWei);
+      if (
+        (onboarding.delegation.maxPayments ?? 1) > MAX_POLICY_PAYMENTS ||
+        BigInt(onboarding.delegation.perPaymentLimitWei) >
+          MAX_POLICY_PAYMENT_LIMIT_WEI ||
+        limit > MAX_POLICY_LIFETIME_LIMIT_WEI
+      ) {
+        throw new Error("POLICY_OUTSIDE_HARD_BOUNDS");
+      }
       const nowMs = this.#clock.now().getTime();
       if (new Date(storedPlan.expiresAt).getTime() <= nowMs) {
         throw new Error("DECISION_EXPIRED");

@@ -48,6 +48,9 @@ mcp_servers:
         - onboarding_start
         - onboarding_status
         - wallet_get_context
+        - wallet_get_policy
+        - wallet_plan_policy_update
+        - wallet_apply_policy_update
         - wallet_start_new_demo
         - wallet_plan_private_payment
         - wallet_execute_private_payment
@@ -70,20 +73,29 @@ gives reload guidance, starts onboarding with no arguments, preserves the setup
 ID and revision, presents the browser/QR/address fallback honestly, and
 long-polls with `wait_ms: 90000`.
 
-`agent-boost` requires the Agent Boost MCP toolset. It teaches the payment
-sequence:
+`agent-boost` requires the Agent Boost MCP toolset. It teaches the policy and
+payment sequences:
 
 1. read capabilities and live wallet context;
-2. plan an exact recipient and wei amount;
-3. read back the exact terms and privacy limitations, including the scoped Tor
+2. inspect or preview wallet-policy changes in ordinary native-token units;
+3. confirm and apply policy changes separately from payments;
+4. plan an exact recipient and wei amount;
+5. read back the exact terms and privacy limitations, including the scoped Tor
    RPC route and uncovered general traffic;
-4. obtain an unambiguous verbal confirmation;
-5. execute with `user_confirmed: true` and
+6. obtain an unambiguous verbal confirmation;
+7. execute with `user_confirmed: true` and
    `client_request_id: hermes:<decision_id>`;
-6. preserve the returned request ID until terminal.
+8. preserve the returned request ID until terminal.
 
-The skills are choreography. Sepolia enforcement, limits, expiry, one-payment
-use, balance checks, and idempotency are enforced in Agent Boost.
+The skills are choreography. Sepolia enforcement, adjustable hard ceilings,
+expiry, payment-count use, balance checks, policy-plan binding, and idempotency
+are enforced in Agent Boost.
+
+Policy editing uses `wallet_get_policy`, `wallet_plan_policy_update`, and
+`wallet_apply_policy_update`. The user speaks in native-token decimals; the MCP
+boundary converts them exactly. The preview says explicitly that authority is
+not liquidity: applying it does not move the main balance into the private
+payment pocket or approve a payment.
 
 ## Onboarding
 
@@ -132,8 +144,8 @@ The boolean is Hermes's attestation that the exact readback was confirmed.
 Agent Boost does not receive audio or independently authenticate the speaker.
 
 The execution tool can cause signing and broadcast. The authority is constrained
-to one native-ETH Sepolia payment under the configured amount and lifetime
-limits. A submitted result is not confirmed. Agent Boost distinguishes a
+to the active count, per-send, total, and expiry policy, with non-adjustable
+Sepolia and testnet ceilings. A submitted result is not confirmed. Agent Boost distinguishes a
 Kohaku UserOperation hash from a transaction hash. It reports confirmed only
 from explicit adapter confirmation, a successful transaction receipt, or the
 recipient balance increasing by the requested amount from the pre-execution

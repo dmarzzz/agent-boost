@@ -1,7 +1,7 @@
 # Wallet capability contract
 
 Agent Boost exposes a wallet-first MCP contract named
-`org.agentboost.wallet/1.3`. It is Sepolia-only.
+`org.agentboost.wallet/1.4`. It is Sepolia-only.
 
 The capability document is available through the read-only `capabilities`
 tool and the resource:
@@ -21,11 +21,13 @@ Actual authority is enforced from durable local state.
 - shield protocol: Tornado through the pinned Kohaku adapter;
 - private operation: unshield to the next wallet account with an exact value
   tail call;
-- authority: one time-bounded Sepolia test payment under the effective local
+- authority: a time-bounded set of Sepolia test payments under the effective local
   `allow`, `confirm`, or `deny` execution policy;
 - default authority lifetime: seven days; expiry disables delegated execution,
   not wallet or balance access;
-- default maximum: `0.05` ETH;
+- default maximum: 10 sends, `1` ETH per send, `10` ETH total;
+- conversational policy editing: count, per-send amount, total amount, expiry,
+  and enabled state, with an exact preview and separate confirmation;
 - mainnet: unavailable;
 - Ethereum JSON-RPC egress: Tor for Agent Boost and Kohaku, no direct fallback;
 - covered public HTTPS egress: optional Shade Tree v4 explicit-fetch module,
@@ -47,8 +49,10 @@ and require confirmation for payment execution. The local
 `confirm`, or `deny`.
 
 `security.hard_limits` is not mergeable: Sepolia-only operation, no mainnet,
-no direct RPC fallback, the amount caps, and the one-payment lifetime remain
-enforced regardless of an override.
+no direct RPC fallback, and the absolute policy-editor bounds remain enforced
+regardless of an override. The sane default and absolute ceiling are different:
+advanced users may deliberately widen a disposable testnet policy without
+creating any mainnet or arbitrary-signing path.
 
 ## Identifiers and amounts
 
@@ -58,8 +62,8 @@ enforced regardless of an override.
 - Authority-bearing amounts are canonical base-10 wei strings matching
   `^(0|[1-9][0-9]*)$`.
 - Human ETH formatting is display-only and never enters the intent digest.
-- Decision IDs begin `wd_`; request IDs begin `req_`; setup IDs begin
-  `setup_`.
+- Payment decision IDs begin `wd_`; policy decision IDs begin `wpd_`; request
+  IDs begin `req_`; setup IDs begin `setup_`.
 
 ## Result envelope and presentation
 
@@ -181,6 +185,45 @@ old Kohaku wallet, selects a new wallet profile, and starts a fresh funding
 flow. It never rebroadcasts an unresolved request. The tool returns a public
 archive identifier and a new QR; it does not return an archive path or secrets.
 
+### `wallet_get_policy`
+
+No input. Returns the active per-send limit, total limit, send count, used and
+remaining sends, expiry, and enabled state without returning the address or any
+balance. The policy is authority, not evidence of available funds.
+
+### `wallet_plan_policy_update`
+
+```json
+{
+  "max_payments": 10,
+  "per_payment_limit_native": "1",
+  "expires_in_hours": 168
+}
+```
+
+Inputs are ordinary native-token decimals so the model does not convert wei.
+Any subset may change. When count or per-send amount changes and the total is
+omitted, the total is their product. An expired permission is renewed for the
+default seven days when another setting changes. The five-minute preview binds
+the complete current and proposed policies and changes no state.
+
+The controller rejects a proposal that erases already-spent amount or already-
+used sends, exceeds the count/amount/expiry ceilings, or gives a total above the
+count-times-per-send envelope.
+
+### `wallet_apply_policy_update`
+
+```json
+{"decision_id":"wpd_…","user_confirmed":true}
+```
+
+Applies only the exact unexpired preview after separate user confirmation. The
+write compares the live policy and used authority with the preview, then updates
+the delegation atomically. Repeating the same applied decision returns the same
+receipt. A concurrent payment or policy change makes an unapplied preview stale.
+This tool never transfers funds, changes chains, enables mainnet, or makes the
+main account spendable through the private-payment route.
+
 ### `wallet_plan_private_payment`
 
 ```json
@@ -191,7 +234,7 @@ archive identifier and a new QR; it does not return an archive path or secrets.
 ```
 
 The tool refreshes private spendable balance and checks setup readiness,
-delegation enabled/expiry, one-payment lifetime use, per-payment and lifetime
+delegation enabled/expiry, payment-count use, per-payment and lifetime
 limits, and private balance. It returns a five-minute immutable decision with a
 SHA-256 digest over chain, recipient, asset, amount, and operation. The plan
 also reports whether the effective security policy requires user confirmation.
@@ -211,8 +254,8 @@ The recipient and amount are resolved from the decision rather than accepted
 again. `client_request_id` is optional; Agent Boost derives the stable
 `hermes:<decision_id>` value when omitted. The default `confirm` policy requires
 `user_confirmed: true`; an explicit local `allow` override does not, while
-`deny` blocks planning and execution. Execution atomically consumes the
-one-payment/lifetime delegation before calling Kohaku. This is fail-safe: an
+`deny` blocks planning and execution. Execution atomically consumes one send
+and its lifetime amount allowance before calling Kohaku. This is fail-safe: an
 adapter failure or uncertain submission does not restore authority for an
 automatic retry.
 
@@ -230,13 +273,17 @@ broadcasts. Internal checkpoints and attempt metadata are omitted from MCP.
 
 ## Model-visible authority
 
-The agent may read wallet state and create plans. Its ability to cause one
-bounded Sepolia signature and broadcast is controlled by the effective local
+The agent may read wallet state and create plans. Its ability to cause bounded
+Sepolia signatures and broadcasts is controlled by the effective local
 execution policy. The built-in default is `confirm`; ordinary language or an
 approval emoji can confirm the exact displayed plan. It cannot use the Agent
 Boost interface to export keys, sign arbitrary calldata, change chain, change
 protocol, change the fixed withdrawal behavior, bypass hard limits, or access
 mainnet.
+
+Policy-update confirmation is independent from payment confirmation. Approving
+new limits does not approve a transfer, and approving a transfer cannot mutate
+the policy.
 
 `user_confirmed` is Hermes's attestation about the conversation. Agent Boost
 does not independently hear or authenticate the user's speech, so this is a

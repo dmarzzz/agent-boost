@@ -61,7 +61,9 @@ shields `0.1` of it through Kohaku once funded.
 > Send 0.02 Sepolia ETH privately to 0x2222…2222.
 
 Hermes reads the live balance, reads the exact plan back, waits for your yes,
-then signs and submits within a one-payment, seven-day delegation.
+then signs and submits within a user-visible, seven-day delegation. New wallets
+start with 10 sends of up to 1 Sepolia ETH each; say “change my wallet limits”
+to preview and approve different testnet guardrails.
 
 > Fetch https://example.com/data.json through covered egress.
 
@@ -69,7 +71,7 @@ After a Grove operator enrolls the install, Hermes fetches one public HTTPS
 resource through Shade Tree over Tor, never a direct connection.
 
 The full walkthrough, including the security policy and evals, is in
-[docs/DEMO.md](docs/DEMO.md). The eleven MCP tools behind these conversations
+[docs/DEMO.md](docs/DEMO.md). The fourteen MCP tools behind these conversations
 are in [docs/TOOLS.md](docs/TOOLS.md).
 
 ## Docs

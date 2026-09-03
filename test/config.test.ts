@@ -13,7 +13,9 @@ test("loadConfig is Sepolia-only, HTTPS-only, and avoids reserved ports", () => 
   assert.equal(config.shadeTreeMaxResponseBytes, 1_048_576);
   assert.equal(config.torDataDir, "/tmp/agent-boost-home/.local/share/agent-boost/tor");
   assert.equal(config.fundingTargetWei, 200_000_000_000_000_000n);
-  assert.equal(config.paymentLimitWei, 50_000_000_000_000_000n);
+  assert.equal(config.paymentLimitWei, 1_000_000_000_000_000_000n);
+  assert.equal(config.paymentLifetimeLimitWei, 10_000_000_000_000_000_000n);
+  assert.equal(config.maxPayments, 10);
   assert.equal(config.delegationTtlMs, 7 * 24 * 60 * 60_000);
   assert.deepEqual(config.security.default, {
     "wallet.read": "allow",
@@ -32,6 +34,15 @@ test("loadConfig is Sepolia-only, HTTPS-only, and avoids reserved ports", () => 
     () => loadConfig({ AGENT_BOOST_RPC_URL: "http://rpc.example" }, "/tmp/home"),
     /must use HTTPS/,
   );
+  const customPolicy = loadConfig(
+    {
+      AGENT_BOOST_PAYMENT_LIMIT_WEI: "2000000000000000000",
+      AGENT_BOOST_MAX_PAYMENTS: "3",
+    },
+    "/tmp/home",
+  );
+  assert.equal(customPolicy.paymentLifetimeLimitWei, 6_000_000_000_000_000_000n);
+  assert.equal(customPolicy.maxPayments, 3);
   assert.throws(
     () => loadConfig({ AGENT_BOOST_UI_PORT: "9180" }, "/tmp/home"),
     /reserved ports/,

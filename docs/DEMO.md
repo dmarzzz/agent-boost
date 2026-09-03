@@ -37,7 +37,31 @@ When `private_ready` appears, at least `0.1` Sepolia ETH is spendable through
 the configured private-payment path. Hermes also rechecks that
 `readiness.rpc_egress` is `ready` before declaring setup complete.
 
-## 2. Send one test payment
+## 2. Inspect or change the wallet permission
+
+New wallets start with a sane default: up to 10 private sends, 1 Sepolia ETH
+per send, 10 Sepolia ETH total, and seven days. Ask Hermes naturally:
+
+> What are my wallet limits?
+
+Or change any part:
+
+> Let Hermes make 20 private sends of up to 2 Sepolia ETH each for the next 14
+> days.
+
+Hermes shows one compact permission card. Reply ✅ or say yes to apply it. This
+confirmation is separate from confirming a payment. The update changes local
+delegated authority only: it does not send or shield ETH, move the main balance
+into the private payment pocket, add a public-main-account send route, enable
+mainnet, or expose signing material.
+
+Advanced testnet policies remain bounded at 100 sends, 100 native test tokens
+per send, 10,000 total, and 30 days. Already-used sends and spent allowance
+cannot be erased by lowering and re-raising a policy. Existing wallets from the
+older one-send release remain one-send after upgrade until the user explicitly
+previews and confirms new limits.
+
+## 3. Send a test payment
 
 Tell Hermes, for example:
 
@@ -55,12 +79,12 @@ user's confirmation with `user_confirmed: true`; this is a conversational demo
 control, not independent authentication or an out-of-band approval channel.
 
 After confirmation, Hermes executes the immutable plan with a stable request
-ID. The default policy permits:
+ID. The default wallet policy permits:
 
 - Sepolia only (`eip155:11155111`);
 - native test ETH only;
-- at most `0.05` ETH;
-- one payment for the lifetime of the setup;
+- at most `1` ETH per send;
+- up to 10 sends and `10` ETH total;
 - execution within seven days of setup;
 - no mainnet path.
 
@@ -76,11 +100,14 @@ requests are reconciled on restart and status reads without broadcasting again.
 If concrete evidence is unavailable, the durable result remains `submitted` or
 `indeterminate` rather than guessing.
 
-The seven-day deadline applies to delegated Agent Boost execution, not to the
+Each attempted execution consumes one send count before Kohaku is called so an
+uncertain side effect cannot be retried as if nothing happened. The seven-day
+deadline applies to delegated Agent Boost execution, not to the
 wallet, address, or funds. Address and balance reads remain available after it
 expires. This POC currently blocks new Agent Boost transfers under an expired
-delegation; the planned multi-wallet release requires an explicit
-reauthorization and confirmed recovery-transfer path before it ships. Never
+delegation; the user can now preview and confirm a renewal conversationally.
+The current release still requires a separately designed and confirmed recovery
+transfer path before it can move those funds. Never
 interpret expiry as deletion or loss of access to the encrypted wallet.
 
 ## Start a fresh demo
@@ -125,9 +152,10 @@ effective: reported by the capabilities and payment-plan tools
 ```
 
 `confirm` is the default. `allow` permits automatic execution only inside the
-existing Sepolia delegation; `deny` locks payment execution. No override can
-enable mainnet, direct RPC fallback, exceed the per-payment or lifetime caps,
-extend an expired delegation, or bypass adapter readiness.
+active Sepolia delegation; `deny` locks payment execution. Users may separately
+preview and confirm count, amount, expiry, or enabled-state changes inside the
+reported hard testnet bounds. No override or policy update can enable mainnet,
+direct RPC fallback, arbitrary signing, or bypass adapter readiness.
 
 ## Conversation evals
 

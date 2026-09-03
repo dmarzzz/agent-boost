@@ -126,6 +126,11 @@ The POC may be demonstrated only when:
 
 The recipient and amount are resolved from the decision rather than accepted
 again. Execution reasserts Sepolia and refreshes private balance, then
-atomically consumes the one-payment/lifetime delegation before calling Kohaku.
+atomically consumes one send and its lifetime amount allowance before calling
+Kohaku.
 This is fail-safe: an adapter failure or uncertain submission does not restore
 authority for an automatic retry.
+
+Wallet policy changes are also plan-bound and confirmation-gated. They cannot
+erase historical spend or send attempts, exceed absolute Sepolia testnet
+ceilings, enable mainnet, alter a recipient, or move balances between accounts.

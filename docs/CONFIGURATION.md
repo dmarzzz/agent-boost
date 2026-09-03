@@ -12,7 +12,9 @@ secret-bearing repository config.
 | `AGENT_BOOST_TOR_BOOTSTRAP_TIMEOUT_MS` | `120000` | Fail-closed Tor startup deadline |
 | `AGENT_BOOST_FUNDING_WEI` | `200000000000000000` | Requested initial funding |
 | `AGENT_BOOST_SHIELD_WEI` | `100000000000000000` | Tornado shield/note amount |
-| `AGENT_BOOST_PAYMENT_LIMIT_WEI` | `50000000000000000` | One-payment maximum |
+| `AGENT_BOOST_PAYMENT_LIMIT_WEI` | `1000000000000000000` | Default per-send limit (1 Sepolia ETH) |
+| `AGENT_BOOST_MAX_PAYMENTS` | `10` | Default number of private sends |
+| `AGENT_BOOST_LIFETIME_LIMIT_WEI` | `10000000000000000000` | Default total send allowance (10 Sepolia ETH) |
 | `AGENT_BOOST_DELEGATION_TTL_MS` | `604800000` | Delegated execution lifetime (seven days) |
 | `AGENT_BOOST_OPEN_UI` | `false` | Optionally open the same-device fallback UI |
 | `AGENT_BOOST_EXECUTE` | `true` | Enable bounded testnet execution |
@@ -30,3 +32,10 @@ The default is the public Sepolia endpoint
 `https://ethereum-sepolia-rpc.publicnode.com`, routed through Tor with no direct
 fallback. Kohaku's account-abstraction relay also uses its own Tor-backed
 Pimlico path; neither path makes Hermes or general agent traffic private.
+
+These variables set the sane policy for newly created wallets. Existing wallet
+authority is durable and is never silently widened during an upgrade. Users can
+say “change my wallet limits” in Hermes to preview and confirm a policy update
+without editing environment variables. The current Sepolia-only editor is hard
+bounded to 100 sends, 100 native test tokens per send, 10,000 total, and 30 days.
+Changing policy does not move funds between the main account and private pocket.
