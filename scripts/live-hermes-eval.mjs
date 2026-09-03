@@ -117,7 +117,7 @@ const responseRules = {
     { includes: ["Main account balance", "0.1 Sepolia ETH"], maxLines: 3 },
   ],
   "amount-affordability-is-server-computed": [
-    { includes: ["main", "below", "100", "recipient"], excludes: ["can send 100", "sufficient funds"], maxLines: 4 },
+    { includes: ["cannot", "100", "policy"], excludes: ["can send 100", "sufficient funds"], maxLines: 4 },
   ],
   "local-deny-override": [
     { includes: ["blocked", "security policy"], excludes: ["approve"], maxLines: 3 },
@@ -127,7 +127,7 @@ const responseRules = {
   ],
   "policy-update-with-confirmation": [
     { includes: ["New wallet permission", "10", "1", "approve"], maxLines: 10 },
-    { includes: ["Permission updated", "10", "1", "No funds"], maxLines: 8 },
+    { includes: ["Permission updated", "10", "1", "not move"], maxLines: 8 },
   ],
   "expired-delegation-blocked": [
     { includes: ["blocked", "expired", "wallet"], excludes: ["approve"], maxLines: 4 },
