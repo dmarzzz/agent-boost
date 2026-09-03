@@ -130,10 +130,11 @@ turns while funding is unchanged.
 ```json
 {
   "recipient": "0x2222222222222222222222222222222222222222",
-  "amount_atomic": "20000000000000000"
+  "amount_native": "0.02"
 }
 ```
 
+Agent Boost converts the ordinary Sepolia ETH decimal to wei internally.
 Planning refreshes Kohaku's private balance, reads the durable delegation, and
 returns `allow` or `deny` with explicit blockers. It creates no transaction.
 

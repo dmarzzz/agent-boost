@@ -312,7 +312,7 @@
           "name": "wallet_plan_private_payment",
           "arguments": {
             "recipient": "0x2222222222222222222222222222222222222222",
-            "amount_atomic": "10000000000000000"
+            "amount_native": "0.01"
           },
           "expect": {
             "code": "PAYMENT_PLANNED",
@@ -388,7 +388,7 @@
           "name": "wallet_plan_private_payment",
           "arguments": {
             "recipient": "0x2222222222222222222222222222222222222222",
-            "amount_atomic": "10000000000000000"
+            "amount_native": "0.01"
           },
           "expect": {
             "code": "PAYMENT_PLANNED",
@@ -446,7 +446,7 @@
       "steps": [
         {"actor": "user", "text": "Send 0.01 Sepolia ETH privately to 0x2222222222222222222222222222222222222222."},
         {"actor": "tool", "name": "wallet_get_context", "arguments": {}, "expect": {"code": "WALLET_CONTEXT", "outcome": "ready", "text_includes": ["Main account balance: 0.1 Sepolia ETH"], "image": false}},
-        {"actor": "tool", "name": "wallet_plan_private_payment", "arguments": {"recipient": "0x2222222222222222222222222222222222222222", "amount_atomic": "10000000000000000"}, "expect": {"code": "PAYMENT_PLANNED", "outcome": "ready", "text_includes": ["native approval"], "image": false, "presentation": {"kind": "confirmation", "state": "pending"}}},
+        {"actor": "tool", "name": "wallet_plan_private_payment", "arguments": {"recipient": "0x2222222222222222222222222222222222222222", "amount_native": "0.01"}, "expect": {"code": "PAYMENT_PLANNED", "outcome": "ready", "text_includes": ["native approval"], "image": false, "presentation": {"kind": "confirmation", "state": "pending"}}},
         {"actor": "client", "surface": "native_confirmation", "title": "Confirm private test payment", "approve_label": "Approve", "decline_label": "Cancel", "decision": "decline"},
         {"actor": "tool", "name": "wallet_execute_private_payment", "arguments": {"decision_id": "wd_eval_12345678"}, "expect": {"code": "PAYMENT_CANCELLED", "outcome": "blocked", "text_includes": ["Payment cancelled", "Nothing was sent"], "image": false, "presentation": {"kind": "status", "state": "cancelled"}}},
         {"actor": "assistant", "max_lines": 2, "text": "**✕ Payment cancelled**\nNothing was sent."}
@@ -460,6 +460,16 @@
         {"actor": "user", "text": "What is my Agent Boost balance?"},
         {"actor": "tool", "name": "wallet_get_context", "arguments": {}, "expect": {"code": "WALLET_CONTEXT", "outcome": "ready", "text_includes": ["Main account balance: 0.1 Sepolia ETH"], "image": false}},
         {"actor": "assistant", "max_lines": 2, "text": "**Main account balance**\n0.1 Sepolia ETH on the funding account."}
+      ]
+    },
+    {
+      "id": "amount-affordability-is-server-computed",
+      "title": "A named amount is compared by Agent Boost without claiming private spendability",
+      "scenario": "affordability-check",
+      "steps": [
+        {"actor": "user", "text": "Now can I send 100 Sepolia ETH with my wallet?"},
+        {"actor": "tool", "name": "wallet_get_context", "arguments": {"amount_native": "100"}, "expect": {"code": "WALLET_CONTEXT", "outcome": "ready", "text_includes": ["Main account balance: 0.1 Sepolia ETH", "requested 100 Sepolia ETH exceeds the main account balance", "Never use this balance alone to claim a private payment can be sent"], "image": false}},
+        {"actor": "assistant", "max_lines": 3, "text": "**! That amount exceeds the main balance**\nThe main account has 0.1 Sepolia ETH, below the requested 100.\nPrivate-send availability still requires an exact recipient and payment plan."}
       ]
     },
     {
@@ -498,7 +508,7 @@
           "name": "wallet_plan_private_payment",
           "arguments": {
             "recipient": "0x2222222222222222222222222222222222222222",
-            "amount_atomic": "10000000000000000"
+            "amount_native": "0.01"
           },
           "expect": {
             "code": "PAYMENT_DENIED",
@@ -550,7 +560,7 @@
           "name": "wallet_plan_private_payment",
           "arguments": {
             "recipient": "0x2222222222222222222222222222222222222222",
-            "amount_atomic": "10000000000000000"
+            "amount_native": "0.01"
           },
           "expect": {
             "code": "PAYMENT_PLANNED",
@@ -639,7 +649,7 @@
       "steps": [
         {"actor": "user", "text": "Send 0.01 Sepolia ETH privately to 0x2222222222222222222222222222222222222222."},
         {"actor": "tool", "name": "wallet_get_context", "arguments": {}, "expect": {"code": "WALLET_CONTEXT", "outcome": "ready", "text_includes": ["Main account balance: 0.1 Sepolia ETH"], "image": false}},
-        {"actor": "tool", "name": "wallet_plan_private_payment", "arguments": {"recipient": "0x2222222222222222222222222222222222222222", "amount_atomic": "10000000000000000"}, "expect": {"code": "PAYMENT_DENIED", "outcome": "blocked", "text_includes": ["Payment plan blocked", "0.01 Sepolia ETH"], "image": false, "presentation": {"kind": "status", "state": "attention"}}},
+        {"actor": "tool", "name": "wallet_plan_private_payment", "arguments": {"recipient": "0x2222222222222222222222222222222222222222", "amount_native": "0.01"}, "expect": {"code": "PAYMENT_DENIED", "outcome": "blocked", "text_includes": ["Payment plan blocked", "0.01 Sepolia ETH"], "image": false, "presentation": {"kind": "status", "state": "attention"}}},
         {"actor": "assistant", "max_lines": 3, "text": "**! Payment blocked**\nThe delegated payment window has expired; your wallet and balance still remain.\n**Next:** Start a new demo before requesting another payment."}
       ]
     },

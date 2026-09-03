@@ -419,6 +419,13 @@ function result(
 ): CallToolResult {
   return {
     structuredContent: structured,
+    _meta: {
+      // Hermes intentionally lets rendered text win over structuredContent,
+      // but preserves vendor metadata alongside that text. Mirror the exact
+      // redacted result here so multi-turn continuation handles survive that
+      // arbitration without putting internal IDs in user-displayable content.
+      "org.agentboost/model-context": structured,
+    },
     content: [
       { type: "text", text: compactToolText(structured) },
       ...(qrPngBase64
@@ -442,7 +449,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     const security = asRecord(data.security);
     const effective = asRecord(security.effective);
     const approval = stringField(effective, "payment.execute") ?? "confirm";
-    return `Sepolia-only capabilities loaded. Payment execution policy: ${approval}. Use structuredContent for exact reasoning; keep the user-facing answer concise.`;
+    return `Sepolia-only capabilities loaded. Payment execution policy: ${approval}. Use structuredContent or org.agentboost/model-context for exact reasoning; keep the user-facing answer concise.`;
   }
 
   if (code === "TRADE_CAPABILITIES") {
@@ -515,7 +522,19 @@ function compactToolText(structured: Record<string, unknown>): string {
     const balance = stringField(data, "balance_atomic");
     const amount = balance ? formatEthWei(BigInt(balance)) : "unknown";
     const phase = stringField(data, "setup_phase") ?? "unknown";
-    return `Live wallet read complete (${phase}). Quote exactly: Main account balance: ${amount} Sepolia ETH. Do not recalculate this amount from balance_atomic or reuse a prior balance. “Main” means the funding source; it has no control over subaccounts. Do not reveal the address or raw atomic value unless asked.`;
+    const check = asRecord(data.affordability_check);
+    const requested = stringField(check, "requested_amount_native");
+    const covers = typeof check.main_account_covers_requested === "boolean"
+      ? check.main_account_covers_requested
+      : undefined;
+    const comparison = requested === undefined
+      ? ""
+      : covers === undefined
+        ? ` Requested amount: ${requested} Sepolia ETH; the main-account comparison is unavailable.`
+        : covers
+          ? ` The main account numerically covers the requested ${requested} Sepolia ETH.`
+          : ` The requested ${requested} Sepolia ETH exceeds the main account balance.`;
+    return `Live wallet read complete (${phase}). Quote exactly: Main account balance: ${amount} Sepolia ETH.${comparison} Do not recalculate this amount from balance_atomic or reuse a prior balance. “Main” means the funding source; it has no control over subaccounts. Never use this balance alone to claim a private payment can be sent; exact private-payment spendability requires a recipient and wallet_plan_private_payment. Do not reveal the address or raw atomic value unless asked.`;
   }
 
   if (code === "WALLET_TREE") {
@@ -534,9 +553,9 @@ function compactToolText(structured: Record<string, unknown>): string {
     const plan = asRecord(data.plan);
     const proposed = asRecord(plan.proposed);
     if (code === "POLICY_UPDATE_DENIED") {
-      return `Wallet policy change blocked: ${formatPolicyText(proposed)}. Explain the blocker in plain language and do not show internal IDs.`;
+      return `Wallet policy change blocked: ${formatPolicyText(proposed)}.${formatBlockers(plan)} Explain the blocker in plain language and do not show internal IDs.`;
     }
-    return `Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes; the agent must apply the structured decision after approval.`;
+    return `Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes; after approval the agent must apply the exact decision from org.agentboost/model-context and must never invent an ID.`;
   }
 
   if (code === "POLICY_UPDATED") {
@@ -552,11 +571,11 @@ function compactToolText(structured: Record<string, unknown>): string {
     const approval = asRecord(plan.approval);
     const confirmationRequired = approval.userConfirmationRequired === true;
     if (code === "PAYMENT_DENIED") {
-      return `Payment plan blocked for ${amount} Sepolia ETH to ${recipient}. Explain the blocker concisely; do not show internal IDs.`;
+      return `Payment plan blocked for ${amount} Sepolia ETH to ${recipient}.${formatBlockers(plan)} Explain the blocker concisely; do not show internal IDs.`;
     }
     return confirmationRequired
-      ? `Payment ready for native approval: ${amount} Sepolia ETH to ${recipient}. Call wallet_execute_private_payment with the decision ID and omit user_confirmed; the client will show the exact confirmation. Do not send a duplicate readback first.`
-      : `Payment approved by the active local policy: ${amount} Sepolia ETH to ${recipient}. The agent may execute it now within the hard delegation limits.`;
+      ? `Payment ready for native approval: ${amount} Sepolia ETH to ${recipient}. Call wallet_execute_private_payment with the exact decision ID from org.agentboost/model-context and omit user_confirmed; the client will show the exact confirmation. Never invent an ID and do not send a duplicate readback first.`
+      : `Payment approved by the active local policy: ${amount} Sepolia ETH to ${recipient}. The agent may execute it now with the exact decision ID from org.agentboost/model-context within the hard delegation limits.`;
   }
 
   if (code === "PAYMENT_CONFIRMATION_REQUIRED") {
@@ -579,7 +598,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     if (phase === "failed") {
       return `Payment failed: ${amount} Sepolia ETH to ${recipient}. Do not retry without a new user request.`;
     }
-    return `Payment is not confirmed (${phase}). Call wallet_get_request with the structured requestId. Never infer success from balances and never retry execution with a new ID.`;
+    return `Payment is not confirmed (${phase}). Call wallet_get_request with the exact requestId from structuredContent or org.agentboost/model-context. Never infer success from balances and never retry execution with a new ID.`;
   }
 
   if (code === "RECOVERY_PLANNED" || code === "RECOVERY_DENIED") {
@@ -597,10 +616,10 @@ function compactToolText(structured: Record<string, unknown>): string {
     const phase = stringField(request, "phase") ?? outcome;
     return phase === "confirmed"
       ? "Recovery transfer confirmed."
-      : `Recovery transfer is ${phase}. Use wallet_get_recovery_request with the structured request ID; never submit a replacement.`;
+      : `Recovery transfer is ${phase}. Use wallet_get_recovery_request with the exact request ID from structuredContent or org.agentboost/model-context; never submit a replacement.`;
   }
 
-  return `Agent Boost result: ${outcome}. Use structuredContent internally and show only the user's next action.`;
+  return `Agent Boost result: ${outcome}. Use structuredContent or org.agentboost/model-context internally and show only the user's next action.`;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -611,6 +630,33 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function stringField(record: Record<string, unknown>, key: string): string | undefined {
   return typeof record[key] === "string" ? record[key] : undefined;
+}
+
+function formatBlockers(record: Record<string, unknown>): string {
+  const blockers = Array.isArray(record.blockers)
+    ? record.blockers.filter((value): value is string => typeof value === "string")
+    : [];
+  return blockers.length > 0 ? ` Blockers: ${blockers.join(", ")}.` : "";
+}
+
+function withAffordabilityCheck(
+  context: Record<string, unknown>,
+  requestedAmountNative: string | undefined,
+): Record<string, unknown> {
+  if (requestedAmountNative === undefined) return context;
+  const balance = stringField(context, "balance_atomic");
+  const requestedAmountWei = parseEthToWei(requestedAmountNative);
+  return {
+    ...context,
+    affordability_check: {
+      requested_amount_native: requestedAmountNative,
+      main_account_covers_requested: balance === undefined
+        ? null
+        : BigInt(balance) >= BigInt(requestedAmountWei),
+      private_payment_spendability: "not_checked_requires_recipient_and_plan",
+      can_send_private_payment: "unknown",
+    },
+  };
 }
 
 function enforceMainAccountContext(context: Record<string, unknown>): void {
@@ -1215,16 +1261,27 @@ export async function createMcpServer(
     {
       title: "Refresh live wallet balance",
       description:
-        "FRESHNESS REQUIREMENT: Call this tool in the same turn for every question about wallet balance, ETH held, funds, or affordability, even when conversation history already contains a balance. History, memory, onboarding state, and prior tool results are not current-balance sources. Use the preformatted decimal amount in the returned text without converting balance_atomic. The default response contains only the main-account balance; add the address or private payment capacity only when specifically requested. Main means the account can fund subaccounts; it does not control, own, recover, or revoke them. Payment planning validates spendability separately. Returns no seed, key, password, or raw note material.",
-      inputSchema: z.object({}),
+        "FRESHNESS REQUIREMENT: Call this tool in the same turn for every question about wallet balance, ETH held, funds, or affordability, even when conversation history already contains a balance. When the user names an amount in an affordability question, pass it as amount_native so Agent Boost performs the numeric comparison. History, memory, onboarding state, and prior tool results are not current-balance sources. Use the preformatted decimal amount in the returned text without converting balance_atomic. The default response contains only the main-account balance. Main means the account can fund subaccounts; it does not control, own, recover, or revoke them. Never claim a private payment is affordable from the main balance: exact spendability requires a recipient and wallet_plan_private_payment. Returns no seed, key, password, or raw note material.",
+      inputSchema: z.object({
+        amount_native: z.string().regex(
+          /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/,
+        ).optional().describe(
+          "Optional ordinary Sepolia ETH amount from the user's affordability question. Never convert it to wei.",
+        ),
+      }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async () => {
+    async ({ amount_native }) => {
       try {
         const context = await runtime.walletContext();
         enforceMainAccountContext(context);
         return result(
-          envelope(digest, "ready", "WALLET_CONTEXT", context),
+          envelope(
+            digest,
+            "ready",
+            "WALLET_CONTEXT",
+            withAffordabilityCheck(context, amount_native),
+          ),
         );
       } catch (error) {
         return domainError(digest, error);
@@ -1623,7 +1680,7 @@ export async function createMcpServer(
       try {
         const plan = await runtime.getPolicyUpdatePlan(decision_id);
         const confirmation = await observeConfirmation(
-          `Apply this Sepolia wallet policy to ${plan.wallet.walletName} (selection epoch ${plan.wallet.selectionEpoch}): ${plan.proposed.maxPayments} payments, ${plan.proposed.perPaymentLimitWei} wei per payment, ${plan.proposed.lifetimeLimitWei} wei lifetime, enabled=${plan.proposed.enabled}, expires ${plan.proposed.expiresAt}? Applying it rotates payment authority and starts a fresh payment-count epoch while preserving spent wei.`,
+          `Apply this Sepolia wallet policy to ${plan.wallet.walletName}: ${plan.proposed.maxPayments} payments, ${formatEthWei(BigInt(plan.proposed.perPaymentLimitWei))} Sepolia ETH per payment, ${formatEthWei(BigInt(plan.proposed.lifetimeLimitWei))} Sepolia ETH total, enabled=${plan.proposed.enabled}, expires ${plan.proposed.expiresAt}? The existing authorization, amount already spent, and payment count are preserved.`,
           user_confirmed,
         );
         if (!confirmation.accepted) {
@@ -1651,18 +1708,20 @@ export async function createMcpServer(
     {
       title: "Plan a shielded Sepolia test payment",
       description:
-        "The agent—not the user—calls this to prepare one exact native-ETH payment from the private test balance. Call wallet_get_context immediately before planning so the agent has the live address, spendable balance, and delegation state. amount_atomic is wei. Planning never executes. Return a short human readback and, when the active policy requires it, accept ordinary approval such as yes, send it, or ✅. Never ask the user to type an MCP command or identifier.",
+        "The agent—not the user—calls this to prepare one exact native-ETH payment from the private test balance. Call wallet_get_context immediately before planning. Pass amount_native exactly as ordinary Sepolia ETH, never wei; Agent Boost converts it internally. Planning never executes. Use the returned decision and blockers instead of inferring spendability from a main-account balance. Never ask the user to type an MCP command or identifier.",
       inputSchema: z.object({
         recipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
-        amount_atomic: z.string().regex(/^(0|[1-9][0-9]*)$/),
+        amount_native: z.string().regex(
+          /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/,
+        ),
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ recipient, amount_atomic }) => {
+    async ({ recipient, amount_native }) => {
       try {
         const plan = await runtime.planPrivatePayment({
           recipient,
-          amountWei: amount_atomic,
+          amountWei: parseEthToWei(amount_native),
         });
         return result(
           envelope(

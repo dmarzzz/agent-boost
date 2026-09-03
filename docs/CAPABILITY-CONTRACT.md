@@ -101,9 +101,13 @@ Every expected result appears in MCP `structuredContent`:
 ```
 
 The MCP text content is deliberately not a second serialized copy. It is a
-short presentation hint with the human amount, status, and next action. Hermes
-uses the structured content for exact decisions while keeping raw wei, phases,
-digests, and identifiers out of ordinary replies.
+short presentation hint with the human amount, status, and next action. Some
+Hermes versions prefer non-empty text and omit `structuredContent` from the
+model result, so Agent Boost also mirrors the exact redacted envelope under the
+vendor metadata key `_meta["org.agentboost/model-context"]`. Hermes preserves
+that metadata for exact decisions. Clients should treat it as agent-internal
+state and keep raw wei, phases, digests, and identifiers out of ordinary
+replies.
 
 `presentation` is an optional, non-authoritative rendering contract. It gives
 clients a stable title, semantic state, real setup step, labeled fields, status
@@ -179,7 +183,8 @@ Returns the latest durable state or waits for a greater revision. Only
 
 ### `wallet_get_context`
 
-No input. Refreshes and returns:
+Accepts an optional ordinary Sepolia ETH decimal as `amount_native` for an
+exact main-account affordability comparison. Refreshes and returns:
 
 - main account address and CAIP account ID;
 - that main account's current on-chain ETH as `balance_atomic`;
@@ -188,6 +193,9 @@ No input. Refreshes and returns:
 - delegation amount, use, and expiry;
 - observation timestamp and revision.
 - live Tor RPC-route status and the absence of direct fallback.
+- when requested, an `affordability_check` that reports only whether the main
+  account numerically covers `amount_native`; private-payment spendability
+  remains unknown until an exact recipient is planned.
 
 It returns no seed, key, mnemonic, password, note, proof, raw signed
 transaction, RPC URL, or arbitrary adapter output.
@@ -268,10 +276,11 @@ main account spendable through the private-payment route.
 ```json
 {
   "recipient": "0x2222222222222222222222222222222222222222",
-  "amount_atomic": "20000000000000000"
+  "amount_native": "0.02"
 }
 ```
 
+The MCP boundary converts the ordinary Sepolia ETH decimal to wei internally.
 The tool refreshes private spendable balance and checks setup readiness,
 delegation enabled/expiry, payment-count use, per-payment and lifetime
 limits, and private balance. It returns a five-minute immutable decision with a

@@ -28,6 +28,7 @@ type Scenario =
   | "payment-indeterminate"
   | "payment-denied"
   | "payment-allowed"
+  | "affordability-check"
   | "policy-update"
   | "payment-expired"
   | "egress-ready"
@@ -119,6 +120,7 @@ const expectedToolTraces: Record<string, string[]> = {
     "wallet_execute_private_payment",
   ],
   "main-balance-read": ["wallet_get_context"],
+  "amount-affordability-is-server-computed": ["wallet_get_context"],
   "local-deny-override": [
     "capabilities",
     "wallet_get_context",
@@ -145,7 +147,7 @@ const expectedToolTraces: Record<string, string[]> = {
 const forbiddenVisiblePatterns = [
   /\bmcp\b/iu,
   /\bwei\b/iu,
-  /\b(?:decision_id|request_id|client_request_id|user_confirmed|amount_atomic|manifest_digest|setupId)\b/iu,
+  /\b(?:decision_id|request_id|client_request_id|user_confirmed|amount_atomic|amount_native|manifest_digest|setupId)\b/iu,
   /\b(?:wallet_get_context|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_start_new_demo|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|egress_status|egress_fetch)\b/iu,
   /\b(?:private key|seed phrase|wallet password)\b/iu,
   /\b(?:wd_|wpd_|req_|sha256:)[A-Za-z0-9._:-]*/u,

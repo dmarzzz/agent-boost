@@ -20,6 +20,7 @@ type Scenario =
   | "payment-denied"
   | "payment-allowed"
   | "policy-update"
+  | "affordability-check"
   | "payment-expired"
   | "egress-ready"
   | "egress-needs-enrollment";
@@ -37,6 +38,7 @@ const scenarios = new Set<Scenario>([
   "payment-denied",
   "payment-allowed",
   "policy-update",
+  "affordability-check",
   "payment-expired",
   "egress-ready",
   "egress-needs-enrollment",
