@@ -287,7 +287,7 @@ test("release gate verifies isolated Hermes config and exact packaged skills", a
       "        - onboarding_start",
       "        - onboarding_status",
       "        - wallet_get_context",
-      "        - wallet_list",
+      "        - wallet_manage_profiles",
       "        - wallet_get_tree",
       "        - wallet_create",
       "        - wallet_adopt_existing",

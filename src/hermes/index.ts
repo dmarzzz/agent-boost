@@ -22,7 +22,7 @@ export const HERMES_NATIVE_TOOLS = [
   "onboarding_start",
   "onboarding_status",
   "wallet_get_context",
-  "wallet_list",
+  "wallet_manage_profiles",
   "wallet_get_tree",
   "wallet_create",
   "wallet_adopt_existing",
@@ -302,10 +302,14 @@ function isSafeAgentBoostUpgrade(existing: unknown, desired: unknown): boolean {
   const existingInclude = existingTools.include;
   const desiredInclude = desiredTools.include;
   if (!Array.isArray(existingInclude) || !Array.isArray(desiredInclude)) return false;
+  const legacyAliases = new Map([["wallet_list", "wallet_manage_profiles"]]);
   if (
-    !existingInclude.every((tool) =>
-      typeof tool === "string" && desiredInclude.includes(tool)
-    ) ||
+    !existingInclude.every((tool) => {
+      if (typeof tool !== "string") return false;
+      if (desiredInclude.includes(tool)) return true;
+      const replacement = legacyAliases.get(tool);
+      return replacement !== undefined && desiredInclude.includes(replacement);
+    }) ||
     new Set(existingInclude).size !== existingInclude.length
   ) {
     return false;

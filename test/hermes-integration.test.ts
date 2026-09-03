@@ -163,7 +163,7 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.match(operationalSkill, /wallet tree is a live view/iu);
   assert.match(
     operationalSkill,
-    /tree rule wins[\s\S]*Never call `wallet_get_context` first/iu,
+    /tree rule wins[\s\S]*never call[\s\S]*`wallet_get_context`[\s\S]*before or after/iu,
   );
   assert.match(operationalSkill, /shortened address[\s\S]*aggregate total/iu);
   assert.match(
@@ -255,20 +255,24 @@ test("an identical repeat is idempotent and does not create another backup", asy
   ]);
 });
 
-test("upgrades a prior Agent Boost tool subset without weakening conflict safety", async () => {
+test("upgrades a prior Agent Boost tool subset and legacy inventory alias safely", async () => {
   const fixture = await createFixture();
   const previous = createHermesServerConfig(
     await realpath(fixture.executablePath),
   ) as {
     tools: { include: string[] };
   };
-  previous.tools.include = previous.tools.include.filter(
-    (tool) => ![
-      "wallet_get_policy",
-      "wallet_plan_policy_update",
-      "wallet_apply_policy_update",
-    ].includes(tool),
-  );
+  previous.tools.include = previous.tools.include
+    .map((tool) => tool === "wallet_manage_profiles" ? "wallet_list" : tool)
+    .filter(
+      (tool) => ![
+        "wallet_get_policy",
+        "wallet_plan_policy_update",
+        "wallet_apply_policy_update",
+      ].includes(tool),
+    );
+  assert.ok(previous.tools.include.includes("wallet_list"));
+  assert.ok(!previous.tools.include.includes("wallet_manage_profiles"));
   await writeFile(
     fixture.configPath,
     `mcp_servers:\n  agent-boost: ${JSON.stringify(previous)}\n`,
@@ -284,9 +288,11 @@ test("upgrades a prior Agent Boost tool subset without weakening conflict safety
 
   assert.equal(result.configChanged, true);
   assert.ok(result.configBackupPath);
+  assert.match(await readFile(result.configBackupPath, "utf8"), /wallet_list/u);
   const config = parse(await readFile(fixture.configPath, "utf8")) as {
     mcp_servers: Record<string, unknown>;
   };
+  assert.doesNotMatch(await readFile(fixture.configPath, "utf8"), /wallet_list/u);
   assert.deepEqual(
     config.mcp_servers["agent-boost"],
     createHermesServerConfig(result.executablePath),
@@ -409,7 +415,7 @@ test("uses native tool names and never encodes Hermes version prefixes", () => {
     "onboarding_start",
     "onboarding_status",
     "wallet_get_context",
-    "wallet_list",
+    "wallet_manage_profiles",
     "wallet_get_tree",
     "wallet_create",
     "wallet_adopt_existing",

@@ -48,7 +48,7 @@ mcp_servers:
         - onboarding_start
         - onboarding_status
         - wallet_get_context
-        - wallet_list
+        - wallet_manage_profiles
         - wallet_get_tree
         - wallet_create
         - wallet_adopt_existing
@@ -189,13 +189,16 @@ confirmation it archives current state, keeps the prior Kohaku wallet, creates
 a new wallet profile, and returns a fresh funding QR. `onboarding_start` alone
 always resumes the current wallet.
 
-`wallet_list` is the selection inventory. It returns registered profiles and,
-when Kohaku inventory is healthy, local unregistered wallets with an explicit
+`wallet_manage_profiles` is the selection inventory. It returns registered
+profiles and, when Kohaku inventory is healthy, local unregistered wallets with an explicit
 Sepolia adoption flag. Hermes speaks only friendly names; internal wallet IDs
 stay in structured model context. `wallet_select` restores an inactive target
 profile's durable setup, advances its selection epoch, and disables prior
 authority. Selecting the already-active profile is an authorization-preserving
 no-op.
+The installer migrates an older `wallet_list` allowlist entry to
+`wallet_manage_profiles`; the old name remains only as a generic MCP
+compatibility alias and is not exposed to Hermes discovery.
 `wallet_plan_reauthorization` plus separately confirmed `wallet_reauthorize`
 mint fresh bounded authority before another transfer can be planned. An
 archived profile retains encrypted data and can be made available by selecting

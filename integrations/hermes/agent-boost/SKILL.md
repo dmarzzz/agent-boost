@@ -1,7 +1,7 @@
 ---
 name: agent-boost
-description: Load wallets, set limits, and send Sepolia ETH in chat.
-version: 0.8.0
+description: Show wallet tree, manage wallets, and send Sepolia ETH.
+version: 0.8.1
 platforms: [macos, linux]
 metadata:
   hermes:
@@ -21,15 +21,16 @@ bridge is the loaded path to Agent Boost:
 2. Describe the exact matching tool or tools.
 3. Invoke them through `tool_call` with the described arguments.
 
-Hermes may render the compact text result and omit `structuredContent`. Agent
-Boost mirrors the exact redacted result under
-`_meta["org.agentboost/model-context"]` for this case. Treat that metadata as
-agent-internal state: use its exact IDs, decisions, blockers, and request state,
-but never quote the metadata or its identifiers to the user. If neither the
-structured result nor this metadata contains a required ID, plan again, display
-the replacement plan, end that turn, and require a new user confirmation. Never
-carry the earlier approval into the replacement plan, and never guess, shorten,
-synthesize, or repair an ID.
+Hermes may render the compact text result and omit `structuredContent`. For
+authority-bearing results, Agent Boost mirrors the exact redacted result under
+`_meta["org.agentboost/model-context"]`. Treat that metadata as agent-internal
+state: use its exact IDs, decisions, blockers, and request state, but never quote
+the metadata or its identifiers to the user. The wallet-tree result is the only
+exception: it has no continuation handle, and that key carries only its
+canonical rendering plus a static direct-display contract. If neither the structured result nor this
+metadata contains a required ID, plan again, display the replacement plan, end
+that turn, and require a new user confirmation. Never carry the earlier approval
+into the replacement plan, and never guess, shorten, synthesize, or repair an ID.
 
 Do not call a catalog-listed Agent Boost name directly while the bridge is
 visible. Do not emit a user-facing reply between those steps. A provisional
@@ -59,20 +60,27 @@ redeemable value.
   profile contains sibling `main` and `private` views; the folders are
   organization, not ownership or control. Main balances and the active private
   balance are live. An inactive private balance is explicitly marked last known.
-- **The tree rule wins.** Never call `wallet_get_context` first—or answer from
-  its result—when the request says wallets plural, all balances, accounts,
-  subwallets, map, or tree. `wallet_get_tree` is the single complete read.
+- **The tree rule wins.** For a direct overview, never call
+  `wallet_get_context` or `wallet_manage_profiles` before or after
+  `wallet_get_tree`. When the request says wallets plural, all balances,
+  accounts, subwallets, map, or tree, the tree is the single complete read.
+- **Plain plural display requests are tree requests.** “Show/list/display my
+  wallets,” “show me my Agent Boost wallets,” and equivalent wording always
+  mean the live tree, even when the user does not say “tree” or “balances.”
+  This rule takes precedence over saved-wallet management.
 - **Saved-wallet management has its own read.** For “which wallet can I load?”,
-  “show saved wallets,” “switch back,” “use the old wallet,” wallet creation,
-  adoption, selection, archival, or authorization status, call `wallet_list`.
+  “which saved profiles are loadable?”, “switch back,” “use the old wallet,”
+  wallet creation, adoption, selection, archival, or authorization status,
+  call `wallet_manage_profiles`. A request must express that management intent;
+  the word “list” alone does not make a wallet overview a management request.
   Use friendly `name` values in chat. Use an exact `wallet_id` only from
   `structuredContent` or `org.agentboost/model-context` when calling a tool;
-  never show it or ask the user to type it. `wallet_list` can also report
-  unregistered local Kohaku wallets that are safe to adopt by name.
+  never show it or ask the user to type it. `wallet_manage_profiles` can also
+  report unregistered local Kohaku wallets that are safe to adopt by name.
 - A load, open, use, or switch request whose friendly name is `agent-boost` is
   still a saved-wallet request, even though it matches this product and skill
-  name. Always call `wallet_list`; if that profile is already active, say it is
-  already loaded and do not ask for confirmation or reauthorization.
+  name. Always call `wallet_manage_profiles`; if that profile is already active,
+  say it is already loaded and do not ask for confirmation or reauthorization.
 - **Every single-account balance is a live read.** For a question specifically
   about the current main wallet balance, ETH held there, funds, available ETH,
   or affordability, call `wallet_get_context` in that same turn. Conversation
@@ -222,28 +230,32 @@ mainnet support or recommend raising them without a user request.
 
 ## Show the wallet tree
 
-For “show my wallets,” “what accounts do I have?”, “wallet tree,” or another
-request for the complete wallet layout, call `wallet_get_tree` instead of
-assembling an answer from history or separate balance reads. Return the exact
-`data.rendered` tree with no preamble unless the user asked another question
-too. The short names are display aliases; never replace them with full or
-truncated addresses. Do not total the rows because the balances occupy distinct
-wallet contexts and a sum would imply spendability that does not exist. Preserve
-the tool's `live`, `last known`, and `unavailable` labels exactly.
+For “show my wallets,” “list my wallets,” “show me my Agent Boost wallets,”
+“what accounts do I have?”, “wallet tree,” or another request for the complete
+wallet layout, call `wallet_get_tree` instead of assembling an answer from
+history, `wallet_manage_profiles`, or separate balance reads. For a direct
+overview, return the tool's text content byte-for-byte; it is already the
+canonical `data.rendered` tree. Add no preamble, code fence, paraphrase,
+comparison, or follow-up offer. The short names are display aliases; never replace them with
+full or truncated addresses. Do not total the rows because the balances occupy
+distinct wallet contexts and a sum would imply spendability that does not exist.
+Preserve the tool's `live`, `last known`, and `unavailable` labels exactly.
 
 ## Manage saved wallets
 
 ### List or load a previous wallet
 
-1. For saved profiles, available wallets, or a request to load, open, use, or
-   switch back to a wallet, call `wallet_list`. Do not substitute
+1. For loadable saved profiles, authorization status, or a request to load,
+   open, use, adopt, archive, or switch back to a wallet, call
+   `wallet_manage_profiles`. A plain “show/list my wallets” request is not this
+   workflow. Do not substitute
    `wallet_get_tree`: the tree is a balance view and intentionally omits the
    internal selection handles.
 2. Resolve the requested friendly name against the returned registered
    profiles. “The old wallet” or “the previous wallet” is unambiguous when
    exactly one inactive registered profile exists. If two or more inactive
-   profiles exist, stop after `wallet_list`, list only their friendly names,
-   ask which one, and do not call `wallet_select`. Never silently choose the
+   profiles exist, stop after `wallet_manage_profiles`, list only their friendly
+   names, ask which one, and do not call `wallet_select`. Never silently choose the
    first profile or guess an internal ID.
 3. If the requested registered profile is already active, do not ask for a
    wallet-switch confirmation and do not call `wallet_select`. If its
@@ -311,7 +323,7 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
   effect and end the turn; after approval call with `user_confirmed: true`, or
   after rejection call with `user_confirmed: false` and report that nothing
   changed. A generic request for another named wallet uses `wallet_create`.
-- To archive a named inactive profile, call `wallet_list`, show the exact
+- To archive a named inactive profile, call `wallet_manage_profiles`, show the exact
   friendly name and retention effects, and end the turn. On the next explicit
   chat approval call `wallet_archive` with `wallet_name` and
   `user_confirmed: true`. The active profile cannot be archived; switch first.

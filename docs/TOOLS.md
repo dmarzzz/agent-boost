@@ -21,8 +21,8 @@ How a payment works, in the order the tools are called:
    on-chain balance, delegation state, and live Tor route status.
 4. `wallet_get_tree` renders every available wallet profile as one canonical,
    address-free folder tree with honest balance freshness labels.
-5. `wallet_list`, `wallet_create`, `wallet_adopt_existing`, `wallet_select`,
-   and `wallet_archive` provide the complete local profile lifecycle. Selecting
+5. `wallet_manage_profiles`, `wallet_create`, `wallet_adopt_existing`,
+   `wallet_select`, and `wallet_archive` provide the complete local profile lifecycle. Selecting
    a prior profile restores its durable setup but disables signing until
    `wallet_plan_reauthorization` and `wallet_reauthorize` are separately
    confirmed.
@@ -65,7 +65,8 @@ public archive ID and a new QR, never a path or a secret.
 | `onboarding_status` | `setup_id`, `since_revision`, `wait_ms` | latest durable state, or waits for a newer revision |
 | `wallet_get_context` | optional `amount_native` affordability comparison | main address and live balance, delegation, route status |
 | `wallet_get_tree` | none | address-free profile tree, decimal balances, freshness labels |
-| `wallet_list` | none | registered profiles with setup/authorization state, plus unregistered local Kohaku wallets that may be adopted |
+| `wallet_manage_profiles` | none | registered profiles with setup/authorization state, plus unregistered local Kohaku wallets that may be adopted |
+| `wallet_list` | none | compatibility alias for older MCP clients; Hermes does not expose it |
 | `wallet_create` | friendly `name`, confirmation | newly selected named wallet and setup state |
 | `wallet_adopt_existing` | exact local `name`, confirmation | registered and selected Sepolia wallet; never accepts secrets or paths |
 | `wallet_select` | friendly `wallet_name` (`name` and friendly `wallet_id` tolerated), chat confirmation | restored profile state; a real switch disables stale authority, while selecting the already-active wallet preserves active authorization |

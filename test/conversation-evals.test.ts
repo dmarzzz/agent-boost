@@ -80,6 +80,7 @@ interface EvalFlow {
   id: string;
   title: string;
   scenario: Scenario;
+  skill_loading?: "progressive";
   steps: Array<UserStep | AssistantStep | ToolStep>;
 }
 
@@ -128,19 +129,20 @@ const expectedToolTraces: Record<string, string[]> = {
   "cancel-new-demo-wallet": ["wallet_start_new_demo"],
   "advanced-setup-shows-live-policy": ["wallet_get_policy"],
   "wallet-tree-without-identifiers": ["wallet_get_tree"],
-  "saved-wallet-inventory": ["wallet_list"],
-  "already-active-wallet-needs-no-switch": ["wallet_list"],
-  "ambiguous-old-wallet": ["wallet_list"],
+  "plain-wallet-overview-uses-tree": ["wallet_get_tree"],
+  "saved-wallet-inventory": ["wallet_manage_profiles"],
+  "already-active-wallet-needs-no-switch": ["wallet_manage_profiles"],
+  "ambiguous-old-wallet": ["wallet_manage_profiles"],
   "load-and-reauthorize-previous-wallet": [
-    "wallet_list",
+    "wallet_manage_profiles",
     "wallet_select",
     "wallet_plan_reauthorization",
     "wallet_reauthorize",
   ],
-  "cancel-wallet-switch": ["wallet_list"],
-  "adopt-local-wallet": ["wallet_list", "wallet_adopt_existing"],
+  "cancel-wallet-switch": ["wallet_manage_profiles"],
+  "adopt-local-wallet": ["wallet_manage_profiles", "wallet_adopt_existing"],
   "create-named-wallet": ["wallet_create"],
-  "archive-inactive-wallet": ["wallet_list", "wallet_archive"],
+  "archive-inactive-wallet": ["wallet_manage_profiles", "wallet_archive"],
   "ambiguous-amount-clarification": [],
   "confirmed-payment-with-emoji": [
     "capabilities",
@@ -215,7 +217,7 @@ const forbiddenVisiblePatterns = [
   /\bwei\b/iu,
   /(?:native|external)[^\n]*(?:approval|confirmation|interface|surface|UI)/iu,
   /\b(?:decision_id|request_id|client_request_id|user_confirmed|amount_atomic|amount_native|manifest_digest|setupId)\b/iu,
-  /\b(?:wallet_get_context|wallet_list|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_start_new_demo|wallet_create|wallet_adopt_existing|wallet_select|wallet_archive|wallet_plan_reauthorization|wallet_reauthorize|wallet_plan_regular_transfer|wallet_execute_regular_transfer|wallet_get_regular_transfer_request|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|wallet_plan_recovery_transfer|wallet_execute_recovery_transfer|wallet_get_recovery_request|egress_status|egress_fetch)\b/iu,
+  /\b(?:wallet_get_context|wallet_manage_profiles|wallet_list|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_start_new_demo|wallet_create|wallet_adopt_existing|wallet_select|wallet_archive|wallet_plan_reauthorization|wallet_reauthorize|wallet_plan_regular_transfer|wallet_execute_regular_transfer|wallet_get_regular_transfer_request|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|wallet_plan_recovery_transfer|wallet_execute_recovery_transfer|wallet_get_recovery_request|egress_status|egress_fetch)\b/iu,
   /\b(?:private key|seed phrase|wallet password)\b/iu,
   /\b(?:wallet_|wra_|wr_|wrr_|rwd_|rreq_|wd_|wpd_|req_|sha256:)[A-Za-z0-9._:-]*/u,
 ];
@@ -892,6 +894,9 @@ test("ideal conversation flows replay through the real MCP contract", async (t) 
   for (const flow of catalog.flows) {
     await t.test(flow.id, async () => {
       assert.equal(typeof flow.title, "string");
+      if (flow.skill_loading !== undefined) {
+        assert.equal(flow.skill_loading, "progressive");
+      }
       assert.ok(flow.steps[0]?.actor === "user", `${flow.id}: first step must be user`);
       assert.ok(
         flow.steps.some((step) => step.actor === "assistant"),

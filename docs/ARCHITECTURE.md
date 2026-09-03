@@ -84,7 +84,7 @@ diagnosis rather than an automatic retry.
 ## Payment flow
 
 ```text
-wallet_list
+wallet_manage_profiles
   → select a registered friendly wallet name or adopt a local Sepolia name
   → confirmation → restore durable wallet state + disable stale authority
   → wallet_plan_reauthorization

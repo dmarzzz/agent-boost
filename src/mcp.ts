@@ -762,6 +762,7 @@ function buildPresentation(
 
   if (code === "WALLET_TREE") {
     const profiles = Array.isArray(data.profiles) ? data.profiles.length : 0;
+    const rendered = stringField(data, "rendered") ?? "The live wallet map is unavailable.";
     return {
       version: "1.0",
       kind: "status",
@@ -773,9 +774,9 @@ function buildPresentation(
       ],
       notice: {
         tone: "info",
-        text: "Friendly names and balances only—no addresses or wallet IDs.",
+        text: rendered,
       },
-      next_action: "Show the exact rendered wallet tree.",
+      next_action: "The rendered tree is the complete wallet overview.",
     };
   }
 
@@ -797,14 +798,24 @@ function result(
   structured: Record<string, unknown>,
   qrPngBase64?: string,
 ): CallToolResult {
+  const treeRendered = structured.code === "WALLET_TREE"
+    ? stringField(asRecord(structured.data), "rendered")
+    : undefined;
   return {
     structuredContent: structured,
     _meta: {
       // Hermes intentionally lets rendered text win over structuredContent,
-      // but preserves vendor metadata alongside that text. Mirror the exact
-      // redacted result here so multi-turn continuation handles survive that
-      // arbitration without putting internal IDs in user-displayable content.
-      "org.agentboost/model-context": structured,
+      // but preserves vendor metadata alongside that text. Authority-bearing
+      // results mirror the exact redacted envelope so continuation handles
+      // survive that arbitration. A tree has no continuation handles, so give
+      // weak models only the canonical rendering contract they need.
+      "org.agentboost/model-context": treeRendered === undefined
+        ? structured
+        : {
+            response_mode: "verbatim",
+            rendered: treeRendered,
+            instruction: "DIRECT OVERVIEW: This tool fully answers the request. Call no other tool. Reply now by copying rendered byte-for-byte, beginning with 🗂; the final period in rendered MUST be the last character. Do not introduce, summarize, count, explain, bullet, fence, or offer help. ONBOARDING OR ANOTHER LARGER WORKFLOW: Insert rendered byte-for-byte inside that workflow's required response.",
+          },
     },
     content: [
       { type: "text", text: compactToolText(structured) },
@@ -867,7 +878,7 @@ function compactToolText(structured: Record<string, unknown>): string {
       return `Funding needed: ${remaining} Sepolia ETH to ${address}. A QR is attached when available. After sending, the user can reply ✅ or say sent.`;
     }
     if (phase === "private_ready") {
-      return "Setup ready for private Sepolia payments. Reply with one concise confirmation.";
+      return "Setup ready: private_ready reached, but do not answer yet. Verify capabilities in this turn; once RPC egress is ready, call wallet_get_tree and insert its exact rendered tree in the full 3/3 setup-completion response. Do not show the funding address, raw setup balances, or an invented balance summary.";
     }
     return `Setup status: ${phase}. Use the structured status internally and give the user only the next action.`;
   }
@@ -913,7 +924,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     const inventoryWarning = inventoryStatus === "unavailable"
       ? " Local Kohaku discovery is temporarily unavailable; registered wallets are still selectable."
       : "";
-    return `${registeredSummary}${localSummary}${inventoryWarning} Select or archive registered wallets by friendly name. Internal wallet IDs are only a compatibility detail from org.agentboost/model-context; never show or ask the user for them. No signing material was read or returned.`;
+    return `Saved-wallet management inventory only—not the general wallet overview. For a plain “show/list my wallets,” “show me my Agent Boost wallets,” wallets-plural, accounts, all balances, map, or tree request, do not answer from this flat inventory: perform the live wallet-tree read now and return its exact text. Use this inventory only to load, switch, select, adopt, archive, or inspect authorization status. ${registeredSummary}${localSummary}${inventoryWarning} Select or archive registered wallets by friendly name. Internal wallet IDs are only a compatibility detail from org.agentboost/model-context; never show or ask the user for them. No signing material was read or returned.`;
   }
 
   if (
@@ -1002,7 +1013,7 @@ function compactToolText(structured: Record<string, unknown>): string {
   if (code === "WALLET_TREE") {
     const rendered = stringField(data, "rendered");
     return rendered
-      ? `Live wallet map. For a direct tree request, the entire final answer must be data.rendered exactly—no preamble, code fence, comparison with history, address, or follow-up offer. During onboarding, embed it only in the instructed completion template:\n${rendered}`
+      ? rendered
       : "The live wallet map is unavailable.";
   }
 
@@ -1355,29 +1366,30 @@ function formatTreeEthWei(wei: bigint): string {
 
 function publicWalletTree(snapshot: WalletTreeSnapshot): Record<string, unknown> {
   const lines = ["🗂 wallets/"];
+  const indentation = "\u00a0\u00a0\u00a0\u00a0";
   for (const [index, profile] of snapshot.profiles.entries()) {
     const privateWallet = profile.subwallets[0];
     if (!privateWallet) {
       throw new Error("WALLET_TREE_CONTRACT_VIOLATION: missing private wallet");
     }
     const lastProfile = index === snapshot.profiles.length - 1;
-    const branch = lastProfile ? "`--" : "|--";
-    const childPrefix = lastProfile ? "    " : "|   ";
+    const branch = lastProfile ? "└──" : "├──";
+    const childPrefix = lastProfile ? indentation : "│\u00a0\u00a0\u00a0";
     lines.push(
       `${branch} 💼 ${profile.shortName}/${profile.active ? " [active]" : ""}`,
-      `${childPrefix}|-- 🌐 ${profile.main.shortName}/      ${walletTreeBalance(
+      `${childPrefix}├── 🌐 ${profile.main.shortName}/ — ${walletTreeBalance(
         profile.main.balanceWei,
         profile.main.status,
         profile.main.freshness,
       )}`,
-      `${childPrefix}\`-- 🥷 ${privateWallet.shortName}/   ${walletTreeBalance(
+      `${childPrefix}└── 🥷 ${privateWallet.shortName}/ — ${walletTreeBalance(
         privateWallet.balanceWei,
         privateWallet.status,
         privateWallet.freshness,
       )}`,
     );
   }
-  if (snapshot.profiles.length === 0) lines.push("`-- no available wallet profiles");
+  if (snapshot.profiles.length === 0) lines.push("└── no available wallet profiles");
   lines.push("", "Folders organize wallet views; they do not imply custody or control.");
   return {
     rendered: lines.join("\n"),
@@ -1860,30 +1872,44 @@ export async function createMcpServer(
     },
   );
 
+  const walletInventoryHandler = async () => {
+    try {
+      return result(envelope(digest, "ready", "WALLET_LIST", await runtime.listWallets()));
+    } catch (error) {
+      return domainError(digest, error);
+    }
+  };
+
   server.registerTool(
-    "wallet_list",
+    "wallet_manage_profiles",
     {
-      title: "List local wallet profiles",
+      title: "Manage saved wallet profiles",
       description:
-        "List redacted local Sepolia wallet profiles, active/archived status, selection epoch, and authorization state. Reads no seed, password, private key, or private note material.",
+        "SAVED-PROFILE MANAGEMENT ONLY—not the general overview. Use this only for load, open, switch, select, adopt, archive, or authorization-status workflows, including “Which wallets can I load?” Generic wallet overviews belong to wallet_get_tree. Returns redacted local Sepolia profiles, active/archived status, selection epoch, authorization state, and adoptable local wallets. Reads no seed, password, private key, or private note material.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async () => {
-      try {
-        return result(envelope(digest, "ready", "WALLET_LIST", await runtime.listWallets()));
-      } catch (error) {
-        return domainError(digest, error);
-      }
+    walletInventoryHandler,
+  );
+
+  server.registerTool(
+    "wallet_list",
+    {
+      title: "Legacy saved-wallet inventory alias",
+      description:
+        "COMPATIBILITY ALIAS for existing clients. New Hermes workflows use wallet_manage_profiles for load, switch, select, adopt, archive, and authorization status. Generic wallet overviews belong to wallet_get_tree. Returns the same redacted management inventory and no signing material.",
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
+    walletInventoryHandler,
   );
 
   server.registerTool(
     "wallet_get_tree",
     {
-      title: "Show the live wallet tree",
+      title: "Show or list all Agent Boost wallets as a tree",
       description:
-        "EXCLUSIVE TREE TOOL: Call this—and not wallet_get_context—whenever the user asks to see all wallets or balances, accounts, subwallets, their wallet map, or a wallet tree. It refreshes every available profile's main balance and the active profile's private balance, then returns one deterministic ASCII-style tree with friendly short names. For a direct tree request, the entire final answer is data.rendered exactly: no preamble, code fence, history comparison, or follow-up offer. Inactive private balances are explicitly labeled last known. Addresses, wallet IDs, raw atomic values, and secrets are intentionally excluded. The folders organize views only; they never imply custody or control.",
+        "WALLET OVERVIEW TOOL. Use this to show or list all wallets, including “Show me my Agent Boost wallets,” “show my wallets,” “list my wallets,” or any request to display wallets plural, accounts, subwallets, all balances, wallet overview, wallet map, or wallet tree. This is the correct tool even when the user says “list”: wallet_manage_profiles is only for saved-profile management such as load, switch, adopt, or archive. For a direct overview, do not call wallet_get_context or wallet_manage_profiles before or after this tool; this is the complete overview. This refreshes every available profile's main balance and the active profile's private balance, then returns one deterministic Markdown-safe Unicode tree with friendly short names. The text content is already the exact canonical tree; return it byte-for-byte with no preamble, code fence, paraphrase, history comparison, or follow-up offer. Inactive private balances are explicitly labeled last known. Addresses, wallet IDs, raw atomic values, and secrets are intentionally excluded. The folders organize views only; they never imply custody or control.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
