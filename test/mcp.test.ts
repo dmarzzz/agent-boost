@@ -241,19 +241,46 @@ function fakeRuntime(): AgentBoostRuntime {
       };
     },
     async listWallets() {
-      return { active_wallet_id: AUTHORIZATION.walletId, wallets: [] };
+      return {
+        active_wallet_id: AUTHORIZATION.walletId,
+        wallets: [
+          {
+            wallet_id: AUTHORIZATION.walletId,
+            name: "agent-boost",
+            status: "available",
+            active: true,
+            authorization_status: "active",
+          },
+          {
+            wallet_id: "wallet_87654321",
+            name: "saved-wallet",
+            status: "available",
+            active: false,
+            authorization_status: "inactive",
+          },
+        ],
+        unregistered_local_wallets: [],
+        local_inventory_status: "ready",
+        counts: {
+          registered: 2,
+          available: 2,
+          archived: 0,
+          unregistered_local: 0,
+          adoptable_local: 0,
+        },
+      };
     },
-    async createWallet() {
-      return { authorization_required: true };
+    async createWallet(input) {
+      return { wallet: { name: input.name }, authorization_required: true };
     },
-    async adoptWallet() {
-      return { authorization_required: true };
+    async adoptWallet(input) {
+      return { wallet: { name: input.name }, authorization_required: true };
     },
     async selectWallet() {
-      return { authorization_required: true };
+      return { wallet: { name: "saved-wallet" }, authorization_required: true };
     },
     async archiveWallet() {
-      return {};
+      return { wallet: { name: "saved-wallet" } };
     },
     async planWalletReauthorization() {
       const currentPolicy = {
@@ -289,7 +316,7 @@ function fakeRuntime(): AgentBoostRuntime {
       return this.planWalletReauthorization();
     },
     async reauthorizeWallet() {
-      return {};
+      return { wallet: { name: "agent-boost" } };
     },
     async planRegularTransfer(input) {
       return {
@@ -1192,6 +1219,123 @@ test("MCP regular transfer confirmation stays on the public path", async () => {
   }
 });
 
+test("wallet lifecycle confirmations use friendly names and keep internal IDs out of text", async () => {
+  const runtime = fakeRuntime();
+  const prompts: string[] = [];
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client(
+    { name: "wallet-lifecycle-elicitation-test", version: "1.0.0" },
+    { capabilities: { elicitation: { form: {} } } },
+  ));
+  client.setRequestHandler(ElicitRequestSchema, async (request) => {
+    prompts.push(request.params.message);
+    return { action: "accept", content: {} };
+  });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const list = await client.callTool({ name: "wallet_list", arguments: {} });
+    const listText = list.content.find((block) => block.type === "text");
+    assert.equal(listText?.type, "text");
+    assert.match(listText.text, /saved-wallet/u);
+    assert.doesNotMatch(listText.text, /wallet_[A-Za-z0-9-]+/u);
+
+    const selected = await client.callTool({
+      name: "wallet_select",
+      arguments: { wallet_id: "wallet_87654321" },
+    });
+    const selectedText = selected.content.find((block) => block.type === "text");
+    assert.equal(selectedText?.type, "text");
+    assert.match(selectedText.text, /saved-wallet is now selected/u);
+    assert.doesNotMatch(selectedText.text, /wallet_[A-Za-z0-9-]+/u);
+
+    const plan = await client.callTool({
+      name: "wallet_plan_reauthorization",
+      arguments: {},
+    });
+    assert.equal(
+      (plan.structuredContent as { code: string }).code,
+      "WALLET_REAUTHORIZATION_PLANNED",
+    );
+    const reauthorized = await client.callTool({
+      name: "wallet_reauthorize",
+      arguments: { decision_id: "wra_12345678" },
+    });
+    assert.equal(
+      (reauthorized.structuredContent as { code: string }).code,
+      "WALLET_REAUTHORIZED",
+    );
+
+    assert.equal(prompts.length, 2);
+    assert.match(prompts[0]!, /saved-wallet/u);
+    assert.doesNotMatch(prompts[0]!, /wallet_[A-Za-z0-9-]+/u);
+    assert.match(prompts[1]!, /agent-boost/u);
+    assert.match(prompts[1]!, /0\.1 Sepolia ETH max each/u);
+    assert.match(prompts[1]!, /0\.1 Sepolia ETH total/u);
+    assert.doesNotMatch(prompts[1]!, /\bwei\b/u);
+    assert.doesNotMatch(prompts[1]!, /(?:wallet_|wra_)[A-Za-z0-9-]+/u);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("declined wallet reauthorization and recovery confirmations cause no execution", async () => {
+  const runtime = fakeRuntime();
+  let reauthorizationCalls = 0;
+  let recoveryCalls = 0;
+  runtime.reauthorizeWallet = async () => {
+    reauthorizationCalls += 1;
+    throw new Error("must not reauthorize after decline");
+  };
+  runtime.executeRecoveryTransfer = async () => {
+    recoveryCalls += 1;
+    throw new Error("must not recover after decline");
+  };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client(
+    { name: "wallet-lifecycle-decline-test", version: "1.0.0" },
+    { capabilities: { elicitation: { form: {} } } },
+  ));
+  client.setRequestHandler(ElicitRequestSchema, async () => ({ action: "decline" }));
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const reauthorization = await client.callTool({
+      name: "wallet_reauthorize",
+      arguments: { decision_id: "wra_12345678" },
+    });
+    const reauthorizationResult = reauthorization.structuredContent as {
+      code: string;
+      presentation: { state: string };
+    };
+    assert.equal(reauthorizationResult.code, "WALLET_REAUTHORIZATION_CONFIRMATION_REQUIRED");
+    assert.equal(reauthorizationResult.presentation.state, "cancelled");
+    const reauthorizationText = reauthorization.content.find((block) => block.type === "text");
+    assert.equal(reauthorizationText?.type, "text");
+    assert.match(reauthorizationText.text, /reauthorization cancelled/u);
+
+    const recovery = await client.callTool({
+      name: "wallet_execute_recovery_transfer",
+      arguments: { decision_id: "wr_12345678" },
+    });
+    const recoveryResult = recovery.structuredContent as {
+      code: string;
+      presentation: { state: string };
+    };
+    assert.equal(recoveryResult.code, "RECOVERY_CONFIRMATION_REQUIRED");
+    assert.equal(recoveryResult.presentation.state, "cancelled");
+    const recoveryText = recovery.content.find((block) => block.type === "text");
+    assert.equal(recoveryText?.type, "text");
+    assert.match(recoveryText.text, /Recovery transfer cancelled/u);
+    assert.equal(reauthorizationCalls, 0);
+    assert.equal(recoveryCalls, 0);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("every shipped MCP tool has at least two contract-level flows", async () => {
   const runtime = fakeRuntime();
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -1416,7 +1560,22 @@ test("every shipped MCP tool has at least two contract-level flows", async () =>
     expectCode(await exercise("wallet_list", "empty inventory"), "WALLET_LIST", "ready");
     runtime.listWallets = async () => ({
       active_wallet_id: AUTHORIZATION.walletId,
-      wallets: [{ short_name: "agent-boost", active: true }],
+      wallets: [
+        {
+          wallet_id: AUTHORIZATION.walletId,
+          name: "agent-boost",
+          active: true,
+          status: "available",
+          authorization_status: "active",
+        },
+        {
+          wallet_id: "wallet_87654321",
+          name: "saved-wallet",
+          active: false,
+          status: "available",
+          authorization_status: "inactive",
+        },
+      ],
     });
     expectCode(await exercise("wallet_list", "active inventory"), "WALLET_LIST", "ready");
 

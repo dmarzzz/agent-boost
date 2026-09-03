@@ -20,8 +20,9 @@ It is not a guarantee of anonymity.
   model-provider, Matrix, browser, and all other process traffic remain outside
   that covered request.
 - A fresh or stealth address alone does not hide its funding transaction.
-- Demo reset archives prior state and retains old Kohaku wallet data locally,
-  but Agent Boost still has no seed export or guided wallet-recovery UX.
+- Demo reset archives prior state and retains old Kohaku wallet data locally.
+  Saved profiles can be selected again and exact private amounts can be
+  recovered after separate confirmation, but Agent Boost never exports a seed.
 - Recipient-balance-delta confirmation proves delivery of at least the amount;
   it is not cryptographic attribution when unrelated concurrent transfers are
   possible.

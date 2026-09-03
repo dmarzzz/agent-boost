@@ -722,16 +722,56 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return this.#regularTransfers.getRequest(requestId).then(publicRegularTransferRequest);
   }
 
-  async listWallets(): Promise<Record<string, unknown>> {
+  listWallets(): Promise<Record<string, unknown>> {
+    return this.#withWalletOperation(() => this.#listWalletsUnlocked());
+  }
+
+  async #listWalletsUnlocked(): Promise<Record<string, unknown>> {
     const state = await this.#store.read();
-    const profiles = Object.values(state.wallet?.profiles ?? {});
-    const wallets = profiles.map((profile) => publicWalletProfile(
-      profile,
-      state,
-    ));
+    const profiles = Object.values(state.wallet?.profiles ?? {}).sort((left, right) => {
+      if (left.walletId === state.wallet?.activeWalletId) return -1;
+      if (right.walletId === state.wallet?.activeWalletId) return 1;
+      if (left.status !== right.status) return left.status === "available" ? -1 : 1;
+      return left.name.localeCompare(right.name);
+    });
+    const wallets = profiles.map((profile) => publicWalletProfile(profile, state));
+    const registeredNames = new Set(profiles.map((profile) => profile.name));
+    let localInventoryStatus: "ready" | "unavailable" | "unsupported" = "unsupported";
+    let unregisteredLocalWallets: Array<{
+      name: string;
+      network: "sepolia" | "mainnet" | "unknown";
+      adoptable: boolean;
+    }> = [];
+    if (this.#wallet.listWallets) {
+      try {
+        const inventory = await this.#wallet.listWallets();
+        localInventoryStatus = "ready";
+        unregisteredLocalWallets = inventory
+          .filter((wallet) => !registeredNames.has(wallet.name))
+          .sort((left, right) => left.name.localeCompare(right.name))
+          .map((wallet) => ({
+            name: wallet.name,
+            network: wallet.network,
+            adoptable: wallet.network === "sepolia",
+          }));
+      } catch {
+        // Registered profiles remain selectable even if Kohaku inventory is
+        // temporarily unreadable. Adoption fails closed until it is healthy.
+        localInventoryStatus = "unavailable";
+      }
+    }
     return {
       active_wallet_id: wallets.find((wallet) => wallet.active)?.wallet_id,
       wallets,
+      unregistered_local_wallets: unregisteredLocalWallets,
+      local_inventory_status: localInventoryStatus,
+      counts: {
+        registered: wallets.length,
+        available: wallets.filter((wallet) => wallet.status === "available").length,
+        archived: wallets.filter((wallet) => wallet.status === "archived").length,
+        unregistered_local: unregisteredLocalWallets.length,
+        adoptable_local: unregisteredLocalWallets.filter((wallet) => wallet.adoptable).length,
+      },
     };
   }
 

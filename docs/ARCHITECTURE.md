@@ -84,10 +84,18 @@ diagnosis rather than an automatic retry.
 ## Payment flow
 
 ```text
+wallet_list
+  → select registered wallet ID or adopt a local Sepolia name
+  → confirmation → restore durable wallet state + disable stale authority
+  → wallet_plan_reauthorization
+  → separate confirmation → wallet_reauthorize
+
 wallet_get_context
   → live main account address + its on-chain balance
   → wallet_get_policy / wallet_plan_policy_update
   → separate confirmation → wallet_apply_policy_update
+  → wallet_plan_regular_transfer(recipient, amount)
+    → confirmation → public main-account transfer → durable status
   → wallet_plan_private_payment(recipient, amount)
   → native one-shot confirmation of immutable plan
     ↳ structured readback + verbal confirmation only if elicitation is unavailable
@@ -96,6 +104,10 @@ wallet_get_context
   → submitted
   → transaction receipt or recipient balance delta verified
   → confirmed
+
+wallet_plan_recovery_transfer(recipient, exact amount)
+  → separate confirmation → exact unshield + public tail call
+  → durable status; unresolved results are never replaced
 ```
 
 The plan checks balance and policy but creates no side effect. Immediately
@@ -163,6 +175,12 @@ creates a new Kohaku profile, writes the complete prior state into a private
 archive directory, atomically replaces active state with the new profile, and
 starts onboarding. The old wallet and request history are retained locally;
 none of their side effects are replayed.
+
+Selecting a retained profile follows the same drain-and-archive boundary, then
+restores that profile's onboarding state, increments its selection epoch, and
+deletes prior signing authority. A separately confirmed reauthorization is
+required before another regular or private transfer can be planned. Archived
+profiles retain encrypted data and become available again when selected.
 
 The Kohaku installation is built from a fixed commit in a staging directory,
 verified, hashed, and atomically renamed into place. An unmanaged target is
