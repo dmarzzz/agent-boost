@@ -702,6 +702,10 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
     policyPlanText?.type === "text" ? policyPlanText.text : "",
     /permission only(?:—|-)it does not move funds/u,
   );
+  assert.match(
+    policyPlanText?.type === "text" ? policyPlanText.text : "",
+    /end this turn[\s\S]*new user message/u,
+  );
   assert.doesNotMatch(
     policyPlanText?.type === "text" ? policyPlanText.text : "",
     /wpd_/u,

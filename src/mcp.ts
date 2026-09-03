@@ -555,7 +555,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     if (code === "POLICY_UPDATE_DENIED") {
       return `Wallet policy change blocked: ${formatPolicyText(proposed)}.${formatBlockers(plan)} Explain the blocker in plain language and do not show internal IDs.`;
     }
-    return `Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes; after approval the agent must apply the exact decision from org.agentboost/model-context and must never invent an ID.`;
+    return `Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes, then end this turn. Do not call wallet_apply_policy_update until a new user message confirms the preview. After that approval, apply the exact decision from org.agentboost/model-context and never invent an ID.`;
   }
 
   if (code === "POLICY_UPDATED") {
@@ -1665,7 +1665,7 @@ export async function createMcpServer(
     {
       title: "Apply an approved wallet permission change",
       description:
-        "The agent—not the user—calls this only after showing the exact permission card from wallet_plan_policy_update and receiving ordinary confirmation such as yes or ✅. This changes local delegated authority but never sends funds, moves funds, changes networks, enables mainnet, or exposes keys. Never ask the user for tool syntax, an ID, or a boolean.",
+        "The agent—not the user—calls this only after showing the exact permission card from wallet_plan_policy_update, ending that turn, and receiving ordinary confirmation such as yes or ✅ in a new user message. Never call this in the same turn as wallet_plan_policy_update or use native tool elicitation as a substitute for the chat confirmation. This changes local delegated authority but never sends funds, moves funds, changes networks, enables mainnet, or exposes keys. Never ask the user for tool syntax, an ID, or a boolean.",
       inputSchema: z.object({
         decision_id: z.string().startsWith("wpd_"),
         user_confirmed: z.boolean().optional(),

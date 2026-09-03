@@ -50,7 +50,10 @@ const WALLET = "0x1111111111111111111111111111111111111111";
 const RECIPIENT = "0x2222222222222222222222222222222222222222";
 const DECISION_ID = "wd_eval_12345678";
 const REQUEST_ID = "req_eval_12345678";
-const NOW = "2026-09-01T00:00:00.000Z";
+const nowMs = Date.now();
+const NOW = new Date(nowMs).toISOString();
+const DEFAULT_EXPIRY = new Date(nowMs + 7 * 24 * 60 * 60_000).toISOString();
+const PLAN_EXPIRY = new Date(nowMs + 5 * 60_000).toISOString();
 
 function approval(): PaymentApproval {
   if (scenario === "payment-denied" || scenario === "payment-expired") return "deny";
@@ -82,7 +85,7 @@ function onboarding(phase: OnboardingRecord["phase"]): OnboardingRecord {
       lifetimeLimitWei: "50000000000000000",
       spentWei: "0",
       maxPayments: 1,
-      expiresAt: "2026-09-02T00:00:00.000Z",
+      expiresAt: DEFAULT_EXPIRY,
       enabled: true,
     },
     ...(phase === "failed"
@@ -268,7 +271,7 @@ const runtime: AgentBoostRuntime = {
       },
       authorizationId: "auth_eval_12345678",
       createdAt: NOW,
-      expiresAt: "2026-09-01T00:05:00.000Z",
+      expiresAt: PLAN_EXPIRY,
       current,
       proposed: {
         ...current,
@@ -323,7 +326,7 @@ const runtime: AgentBoostRuntime = {
       amountWei: input.amountWei,
       intentDigest: `sha256:${"0".repeat(64)}`,
       createdAt: NOW,
-      expiresAt: "2026-09-01T00:05:00.000Z",
+      expiresAt: PLAN_EXPIRY,
       decision: denied ? "deny" : "allow",
       blockers: scenario === "payment-expired"
         ? ["DELEGATION_EXPIRED"]
@@ -347,7 +350,7 @@ const runtime: AgentBoostRuntime = {
       amountWei: "10000000000000000",
       intentDigest: `sha256:${"0".repeat(64)}`,
       createdAt: NOW,
-      expiresAt: "2026-09-01T00:05:00.000Z",
+      expiresAt: PLAN_EXPIRY,
       decision: denied ? "deny" : "allow",
       blockers: scenario === "payment-expired"
         ? ["DELEGATION_EXPIRED"]
