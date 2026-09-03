@@ -605,12 +605,13 @@
             "max_payments": 10,
             "per_payment_limit_native": "1"
           },
-          "expect": {
-            "code": "POLICY_UPDATE_PLANNED",
-            "outcome": "ready",
+        "expect": {
+          "code": "POLICY_UPDATE_PLANNED",
+          "outcome": "ready",
             "text_includes": ["up to 10 payments", "1 Sepolia ETH each", "10 Sepolia ETH total", "permission only", "does not move funds"],
-            "image": false
-          }
+          "image": false,
+          "presentation": {"kind": "confirmation", "state": "pending"}
+        }
         },
         {
           "actor": "assistant",

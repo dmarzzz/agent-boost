@@ -698,9 +698,21 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   }).data.plan.proposed;
   assert.equal(plannedPolicy.perPaymentLimitWei, "1000000000000000000");
   const policyPlanText = policyPlan.content.find((block) => block.type === "text");
+  const policyPlanEnvelope = policyPlan.structuredContent as {
+    data: { applied: boolean; requires_new_user_confirmation: boolean };
+    presentation: { kind: string; state: string };
+  };
+  assert.equal(policyPlanEnvelope.data.applied, false);
+  assert.equal(policyPlanEnvelope.data.requires_new_user_confirmation, true);
+  assert.equal(policyPlanEnvelope.presentation.kind, "confirmation");
+  assert.equal(policyPlanEnvelope.presentation.state, "pending");
   assert.match(
     policyPlanText?.type === "text" ? policyPlanText.text : "",
     /permission only(?:—|-)it does not move funds/u,
+  );
+  assert.match(
+    policyPlanText?.type === "text" ? policyPlanText.text : "",
+    /PREVIEW ONLY (?:—|-) NOT APPLIED/u,
   );
   assert.match(
     policyPlanText?.type === "text" ? policyPlanText.text : "",

@@ -140,6 +140,8 @@ Tor fail-closed routing, delegation limits, expiry, or adapter readiness.
    Reply ✅ or say yes to approve.
    ```
 
+   This is a preview, not a receipt. Never use a success checkmark or say
+   `updated`, `applied`, or `successful` before `POLICY_UPDATED` is returned.
    If the main balance was part of the conversation, add one short sentence:
    `Your main balance will not move into the private pocket.`
    End the turn after this preview. Never call `wallet_apply_policy_update` in

@@ -341,6 +341,39 @@ function buildPresentation(
     };
   }
 
+  if (
+    code === "POLICY_UPDATE_PLANNED" ||
+    code === "POLICY_UPDATE_DENIED" ||
+    code === "POLICY_UPDATE_CONFIRMATION_REQUIRED" ||
+    code === "POLICY_UPDATED"
+  ) {
+    const applied = code === "POLICY_UPDATED";
+    const denied = code === "POLICY_UPDATE_DENIED";
+    return {
+      version: "1.0",
+      kind: applied ? "receipt" : denied ? "status" : "confirmation",
+      title: applied
+        ? "Permission updated"
+        : denied
+          ? "Permission change blocked"
+          : "New wallet permission",
+      state: applied ? "complete" : denied ? "attention" : "pending",
+      notice: {
+        tone: denied ? "warning" : "info",
+        text: applied
+          ? "The permission changed. No funds moved."
+          : denied
+            ? "The permission was not changed."
+            : "Preview only—not applied. No funds will move.",
+      },
+      next_action: applied
+        ? "Report the applied permission receipt."
+        : denied
+          ? "Explain the blocker; do not request approval."
+          : "Show the preview, end the turn, and wait for a new user confirmation message.",
+    };
+  }
+
   if (code === "PAYMENT_REQUEST" || code === "PAYMENT_STATUS") {
     const request = asRecord(data.request);
     const phase = stringField(request, "phase") ?? outcome;
@@ -555,7 +588,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     if (code === "POLICY_UPDATE_DENIED") {
       return `Wallet policy change blocked: ${formatPolicyText(proposed)}.${formatBlockers(plan)} Explain the blocker in plain language and do not show internal IDs.`;
     }
-    return `Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes, then end this turn. Do not call wallet_apply_policy_update until a new user message confirms the preview. After that approval, apply the exact decision from org.agentboost/model-context and never invent an ID.`;
+    return `PREVIEW ONLY — NOT APPLIED. Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes, then end this turn. Do not call wallet_apply_policy_update until a new user message confirms the preview. After that approval, apply the exact decision from org.agentboost/model-context and never invent an ID.`;
   }
 
   if (code === "POLICY_UPDATED") {
@@ -566,7 +599,7 @@ function compactToolText(structured: Record<string, unknown>): string {
   if (code === "POLICY_UPDATE_CONFIRMATION_REQUIRED") {
     const plan = asRecord(data.plan);
     const proposed = asRecord(plan.proposed);
-    return `Wallet policy confirmation is still required: ${formatPolicyText(proposed)}. Show the permission preview, then end this turn. After a new user message confirms it, call wallet_apply_policy_update with the exact decision from org.agentboost/model-context and user_confirmed true. Do not plan again unless the user changes a setting.`;
+    return `PREVIEW ONLY — NOT APPLIED. Wallet policy confirmation is still required: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Show the permission preview, then end this turn. After a new user message confirms it, call wallet_apply_policy_update with the exact decision from org.agentboost/model-context and user_confirmed true. Do not plan again unless the user changes a setting.`;
   }
 
   if (code === "PAYMENT_PLANNED" || code === "PAYMENT_DENIED") {
@@ -1654,7 +1687,11 @@ export async function createMcpServer(
             plan.decision === "allow"
               ? "POLICY_UPDATE_PLANNED"
               : "POLICY_UPDATE_DENIED",
-            { plan },
+            {
+              plan,
+              applied: false,
+              requires_new_user_confirmation: plan.decision === "allow",
+            },
             plan.decision === "allow"
               ? { mode: "never", safeWithSameArguments: false }
               : { mode: "refresh_plan", safeWithSameArguments: true },
@@ -1688,6 +1725,8 @@ export async function createMcpServer(
         if (user_confirmed !== true) {
           return result(envelope(digest, "blocked", "POLICY_UPDATE_CONFIRMATION_REQUIRED", {
             plan,
+            applied: false,
+            requires_new_user_confirmation: true,
             confirmation_mode: "chat",
             reason: "A new user chat message must confirm the displayed policy preview.",
           }));
@@ -1697,7 +1736,11 @@ export async function createMcpServer(
           userConfirmed: true,
         });
         return result(
-          envelope(digest, "confirmed", "POLICY_UPDATED", { receipt }),
+          envelope(digest, "confirmed", "POLICY_UPDATED", {
+            receipt,
+            applied: true,
+            requires_new_user_confirmation: false,
+          }),
         );
       } catch (error) {
         return domainError(digest, error);
