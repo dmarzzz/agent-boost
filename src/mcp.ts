@@ -173,10 +173,8 @@ function compactToolText(structured: Record<string, unknown>): string {
   if (code === "WALLET_CONTEXT") {
     const balance = stringField(data, "balance_atomic");
     const amount = balance ? formatEthWei(BigInt(balance)) : "unknown";
-    const address = stringField(data, "address");
     const phase = stringField(data, "setup_phase") ?? "unknown";
-    const location = address ? ` at ${address}` : "";
-    return `Wallet status: ${phase}. Main account balance: ${amount} Sepolia ETH${location}. “Main” means the funding source; it has no control over subaccounts. Do not expose raw atomic values unless asked.`;
+    return `Live wallet read complete (${phase}). Quote exactly: Main account balance: ${amount} Sepolia ETH. Do not recalculate this amount from balance_atomic or reuse a prior balance. “Main” means the funding source; it has no control over subaccounts. Do not reveal the address or raw atomic value unless asked.`;
   }
 
   if (code === "PAYMENT_PLANNED" || code === "PAYMENT_DENIED") {
@@ -542,9 +540,9 @@ export async function createMcpServer(
   server.registerTool(
     "wallet_get_context",
     {
-      title: "Read wallet context",
+      title: "Refresh live wallet balance",
       description:
-        "Read the disposable Sepolia main account address and its live on-chain ETH balance, plus setup state, active security policy, and bounded delegated-spend policy. Main means the account can fund subaccounts; it does not control, own, recover, or revoke them. For a balance question, report this main-account balance exactly and do not include subaccount balances. Payment planning validates spendability separately. The agent calls this silently for reasoning and keeps the user response concise. Returns no seed, key, password, or raw note material.",
+        "MANDATORY LIVE READ: Call this tool in the same turn for every question about wallet balance, ETH held, funds, or affordability, even when conversation history already contains a balance. Never answer from history, memory, onboarding state, or a prior tool result. Use the preformatted decimal amount in the returned text; do not convert balance_atomic yourself. Report only the main-account balance unless the user specifically asks about private payment capacity, and do not reveal the address unless asked. Main means the account can fund subaccounts; it does not control, own, recover, or revoke them. Payment planning validates spendability separately. Returns no seed, key, password, or raw note material.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

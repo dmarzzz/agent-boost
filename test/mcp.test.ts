@@ -161,6 +161,18 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
       "wallet_start_new_demo",
     ],
   );
+  const walletContextTool = tools.tools.find(
+    (tool) => tool.name === "wallet_get_context",
+  );
+  assert.match(walletContextTool?.description ?? "", /same turn/u);
+  assert.match(
+    walletContextTool?.description ?? "",
+    /Never answer from history, memory, onboarding state, or a prior tool result/u,
+  );
+  assert.match(
+    walletContextTool?.description ?? "",
+    /do not convert balance_atomic yourself/u,
+  );
   const egressStatus = await client.callTool({ name: "egress_status", arguments: {} });
   assert.equal(
     (egressStatus.structuredContent as { data: { status: string } }).data.status,
@@ -254,7 +266,11 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   const walletText = walletContext.content.find((block) => block.type === "text");
   assert.match(
     walletText?.type === "text" ? walletText.text : "",
-    new RegExp(`Main account balance: 1\\.5 Sepolia ETH at ${WALLET_ADDRESS}`, "u"),
+    /Quote exactly: Main account balance: 1\.5 Sepolia ETH/u,
+  );
+  assert.doesNotMatch(
+    walletText?.type === "text" ? walletText.text : "",
+    new RegExp(WALLET_ADDRESS, "u"),
   );
   assert.match(
     walletText?.type === "text" ? walletText.text : "",

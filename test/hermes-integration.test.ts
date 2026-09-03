@@ -143,6 +143,14 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.match(operationalSkill, /`user_confirmed: true`/u);
   assert.match(operationalSkill, /agent operates every tool/iu);
   assert.match(operationalSkill, /Never ask the user to type a tool name/iu);
+  assert.match(operationalSkill, /Every balance is a live read/u);
+  assert.match(
+    operationalSkill,
+    /history, memory, onboarding status, and prior[\s\S]*never balance sources/u,
+  );
+  assert.match(operationalSkill, /never convert `balance_atomic` or wei/u);
+  assert.match(operationalSkill, /Do not mention the address unless the user asks/u);
+  assert.match(operationalSkill, /first gate[\s\S]*never blocks/iu);
   assert.match(operationalSkill, /`yes`[\s\S]*`send it`[\s\S]*`✅`/u);
   assert.match(operationalSkill, /Never claim an unresolved payment succeeded from a balance change/u);
   assert.match(operationalSkill, /does not make the[\s\S]*address disappear/u);

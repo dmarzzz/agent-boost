@@ -1,6 +1,6 @@
 ---
 name: agent-boost
-description: Make private Sepolia test payments with human approval.
+description: Check balances and make private Sepolia test payments.
 version: 0.2.0
 platforms: [macos, linux]
 metadata:
@@ -24,6 +24,15 @@ redeemable value.
 
 ## Interaction contract
 
+- **Every balance is a live read.** For any question about a wallet balance,
+  ETH held, funds, available ETH, or affordability, call `wallet_get_context`
+  in that same turn. Conversation history, memory, onboarding status, and prior
+  tool results are never balance sources. Quote the preformatted `Main account
+  balance:` amount returned by the tool; never convert `balance_atomic` or wei
+  yourself. Do not mention the address unless the user asks for it. Do not
+  mention private payment capacity unless that is what the user asked about.
+- Read-only balance questions are complete human requests. The first gate below
+  never blocks their required `wallet_get_context` call.
 - **The agent operates every tool.** Never ask the user to type a tool name,
   MCP command, decision ID, request ID, idempotency key, boolean, or atomic-unit
   amount.
@@ -62,10 +71,11 @@ Tor fail-closed routing, delegation limits, expiry, or adapter readiness.
 1. Call `capabilities` when the contract version or readiness is unknown, or a
    tool reports unsupported or degraded state.
 2. Call `wallet_get_context` before wallet-dependent reasoning. For a general
-   balance question, report `balance_atomic`: the live on-chain balance of the
-   returned main account. "Main" means it funds subaccounts; it does not
-   control, own, recover, or revoke them. Do not add subaccount balances or
-   setup funding targets. Payment planning validates spendability separately.
+   balance question, quote the tool's preformatted decimal main-account balance
+   exactly. Never convert `balance_atomic` yourself. "Main" means it funds
+   subaccounts; it does not control, own, recover, or revoke them. Do not add
+   subaccount balances or setup funding targets. Payment planning validates
+   spendability separately.
 3. Once recipient and amount are exact, call `wallet_plan_private_payment`
    yourself. Branch on `data.plan.decision`; a denied or expired plan never
    executes.
