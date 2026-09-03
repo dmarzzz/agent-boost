@@ -68,8 +68,7 @@ redeemable value.
   amount in an affordability question, pass it unchanged as `amount_native` and
   use the returned comparison. A main-account balance never proves that a
   private payment is spendable; an exact recipient and
-  `wallet_plan_private_payment` result are required. Do not mention the address
-  unless the user asks for it. Do not mention private payment capacity unless
+  `wallet_plan_private_payment` result are required. Do not mention the address unless the user asks for it. Do not mention private payment capacity unless
   that is what the user asked about.
 - Read-only single-account balance questions are complete human requests. The
   first gate below never blocks their required `wallet_get_context` call.
