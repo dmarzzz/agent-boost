@@ -131,6 +131,28 @@ test("an expired permission renews when its limits change", async () => {
   );
 });
 
+test("latest policy lookup binds the newest preview without skipping a denial", async () => {
+  let now = 1_000;
+  const controller = new WalletPolicyController({
+    store: await policyStore({ maxPayments: 10 }),
+    defaultTtlMs: 7 * 24 * 60 * 60_000,
+    clock: { now: () => new Date(now) },
+  });
+  const allowed = await controller.plan({ maxPayments: 9 });
+  now += 1_000;
+  const denied = await controller.plan({ maxPayments: 101 });
+
+  assert.equal((await controller.getLatestPlan()).decisionId, denied.decisionId);
+  await assert.rejects(
+    controller.apply({
+      decisionId: (await controller.getLatestPlan()).decisionId,
+      userConfirmed: true,
+    }),
+    /POLICY_DECISION_DENIED/,
+  );
+  assert.notEqual(allowed.decisionId, denied.decisionId);
+});
+
 test("policy updates cannot erase used authority or exceed testnet bounds", async () => {
   const store = await policyStore({
     maxPayments: 10,

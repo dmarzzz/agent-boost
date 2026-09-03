@@ -206,6 +206,9 @@ function fakeRuntime(): AgentBoostRuntime {
         approval: { action: "confirm", userConfirmationRequired: true },
       };
     },
+    async getLatestPolicyUpdatePlan() {
+      return this.getPolicyUpdatePlan("wpd_12345678");
+    },
     async applyPolicyUpdate(input) {
       assert.equal(input.decisionId, "wpd_12345678");
       assert.equal(input.userConfirmed, true);
@@ -747,7 +750,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
 
   const policyApplied = await client.callTool({
     name: "wallet_apply_policy_update",
-    arguments: { decision_id: "wpd_12345678", user_confirmed: true },
+    arguments: { user_confirmed: true },
   });
   assert.equal(
     (policyApplied.structuredContent as { code: string }).code,

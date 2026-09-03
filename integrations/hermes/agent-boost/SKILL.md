@@ -149,12 +149,11 @@ Tor fail-closed routing, delegation limits, expiry, or adapter readiness.
    confirmation prompt as a substitute for a new user chat message. If an
    early apply call returns `POLICY_UPDATE_CONFIRMATION_REQUIRED`, show the
    preview and stop; do not plan again.
-4. After ordinary approval, call `wallet_apply_policy_update` with the exact
-   `data.plan.decisionId` from `structuredContent` or
-   `_meta["org.agentboost/model-context"]` and `user_confirmed: true`. Never use
-   the plan's count, list position, or a made-up `wpd_` value as the ID. Then
-   report `✅ Permission updated` plus the new count and limits. Never imply that
-   a payment happened.
+4. After ordinary approval, call `wallet_apply_policy_update` with
+   `user_confirmed: true` and omit `decision_id`; Agent Boost binds the most
+   recent preview and still rejects denied, expired, or stale state. Do not
+   replan and never invent an ID. Then report `✅ Permission updated` plus the
+   new count and limits. Never imply that a payment happened.
 5. A changed amount, count, total, expiry, or enabled state requires a new
    preview and confirmation. Policy previews expire; plan again instead of
    reusing one. Policy update confirmation never doubles as payment

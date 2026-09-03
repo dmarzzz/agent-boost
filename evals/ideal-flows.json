@@ -626,7 +626,6 @@
           "actor": "tool",
           "name": "wallet_apply_policy_update",
           "arguments": {
-            "decision_id": "wpd_eval_12345678",
             "user_confirmed": true
           },
           "expect": {

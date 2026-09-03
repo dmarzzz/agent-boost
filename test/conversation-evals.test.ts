@@ -382,6 +382,9 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
         perPaymentLimitWei: "1000000000000000000",
       });
     },
+    async getLatestPolicyUpdatePlan() {
+      return this.getPolicyUpdatePlan("wpd_eval_12345678");
+    },
     async applyPolicyUpdate(input): Promise<PolicyUpdateReceipt> {
       assert.equal(input.decisionId, "wpd_eval_12345678");
       assert.equal(input.userConfirmed, true);

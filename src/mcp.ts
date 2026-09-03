@@ -49,6 +49,7 @@ export interface AgentBoostRuntime {
     enabled?: boolean;
   }): Promise<PolicyUpdatePlan>;
   getPolicyUpdatePlan(decisionId: string): Promise<PolicyUpdatePlan>;
+  getLatestPolicyUpdatePlan(): Promise<PolicyUpdatePlan>;
   applyPolicyUpdate(input: {
     decisionId: string;
     userConfirmed: boolean;
@@ -588,7 +589,7 @@ function compactToolText(structured: Record<string, unknown>): string {
     if (code === "POLICY_UPDATE_DENIED") {
       return `Wallet policy change blocked: ${formatPolicyText(proposed)}.${formatBlockers(plan)} Explain the blocker in plain language and do not show internal IDs.`;
     }
-    return `PREVIEW ONLY — NOT APPLIED. Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes, then end this turn. Do not call wallet_apply_policy_update until a new user message confirms the preview. After that approval, apply the exact decision from org.agentboost/model-context and never invent an ID.`;
+    return `PREVIEW ONLY — NOT APPLIED. Wallet policy change ready for approval: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Say clearly that this changes permission only—it does not move funds or make the main account privately spendable. Ask the user to reply ✅ or say yes, then end this turn. Do not call wallet_apply_policy_update until a new user message confirms the preview. After that approval, call wallet_apply_policy_update with user_confirmed true and omit decision_id so Agent Boost binds the latest preview safely. Never invent an ID.`;
   }
 
   if (code === "POLICY_UPDATED") {
@@ -599,7 +600,7 @@ function compactToolText(structured: Record<string, unknown>): string {
   if (code === "POLICY_UPDATE_CONFIRMATION_REQUIRED") {
     const plan = asRecord(data.plan);
     const proposed = asRecord(plan.proposed);
-    return `PREVIEW ONLY — NOT APPLIED. Wallet policy confirmation is still required: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Show the permission preview, then end this turn. After a new user message confirms it, call wallet_apply_policy_update with the exact decision from org.agentboost/model-context and user_confirmed true. Do not plan again unless the user changes a setting.`;
+    return `PREVIEW ONLY — NOT APPLIED. Wallet policy confirmation is still required: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Show the permission preview, then end this turn. After a new user message confirms it, call wallet_apply_policy_update with user_confirmed true and omit decision_id so Agent Boost binds the latest preview safely. Do not plan again unless the user changes a setting.`;
   }
 
   if (code === "PAYMENT_PLANNED" || code === "PAYMENT_DENIED") {
@@ -1708,9 +1709,11 @@ export async function createMcpServer(
     {
       title: "Apply an approved wallet permission change",
       description:
-        "The agent—not the user—calls this only after showing the exact permission card from wallet_plan_policy_update, ending that turn, and receiving ordinary confirmation such as yes or ✅ in a new user message. Calls without user_confirmed true never open native approval and never apply; they return the same plan for a later chat confirmation. Never call this in the same turn as wallet_plan_policy_update or replan after confirmation. This changes local delegated authority but never sends funds, moves funds, changes networks, enables mainnet, or exposes keys. Never ask the user for tool syntax, an ID, or a boolean.",
+        "The agent—not the user—calls this only after showing the exact permission card from wallet_plan_policy_update, ending that turn, and receiving ordinary confirmation such as yes or ✅ in a new user message. For that normal continuation, pass user_confirmed true and omit decision_id; Agent Boost binds the most recent preview and still rejects denied, expired, or stale state. Calls without user_confirmed true never open native approval and never apply. Never call this in the same turn as wallet_plan_policy_update, replan after confirmation, or invent an ID. This changes local delegated authority but never sends or moves funds.",
       inputSchema: z.object({
-        decision_id: z.string().startsWith("wpd_"),
+        decision_id: z.string().startsWith("wpd_").optional().describe(
+          "Optional exact plan ID. Omit it when confirming the most recent policy preview from chat.",
+        ),
         user_confirmed: z.boolean().optional(),
       }),
       annotations: {
@@ -1721,7 +1724,9 @@ export async function createMcpServer(
     },
     async ({ decision_id, user_confirmed }) => {
       try {
-        const plan = await runtime.getPolicyUpdatePlan(decision_id);
+        const plan = decision_id === undefined
+          ? await runtime.getLatestPolicyUpdatePlan()
+          : await runtime.getPolicyUpdatePlan(decision_id);
         if (user_confirmed !== true) {
           return result(envelope(digest, "blocked", "POLICY_UPDATE_CONFIRMATION_REQUIRED", {
             plan,
@@ -1732,7 +1737,7 @@ export async function createMcpServer(
           }));
         }
         const receipt = await runtime.applyPolicyUpdate({
-          decisionId: decision_id,
+          decisionId: plan.decisionId,
           userConfirmed: true,
         });
         return result(

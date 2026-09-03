@@ -261,15 +261,17 @@ count-times-per-send envelope.
 ### `wallet_apply_policy_update`
 
 ```json
-{"decision_id":"wpd_…","user_confirmed":true}
+{"user_confirmed":true}
 ```
 
-Applies only the exact unexpired preview after separate user confirmation. The
-write compares the live policy and used authority with the preview, then updates
-the delegation atomically. Repeating the same applied decision returns the same
-receipt. A concurrent payment or policy change makes an unapplied preview stale.
-This tool never transfers funds, changes chains, enables mainnet, or makes the
-main account spendable through the private-payment route.
+The optional `decision_id` names an exact preview. When it is omitted, Agent
+Boost binds the most recently created preview. It applies only an allowed,
+unexpired preview after separate user confirmation. The write compares the live
+policy and used authority with the preview, then updates the delegation
+atomically. Repeating the same applied decision returns the same receipt. A
+concurrent payment or policy change makes an unapplied preview stale. This tool
+never transfers funds, changes chains, enables mainnet, or makes the main
+account spendable through the private-payment route.
 
 ### `wallet_plan_private_payment`
 

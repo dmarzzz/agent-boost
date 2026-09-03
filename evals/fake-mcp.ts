@@ -293,6 +293,10 @@ const runtime: AgentBoostRuntime = {
     }
     return lastPolicyPlan;
   },
+  async getLatestPolicyUpdatePlan() {
+    if (!lastPolicyPlan) throw new Error("Eval policy plan is missing");
+    return lastPolicyPlan;
+  },
   async applyPolicyUpdate(input) {
     await trace("wallet_apply_policy_update", input);
     if (input.decisionId !== "wpd_eval_12345678" || !input.userConfirmed) {

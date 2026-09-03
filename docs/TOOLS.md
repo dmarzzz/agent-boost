@@ -54,7 +54,7 @@ public archive ID and a new QR, never a path or a secret.
 | `wallet_get_tree` | none | address-free profile tree, decimal balances, freshness labels |
 | `wallet_get_policy` | none | active send count, amount limits, use, expiry, enabled state |
 | `wallet_plan_policy_update` | any of `max_payments`, `per_payment_limit_native`, `lifetime_limit_native`, `expires_in_hours`, `enabled` | `wpd_` preview with current and proposed policies |
-| `wallet_apply_policy_update` | `decision_id`, `user_confirmed` | idempotent policy-update receipt |
+| `wallet_apply_policy_update` | `user_confirmed`; optional exact `decision_id` | idempotent receipt for the latest or named policy preview |
 | `wallet_plan_private_payment` | `recipient`, `amount_native` in ordinary Sepolia ETH | `wd_` decision, digest, expiry, whether confirmation is required |
 | `wallet_execute_private_payment` | `decision_id`, `client_request_id`, optional `user_confirmed` fallback | native confirmation, cancellation, fallback receipt, or a `req_` request in `executing` or later |
 | `wallet_get_request` | `request_id` | one redacted request state |
