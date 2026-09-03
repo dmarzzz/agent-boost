@@ -1,7 +1,7 @@
 ---
 name: agent-boost
-description: Manage a private Sepolia wallet and its permissions.
-version: 0.5.0
+description: Manage regular and private Sepolia transfers.
+version: 0.6.0
 platforms: [macos, linux]
 metadata:
   hermes:
@@ -40,7 +40,7 @@ contact an operator. Finish the requested read, plan, or apply flow first.
 ## When to use
 
 Use this operational skill after Agent Boost setup reaches `private_ready`. It
-allows bounded private payments of valueless Sepolia ETH. In
+allows bounded regular public transfers and private payments of valueless Sepolia ETH. In
 `testnet_delegated` mode Agent Boost has bounded signing authority: the agent
 may plan and execute tools for the user, subject to the active local security
 policy and the non-overridable per-payment, lifetime, network, routing, and
@@ -68,7 +68,9 @@ redeemable value.
   amount in an affordability question, pass it unchanged as `amount_native` and
   use the returned comparison. A main-account balance never proves that a
   private payment is spendable; an exact recipient and
-  `wallet_plan_private_payment` result are required. Do not mention the address unless the user asks for it. Do not mention private payment capacity unless
+  `wallet_plan_private_payment` result are required. A regular transfer requires
+  `wallet_plan_regular_transfer`, which independently refreshes the main balance
+  and reserves gas. Do not mention the address unless the user asks for it. Do not mention private payment capacity unless
   that is what the user asked about.
 - Read-only single-account balance questions are complete human requests. The
   first gate below never blocks their required `wallet_get_context` call.
@@ -80,8 +82,15 @@ redeemable value.
   use the policy tools yourself. Never send them to a config file or operator.
   A policy change always gets its own exact preview and ordinary confirmation.
 - **Permission is not funding.** A policy update changes what Hermes may do; it
-  does not move the main-account balance into the private payment pocket and it
-  does not add a public-payment route. Say this plainly when it matters.
+  does not move the main-account balance into the private payment pocket. The
+  same count, per-send, lifetime, and expiry envelope covers both regular and
+  private transfers. Say this plainly when it matters.
+- **Transfer mode is explicit.** “Regular,” “public,” “non-private,” or “from
+  main” routes only to `wallet_plan_regular_transfer` and
+  `wallet_execute_regular_transfer`. “Private,” “shielded,” or “from private”
+  routes only to the private-payment tools. Never silently substitute one mode
+  for the other. If the user says only “send” and the intended source is unclear,
+  ask whether they want a regular public transfer or a private payment.
 - Accept natural requests. If the destination or amount is ambiguous, ask only
   for the missing human detail. Never invent an amount from words like “small.”
 - **First gate:** resolve missing human details before calling any Agent Boost
@@ -137,7 +146,7 @@ Tor fail-closed routing, delegation limits, expiry, or adapter readiness.
 
    ```text
    🔐 New wallet permission
-   Up to <count> private sends
+   Up to <count> sends (regular or private)
    <per-send> Sepolia ETH max each · <total> Sepolia ETH total
    <duration or expiry in friendly words>
 
@@ -165,7 +174,7 @@ Tor fail-closed routing, delegation limits, expiry, or adapter readiness.
    confirmation.
 
 The adjustable hard ceiling is intentionally separate from the sane default.
-The default is 10 private sends, up to 1 Sepolia ETH per send and 10 Sepolia
+The default is 10 sends shared across regular and private transfers, up to 1 Sepolia ETH per send and 10 Sepolia
 ETH total, for seven days. Advanced users may change it conversationally up to
 the tool-reported testnet bounds. Never describe those adjustable bounds as
 mainnet support or recommend raising them without a user request.
@@ -181,7 +190,44 @@ truncated addresses. Do not total the rows because the balances occupy distinct
 wallet contexts and a sum would imply spendability that does not exist. Preserve
 the tool's `live`, `last known`, and `unavailable` labels exactly.
 
-## Procedure
+## Regular public transfer procedure
+
+1. Use this path only for an explicit regular, public, non-private, or
+   main-account transfer. If the user has not chosen a mode, ask which mode they
+   want before planning.
+2. Call `wallet_get_context` in the same turn, passing the exact ordinary
+   Sepolia ETH amount as `amount_native`, then call
+   `wallet_plan_regular_transfer` with the exact recipient and the same
+   `amount_native`. Never convert the amount to wei. The planner refreshes the
+   selected main-account balance, reserves gas, and applies the shared delegated
+   transfer limits. Branch only on the returned decision and blockers.
+3. For an allowed plan under `confirm`, immediately call
+   `wallet_execute_regular_transfer` with the exact structured `decision_id` and
+   omit `user_confirmed`. Do not call a private-payment tool. The native approval
+   must identify this as a **regular public transfer from the main account**.
+4. If native confirmation is unavailable, show exactly:
+
+   ```text
+   **Confirm regular testnet transfer**
+   **Amount:** <amount> Sepolia ETH
+   **To:** <full recipient address>
+   **From:** Main public account
+   **Network:** Sepolia testnet · no monetary value
+   **Privacy:** Public on-chain transfer
+   **Next:** Reply ✅ to approve or ✕ to cancel.
+   ```
+
+   End the turn. After approval, call `wallet_execute_regular_transfer` for the
+   same structured decision with `user_confirmed: true`. A cancellation or any
+   changed amount, recipient, or mode requires a new plan.
+5. Under an `allow` override, execute the exact plan without `user_confirmed`.
+   Always omit `client_request_id`; Agent Boost derives it.
+6. Preserve the returned request ID. If it is not terminal, call
+   `wallet_get_regular_transfer_request` for that exact request. Report **✓
+   Regular transfer sent** only for `confirmed`; report unresolved or failed
+   honestly and never create a replacement.
+
+## Private payment procedure
 
 1. Call `capabilities` when the contract version or readiness is unknown, or a
    tool reports unsupported or degraded state.
@@ -195,7 +241,8 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
    includes an amount, pass that ordinary Sepolia ETH decimal as
    `amount_native`; even a positive main-account comparison is not permission
    to claim a private send is possible.
-3. Once recipient and amount are exact, call `wallet_plan_private_payment`
+3. Use this path only when the user explicitly asks for a private or shielded
+   payment. Once recipient and amount are exact, call `wallet_plan_private_payment`
    yourself with the user's ordinary Sepolia ETH decimal as `amount_native`.
    Never convert it to wei or call this tool with `amount_atomic`. Branch on
    `data.plan.decision`; a denied or expired plan never executes. Use returned
@@ -243,6 +290,8 @@ the tool's `live`, `last known`, and `unavailable` labels exactly.
 - Never request or accept a seed, private key, unlock value, or signing data.
 - Never use terminal or another network tool to bypass an adapter or privacy
   failure.
+- Never route an explicit regular transfer through the private-payment tools, or
+  an explicit private payment through the regular-transfer tools.
 - Require `rpc_route.status: ready` and `direct_fallback: false`; otherwise
   stop instead of using a public RPC or alternate provider.
 - Treat `submitted` and `indeterminate` as unresolved, not as permission to
@@ -292,7 +341,8 @@ non-network alternative; never silently fetch directly.
 
 ## Verification
 
-Before reporting a payment as complete, `wallet_get_request` must return a
-terminal confirmed state for the same request ID. If it returns `submitted` or
-`indeterminate`, report that the result is unresolved and do not execute a
-replacement payment.
+Before reporting a transfer as complete, the matching status tool must return a
+terminal confirmed state for the same request ID: `wallet_get_request` for a
+private payment or `wallet_get_regular_transfer_request` for a regular public
+transfer. If it returns `submitted` or `indeterminate`, report that the result is
+unresolved and do not execute a replacement transfer.

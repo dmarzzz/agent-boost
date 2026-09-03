@@ -5,6 +5,8 @@ import type {
   PaymentApproval,
   PaymentRequest,
   PolicyUpdatePlan,
+  RegularTransferPlan,
+  RegularTransferRequest,
 } from "../src/contracts.js";
 import type { AgentBoostRuntime } from "../src/mcp.js";
 import { runStdioMcp } from "../src/mcp.js";
@@ -16,6 +18,7 @@ type Scenario =
   | "setup-ready"
   | "setup-failed"
   | "payment-confirmed"
+  | "regular-transfer"
   | "payment-indeterminate"
   | "payment-denied"
   | "payment-allowed"
@@ -34,6 +37,7 @@ const scenarios = new Set<Scenario>([
   "setup-ready",
   "setup-failed",
   "payment-confirmed",
+  "regular-transfer",
   "payment-indeterminate",
   "payment-denied",
   "payment-allowed",
@@ -51,6 +55,8 @@ const WALLET = "0x1111111111111111111111111111111111111111";
 const RECIPIENT = "0x2222222222222222222222222222222222222222";
 const DECISION_ID = "wd_eval_12345678";
 const REQUEST_ID = "req_eval_12345678";
+const REGULAR_DECISION_ID = "rwd_eval_12345678";
+const REGULAR_REQUEST_ID = "rreq_eval_12345678";
 const nowMs = Date.now();
 const NOW = new Date(nowMs).toISOString();
 const DEFAULT_EXPIRY = new Date(nowMs + 7 * 24 * 60 * 60_000).toISOString();
@@ -175,7 +181,7 @@ const runtime: AgentBoostRuntime = {
     capabilityReads += 1;
     const action = approval();
     return {
-      contract: "org.agentboost.wallet/1.5",
+      contract: "org.agentboost.wallet/1.6",
       chain_id: "eip155:11155111",
       network_name: "Sepolia",
       authority: {
@@ -333,6 +339,100 @@ const runtime: AgentBoostRuntime = {
         paymentsUsed: 0,
         paymentsRemaining: 10,
       },
+    };
+  },
+  async planRegularTransfer(input): Promise<RegularTransferPlan> {
+    await trace("wallet_plan_regular_transfer", input);
+    if (scenario !== "regular-transfer" || input.recipient !== RECIPIENT ||
+      input.amountWei !== "10000000000000000") {
+      throw new Error("Eval model planned the wrong regular transfer");
+    }
+    return {
+      version: 1,
+      decisionId: REGULAR_DECISION_ID,
+      recipient: input.recipient,
+      amountWei: input.amountWei,
+      mainBalanceSnapshotWei: "100000000000000000",
+      gasReserveWei: "1000000000000000",
+      authorization: {
+        walletId: "wallet_eval_12345678",
+        walletName: "agent-boost",
+        selectionEpoch: 1,
+        authorizationId: "auth_eval_12345678",
+      },
+      intentDigest: `sha256:${"3".repeat(64)}`,
+      createdAt: NOW,
+      expiresAt: PLAN_EXPIRY,
+      decision: "allow",
+      blockers: [],
+      approval: { action: "confirm", userConfirmationRequired: true },
+    };
+  },
+  async getRegularTransferPlan(decisionId): Promise<RegularTransferPlan> {
+    if (decisionId !== REGULAR_DECISION_ID) {
+      throw new Error("Eval regular-transfer decision ID changed");
+    }
+    return {
+      version: 1,
+      decisionId: REGULAR_DECISION_ID,
+      recipient: RECIPIENT,
+      amountWei: "10000000000000000",
+      mainBalanceSnapshotWei: "100000000000000000",
+      gasReserveWei: "1000000000000000",
+      authorization: {
+        walletId: "wallet_eval_12345678",
+        walletName: "agent-boost",
+        selectionEpoch: 1,
+        authorizationId: "auth_eval_12345678",
+      },
+      intentDigest: `sha256:${"3".repeat(64)}`,
+      createdAt: NOW,
+      expiresAt: PLAN_EXPIRY,
+      decision: "allow",
+      blockers: [],
+      approval: { action: "confirm", userConfirmationRequired: true },
+    };
+  },
+  async executeRegularTransfer(input): Promise<RegularTransferRequest> {
+    await trace("wallet_execute_regular_transfer", input);
+    if (scenario !== "regular-transfer" || input.decisionId !== REGULAR_DECISION_ID ||
+      !input.userConfirmed) {
+      throw new Error("Eval regular transfer lacked the bound confirmation");
+    }
+    const plan = await this.getRegularTransferPlan(REGULAR_DECISION_ID);
+    return {
+      version: 1,
+      requestId: REGULAR_REQUEST_ID,
+      clientRequestId: input.clientRequestId,
+      decisionId: REGULAR_DECISION_ID,
+      recipient: RECIPIENT,
+      amountWei: "10000000000000000",
+      gasReserveWei: plan.gasReserveWei,
+      authorization: plan.authorization,
+      phase: "submitted",
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+  },
+  async getRegularTransferRequest(requestId): Promise<RegularTransferRequest> {
+    await trace("wallet_get_regular_transfer_request", { requestId });
+    if (scenario !== "regular-transfer" || requestId !== REGULAR_REQUEST_ID) {
+      throw new Error("Eval regular-transfer request ID changed");
+    }
+    const plan = await this.getRegularTransferPlan(REGULAR_DECISION_ID);
+    return {
+      version: 1,
+      requestId: REGULAR_REQUEST_ID,
+      clientRequestId: `hermes:${REGULAR_DECISION_ID}`,
+      decisionId: REGULAR_DECISION_ID,
+      recipient: RECIPIENT,
+      amountWei: "10000000000000000",
+      gasReserveWei: plan.gasReserveWei,
+      authorization: plan.authorization,
+      phase: "confirmed",
+      createdAt: NOW,
+      updatedAt: NOW,
+      transactionHash: `0x${"b".repeat(64)}`,
     };
   },
   async planPrivatePayment(input) {

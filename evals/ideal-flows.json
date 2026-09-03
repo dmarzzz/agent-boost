@@ -224,7 +224,7 @@
           "expect": {
             "code": "WALLET_POLICY",
             "outcome": "ready",
-            "text_includes": ["Current private-payment permission", "up to 1 payments"],
+            "text_includes": ["Current shared transfer permission", "up to 1 payments"],
             "image": false
           }
         },
@@ -364,6 +364,78 @@
       ]
     },
     {
+      "id": "confirmed-regular-transfer",
+      "title": "Explicit regular transfer never falls through to private payment",
+      "scenario": "regular-transfer",
+      "steps": [
+        {
+          "actor": "user",
+          "text": "Send a regular public transfer of 0.01 Sepolia ETH to 0x2222222222222222222222222222222222222222."
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_get_context",
+          "arguments": {"amount_native": "0.01"},
+          "expect": {
+            "code": "WALLET_CONTEXT",
+            "outcome": "ready",
+            "text_includes": ["Main account balance: 0.1 Sepolia ETH", "numerically covers the requested 0.01 Sepolia ETH"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_plan_regular_transfer",
+          "arguments": {
+            "recipient": "0x2222222222222222222222222222222222222222",
+            "amount_native": "0.01"
+          },
+          "expect": {
+            "code": "REGULAR_TRANSFER_PLANNED",
+            "outcome": "ready",
+            "text_includes": ["Regular public transfer ready for native approval", "selected main account"],
+            "image": false,
+            "presentation": {"kind": "confirmation", "state": "pending"}
+          }
+        },
+        {
+          "actor": "client",
+          "surface": "native_confirmation",
+          "title": "Confirm regular testnet transfer",
+          "approve_label": "Approve",
+          "decline_label": "Cancel",
+          "decision": "accept"
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_execute_regular_transfer",
+          "arguments": {"decision_id": "rwd_eval_12345678"},
+          "expect": {
+            "code": "REGULAR_TRANSFER_REQUEST",
+            "outcome": "submitted",
+            "text_includes": ["Regular public transfer is not confirmed", "wallet_get_regular_transfer_request"],
+            "image": false
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "wallet_get_regular_transfer_request",
+          "arguments": {"request_id": "rreq_eval_12345678"},
+          "expect": {
+            "code": "REGULAR_TRANSFER_STATUS",
+            "outcome": "confirmed",
+            "text_includes": ["Regular public transfer confirmed", "0.01 Sepolia ETH"],
+            "image": false
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 3,
+          "text": "**✓ Regular transfer sent**\n0.01 Sepolia ETH to 0x2222222222222222222222222222222222222222\nPublicly confirmed on Sepolia testnet."
+        }
+      ]
+    },
+    {
       "id": "indeterminate-payment-stays-unresolved",
       "title": "Uncertain submission is never guessed or retried",
       "scenario": "payment-indeterminate",
@@ -468,7 +540,7 @@
       "scenario": "affordability-check",
       "steps": [
         {"actor": "user", "text": "Now can I send 100 Sepolia ETH with my wallet?"},
-        {"actor": "tool", "name": "wallet_get_context", "arguments": {"amount_native": "100"}, "expect": {"code": "WALLET_CONTEXT", "outcome": "ready", "text_includes": ["Main account balance: 0.1 Sepolia ETH", "requested 100 Sepolia ETH exceeds the main account balance", "Never use this balance alone to claim a private payment can be sent"], "image": false}},
+        {"actor": "tool", "name": "wallet_get_context", "arguments": {"amount_native": "100"}, "expect": {"code": "WALLET_CONTEXT", "outcome": "ready", "text_includes": ["Main account balance: 0.1 Sepolia ETH", "requested 100 Sepolia ETH exceeds the main account balance", "This read alone never authorizes a send"], "image": false}},
         {"actor": "assistant", "max_lines": 3, "text": "**! That amount exceeds the main balance**\nThe main account has 0.1 Sepolia ETH, below the requested 100.\nPrivate-send availability still requires an exact recipient and payment plan."}
       ]
     },
@@ -596,7 +668,7 @@
       "steps": [
         {
           "actor": "user",
-          "text": "Change my wallet to 10 private sends of up to 1 Sepolia ETH each."
+          "text": "Change my wallet to 10 sends of up to 1 Sepolia ETH each."
         },
         {
           "actor": "tool",
@@ -616,7 +688,7 @@
         {
           "actor": "assistant",
           "max_lines": 7,
-          "text": "🔐 New wallet permission\nUp to 10 private sends\n1 Sepolia ETH max each · 10 Sepolia ETH total\nFor the next 7 days\n\nThis changes the guardrails—not where funds live.\nReply ✅ or say yes to approve."
+          "text": "🔐 New wallet permission\nUp to 10 sends (regular or private)\n1 Sepolia ETH max each · 10 Sepolia ETH total\nFor the next 7 days\n\nThis changes the guardrails—not where funds live.\nReply ✅ or say yes to approve."
         },
         {
           "actor": "user",
@@ -638,7 +710,7 @@
         {
           "actor": "assistant",
           "max_lines": 3,
-          "text": "✅ Permission updated\n10 private sends · 1 Sepolia ETH max each · 10 Sepolia ETH total\nNo funds moved."
+          "text": "✅ Permission updated\n10 sends · 1 Sepolia ETH max each · 10 Sepolia ETH total\nNo funds moved."
         }
       ]
     },

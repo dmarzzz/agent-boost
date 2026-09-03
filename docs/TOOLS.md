@@ -7,7 +7,7 @@ Every result is a structured envelope carrying an outcome (`ready`, `blocked`,
 token: every limit is enforced from durable local state, not from what the
 agent was told.
 
-## Private payment and identity
+## Wallet transfers and identity
 
 How a payment works, in the order the tools are called:
 
@@ -26,19 +26,23 @@ How a payment works, in the order the tools are called:
    per-send amount, total amount, expiry, and enabled state in conversation.
    Every update is immutable, five-minute, separately confirmed, bounded, and
    idempotent. It changes authority only; it never moves funds.
-6. `wallet_plan_private_payment` validates one recipient and one exact amount
+6. `wallet_plan_regular_transfer` validates one recipient and exact ordinary
+   Sepolia ETH amount against the selected main account's live balance, a
+   conservative gas reserve, and the shared delegated limits. Its matching
+   execute and status tools remain strictly on the public transfer path.
+7. `wallet_plan_private_payment` validates one recipient and one exact amount
    (a canonical wei string) against readiness, the active count and amount
    limits, and balance, then returns a five-minute immutable plan with a SHA-256
    digest over chain, recipient, asset, amount, and operation. Plans never
    sign, submit, or reserve funds.
-7. `wallet_execute_private_payment` takes the decision ID and asks a capable MCP
+8. `wallet_execute_private_payment` takes the decision ID and asks a capable MCP
    client for one native **Approve** or **Cancel** decision. Acceptance atomically
    consumes one send and its amount allowance before Kohaku is called. If the client
    cannot elicit, the tool returns a structured receipt for Hermes to read back
    and accepts `user_confirmed: true` only on the retry. Recipient and amount
    always come from the plan. An uncertain outcome never restores authority for
    an automatic retry.
-8. `wallet_get_request` reads the durable, redacted result and reconciles a
+9. `wallet_get_request` reads the durable, redacted result and reconciles a
    non-terminal request from a real receipt or the recipient-balance checkpoint.
    Reconciliation never rebroadcasts.
 
@@ -55,6 +59,9 @@ public archive ID and a new QR, never a path or a secret.
 | `wallet_get_policy` | none | active send count, amount limits, use, expiry, enabled state |
 | `wallet_plan_policy_update` | any of `max_payments`, `per_payment_limit_native`, `lifetime_limit_native`, `expires_in_hours`, `enabled` | `wpd_` preview with current and proposed policies |
 | `wallet_apply_policy_update` | `user_confirmed`; optional exact `decision_id` | idempotent receipt for the latest or named policy preview |
+| `wallet_plan_regular_transfer` | `recipient`, `amount_native` in ordinary Sepolia ETH | `rwd_` public main-account decision, balance snapshot, gas reserve, and expiry |
+| `wallet_execute_regular_transfer` | `decision_id`, optional stable request ID and fallback confirmation | native confirmation or a durable `rreq_` public-transfer request |
+| `wallet_get_regular_transfer_request` | `request_id` | one redacted public-transfer request state |
 | `wallet_plan_private_payment` | `recipient`, `amount_native` in ordinary Sepolia ETH | `wd_` decision, digest, expiry, whether confirmation is required |
 | `wallet_execute_private_payment` | `decision_id`, `client_request_id`, optional `user_confirmed` fallback | native confirmation, cancellation, fallback receipt, or a `req_` request in `executing` or later |
 | `wallet_get_request` | `request_id` | one redacted request state |
@@ -78,7 +85,7 @@ all other Hermes traffic keep their own routes. Content comes back marked
 
 ## Contract
 
-`capabilities` takes no input and returns `org.agentboost.wallet/1.5`: chain and
+`capabilities` takes no input and returns `org.agentboost.wallet/1.6`: chain and
 asset IDs, funding target, amount caps, the effective execution policy, live
 readiness, and `guarantees_anonymity: false`. It grants nothing. The same
 document is available as the resource `agent-boost://capabilities/wallet/v1`.

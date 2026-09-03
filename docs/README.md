@@ -8,7 +8,7 @@
 | [Tools](TOOLS.md) | The MCP tools, in call order, with inputs and returns |
 | [Configuration](CONFIGURATION.md) | Environment variables and defaults |
 | [Architecture](ARCHITECTURE.md) | Components, local surfaces, hardening |
-| [Capability contract](CAPABILITY-CONTRACT.md) | The `org.agentboost.wallet/1.5` and egress contracts, envelope, authority |
+| [Capability contract](CAPABILITY-CONTRACT.md) | The `org.agentboost.wallet/1.6` and egress contracts, envelope, authority |
 | [Covered egress](COVERED-EGRESS.md) | The Shade Tree module in detail |
 | [Privacy claims and limits](PRIVACY.md) | What is and is not private, and the local security boundary |
 | [Threat model](THREAT-MODEL.md) | Protected data, security goals, non-goals, attacks and mitigations |

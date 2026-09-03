@@ -12,6 +12,7 @@
     "funding_target_atomic",
     "privacy_protocol",
     "private_payment_operation",
+    "regular_transfer_operation",
     "authority",
     "security",
     "privacy",
@@ -22,13 +23,14 @@
     "wallet_tree"
   ],
   "properties": {
-    "contract": {"const": "org.agentboost.wallet/1.5"},
+    "contract": {"const": "org.agentboost.wallet/1.6"},
     "chain_id": {"const": "eip155:11155111"},
     "network_name": {"const": "Sepolia"},
     "asset_type": {"const": "eip155:11155111/slip44:60"},
     "funding_target_atomic": {"$ref": "#/$defs/atomic"},
     "privacy_protocol": {"const": "tornado"},
     "private_payment_operation": {"const": "unshield_next_tail_call"},
+    "regular_transfer_operation": {"const": "public_eth_transfer"},
     "manifest_digest": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
@@ -258,14 +260,16 @@
         "managed_wallets_only",
         "accepts_seed_or_password",
         "selection_requires_separate_reauthorization",
-        "recovery_transfer_available"
+        "recovery_transfer_available",
+        "regular_transfer_available"
       ],
       "properties": {
         "available": {"type": "boolean"},
         "managed_wallets_only": {"const": true},
         "accepts_seed_or_password": {"const": false},
         "selection_requires_separate_reauthorization": {"const": true},
-        "recovery_transfer_available": {"type": "boolean"}
+        "recovery_transfer_available": {"type": "boolean"},
+        "regular_transfer_available": {"type": "boolean"}
       }
     },
     "wallet_tree": {

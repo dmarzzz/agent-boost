@@ -1,7 +1,7 @@
 # Wallet capability contract
 
 Agent Boost exposes a wallet-first MCP contract named
-`org.agentboost.wallet/1.5`. It is Sepolia-only.
+`org.agentboost.wallet/1.6`. It is Sepolia-only.
 
 The capability document is available through the read-only `capabilities`
 tool and the resource:
@@ -21,6 +21,8 @@ Actual authority is enforced from durable local state.
 - shield protocol: Tornado through the pinned Kohaku adapter;
 - private operation: unshield to the next wallet account with an exact value
   tail call;
+- regular operation: native ETH transfer from the selected main public account,
+  with a conservative gas reserve and no private fallback;
 - authority: a time-bounded set of Sepolia test payments under the effective local
   `allow`, `confirm`, or `deny` execution policy;
 - default authority lifetime: seven days; expiry disables delegated execution,
@@ -65,8 +67,9 @@ creating any mainnet or arbitrary-signing path.
 - Authority-bearing amounts are canonical base-10 wei strings matching
   `^(0|[1-9][0-9]*)$`.
 - Human ETH formatting is display-only and never enters the intent digest.
-- Payment decision IDs begin `wd_`; policy decision IDs begin `wpd_`; request
-  IDs begin `req_`; setup IDs begin `setup_`.
+- Private-payment decision IDs begin `wd_` and request IDs begin `req_`;
+  regular-transfer decision IDs begin `rwd_` and request IDs begin `rreq_`;
+  policy decision IDs begin `wpd_`; setup IDs begin `setup_`.
 
 ## Result envelope and presentation
 

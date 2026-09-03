@@ -14,6 +14,8 @@ import type {
   PaymentRequest,
   PolicyUpdatePlan,
   PolicyUpdateReceipt,
+  RegularTransferPlan,
+  RegularTransferRequest,
 } from "../src/contracts.js";
 import type { AgentBoostRuntime } from "../src/mcp.js";
 import { createMcpServer } from "../src/mcp.js";
@@ -25,6 +27,7 @@ type Scenario =
   | "setup-ready"
   | "setup-failed"
   | "payment-confirmed"
+  | "regular-transfer"
   | "payment-indeterminate"
   | "payment-denied"
   | "payment-allowed"
@@ -89,6 +92,8 @@ const WALLET = "0x1111111111111111111111111111111111111111";
 const RECIPIENT = "0x2222222222222222222222222222222222222222";
 const DECISION_ID = "wd_eval_12345678";
 const REQUEST_ID = "req_eval_12345678";
+const REGULAR_DECISION_ID = "rwd_eval_12345678";
+const REGULAR_REQUEST_ID = "rreq_eval_12345678";
 const NOW = "2026-09-01T00:00:00.000Z";
 
 const expectedToolTraces: Record<string, string[]> = {
@@ -107,6 +112,12 @@ const expectedToolTraces: Record<string, string[]> = {
     "wallet_plan_private_payment",
     "wallet_execute_private_payment",
     "wallet_get_request",
+  ],
+  "confirmed-regular-transfer": [
+    "wallet_get_context",
+    "wallet_plan_regular_transfer",
+    "wallet_execute_regular_transfer",
+    "wallet_get_regular_transfer_request",
   ],
   "indeterminate-payment-stays-unresolved": [
     "wallet_get_context",
@@ -148,9 +159,9 @@ const forbiddenVisiblePatterns = [
   /\bmcp\b/iu,
   /\bwei\b/iu,
   /\b(?:decision_id|request_id|client_request_id|user_confirmed|amount_atomic|amount_native|manifest_digest|setupId)\b/iu,
-  /\b(?:wallet_get_context|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_start_new_demo|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|egress_status|egress_fetch)\b/iu,
+  /\b(?:wallet_get_context|wallet_get_policy|wallet_plan_policy_update|wallet_apply_policy_update|wallet_start_new_demo|wallet_plan_regular_transfer|wallet_execute_regular_transfer|wallet_get_regular_transfer_request|wallet_plan_private_payment|wallet_execute_private_payment|wallet_get_request|egress_status|egress_fetch)\b/iu,
   /\b(?:private key|seed phrase|wallet password)\b/iu,
-  /\b(?:wd_|wpd_|req_|sha256:)[A-Za-z0-9._:-]*/u,
+  /\b(?:rwd_|rreq_|wd_|wpd_|req_|sha256:)[A-Za-z0-9._:-]*/u,
 ];
 
 function approvalFor(scenario: Scenario): PaymentApproval {
@@ -248,6 +259,57 @@ function paymentRequest(
   };
 }
 
+function regularTransferPlan(input: {
+  recipient: string;
+  amountWei: string;
+}): RegularTransferPlan {
+  return {
+    version: 1,
+    decisionId: REGULAR_DECISION_ID,
+    recipient: input.recipient,
+    amountWei: input.amountWei,
+    mainBalanceSnapshotWei: "100000000000000000",
+    gasReserveWei: "1000000000000000",
+    authorization: {
+      walletId: "wallet_eval_12345678",
+      walletName: "agent-boost",
+      selectionEpoch: 1,
+      authorizationId: "auth_eval_12345678",
+    },
+    intentDigest: `sha256:${"3".repeat(64)}`,
+    createdAt: NOW,
+    expiresAt: "2026-09-01T00:05:00.000Z",
+    decision: "allow",
+    blockers: [],
+    approval: { action: "confirm", userConfirmationRequired: true },
+  };
+}
+
+function regularTransferRequest(
+  phase: RegularTransferRequest["phase"],
+): RegularTransferRequest {
+  const plan = regularTransferPlan({
+    recipient: RECIPIENT,
+    amountWei: "10000000000000000",
+  });
+  return {
+    version: 1,
+    requestId: REGULAR_REQUEST_ID,
+    clientRequestId: `hermes:${REGULAR_DECISION_ID}`,
+    decisionId: REGULAR_DECISION_ID,
+    recipient: RECIPIENT,
+    amountWei: "10000000000000000",
+    gasReserveWei: plan.gasReserveWei,
+    authorization: plan.authorization,
+    phase,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...(phase === "confirmed"
+      ? { transactionHash: `0x${"b".repeat(64)}` }
+      : {}),
+  };
+}
+
 function evalRuntime(scenario: Scenario): AgentBoostRuntime {
   const approval = approvalFor(scenario);
   const awaiting = onboardingRecord("awaiting_funding");
@@ -266,7 +328,7 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
   return {
     async capabilities() {
       return {
-        contract: "org.agentboost.wallet/1.5",
+        contract: "org.agentboost.wallet/1.6",
         chain_id: "eip155:11155111",
         security: {
           default: {
@@ -402,6 +464,28 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
         },
       };
     },
+    async planRegularTransfer(input) {
+      assert.equal(scenario, "regular-transfer");
+      return regularTransferPlan(input);
+    },
+    async getRegularTransferPlan() {
+      return regularTransferPlan({
+        recipient: RECIPIENT,
+        amountWei: "10000000000000000",
+      });
+    },
+    async executeRegularTransfer(input) {
+      assert.equal(scenario, "regular-transfer");
+      assert.equal(input.decisionId, REGULAR_DECISION_ID);
+      assert.equal(input.clientRequestId, `hermes:${REGULAR_DECISION_ID}`);
+      assert.equal(input.userConfirmed, true);
+      return regularTransferRequest("submitted");
+    },
+    async getRegularTransferRequest(requestId) {
+      assert.equal(scenario, "regular-transfer");
+      assert.equal(requestId, REGULAR_REQUEST_ID);
+      return regularTransferRequest("confirmed");
+    },
     async planPrivatePayment(input) {
       const plan = paymentPlan(input, approval);
       if (scenario === "payment-expired") {
@@ -494,7 +578,11 @@ function assertIdealVisibleResponse(step: AssistantStep, flow: EvalFlow): void {
 }
 
 function assertClientInteraction(step: ClientStep, flow: EvalFlow): void {
-  assert.equal(step.title, "Confirm private test payment", `${flow.id}: native title drifted`);
+  assert.ok(
+    step.title === "Confirm private test payment" ||
+      step.title === "Confirm regular testnet transfer",
+    `${flow.id}: native title drifted`,
+  );
   assert.equal(step.approve_label, "Approve", `${flow.id}: native approve label drifted`);
   assert.equal(step.decline_label, "Cancel", `${flow.id}: native cancel label drifted`);
 }
@@ -542,7 +630,7 @@ test("ideal conversation flows replay through the real MCP contract", async (t) 
       );
       if (interaction) {
         client.setRequestHandler(ElicitRequestSchema, async (request) => {
-          assert.match(request.params.message, /Confirm private test payment/u);
+          assert.match(request.params.message, new RegExp(interaction.title, "u"));
           assert.match(request.params.message, /0\.01 Sepolia ETH/u);
           assert.match(request.params.message, new RegExp(RECIPIENT, "u"));
           return { action: interaction.decision };

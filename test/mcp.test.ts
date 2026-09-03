@@ -277,6 +277,49 @@ function fakeRuntime(): AgentBoostRuntime {
     async reauthorizeWallet() {
       return {};
     },
+    async planRegularTransfer(input) {
+      return {
+        version: 1,
+        decisionId: "rwd_12345678",
+        recipient: input.recipient,
+        amountWei: input.amountWei,
+        mainBalanceSnapshotWei: "1500000000000000000",
+        gasReserveWei: "1000000000000000",
+        authorization: AUTHORIZATION,
+        intentDigest: `sha256:${"3".repeat(64)}`,
+        createdAt: new Date(0).toISOString(),
+        expiresAt: new Date(300_000).toISOString(),
+        decision: "allow",
+        blockers: [],
+        approval: { action: "confirm" as const, userConfirmationRequired: true },
+      };
+    },
+    async getRegularTransferPlan() {
+      return this.planRegularTransfer({
+        recipient: "0x2222222222222222222222222222222222222222",
+        amountWei: "1000000000000000000",
+      });
+    },
+    async executeRegularTransfer(input) {
+      return {
+        version: 1,
+        requestId: "rreq_12345678",
+        clientRequestId: input.clientRequestId,
+        decisionId: input.decisionId,
+        recipient: "0x2222222222222222222222222222222222222222",
+        amountWei: "1000000000000000000",
+        gasReserveWei: "1000000000000000",
+        authorization: AUTHORIZATION,
+        phase: "submitted" as const,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        recipientBalanceBeforeWei: "123",
+        reconciliation: { attempts: 1, checkedAt: new Date(0).toISOString() },
+      };
+    },
+    async getRegularTransferRequest() {
+      throw new Error("not used");
+    },
     async planPrivatePayment(input) {
       return {
         version: 1,
@@ -433,9 +476,11 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
       "wallet_create",
       "wallet_execute_private_payment",
       "wallet_execute_recovery_transfer",
+      "wallet_execute_regular_transfer",
       "wallet_get_context",
       "wallet_get_policy",
       "wallet_get_recovery_request",
+      "wallet_get_regular_transfer_request",
       "wallet_get_request",
       "wallet_get_tree",
       "wallet_list",
@@ -443,6 +488,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
       "wallet_plan_private_payment",
       "wallet_plan_reauthorization",
       "wallet_plan_recovery_transfer",
+      "wallet_plan_regular_transfer",
       "wallet_reauthorize",
       "wallet_select",
       "wallet_start_new_demo",
@@ -582,7 +628,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   );
   assert.match(
     walletText?.type === "text" ? walletText.text : "",
-    /Never use this balance alone to claim a private payment can be sent/u,
+    /This read alone never authorizes a send/u,
   );
 
   const affordabilityContext = await client.callTool({
@@ -775,6 +821,57 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   assert.equal(
     (policyApplied.structuredContent as { code: string }).code,
     "POLICY_UPDATED",
+  );
+
+  const regularPlan = await client.callTool({
+    name: "wallet_plan_regular_transfer",
+    arguments: {
+      recipient: "0x2222222222222222222222222222222222222222",
+      amount_native: "1",
+    },
+  });
+  const regularPlanText = regularPlan.content.find((block) => block.type === "text");
+  assert.match(
+    regularPlanText?.type === "text" ? regularPlanText.text : "",
+    /Regular public transfer ready for native approval/u,
+  );
+  assert.doesNotMatch(
+    regularPlanText?.type === "text" ? regularPlanText.text : "",
+    /rwd_|amountWei|intentDigest/u,
+  );
+  const regularContext = simulateHermesContentArbitration(regularPlan)
+    ._meta?.[HERMES_MODEL_CONTEXT_KEY] as {
+      data: { plan: { decisionId: string; amountWei: string } };
+    };
+  assert.equal(regularContext.data.plan.decisionId, "rwd_12345678");
+  assert.equal(regularContext.data.plan.amountWei, "1000000000000000000");
+  const regularPresentation = (regularPlan.structuredContent as {
+    presentation: { title: string; notice: { text: string } };
+  }).presentation;
+  assert.equal(regularPresentation.title, "Confirm regular testnet transfer");
+  assert.match(regularPresentation.notice.text, /public Sepolia transfer from the main account/u);
+
+  const regularExecuted = await client.callTool({
+    name: "wallet_execute_regular_transfer",
+    arguments: { decision_id: "rwd_12345678", user_confirmed: true },
+  });
+  const regularExecutedPayload = regularExecuted.structuredContent as {
+    code: string;
+    data: { request: { clientRequestId: string } };
+  };
+  assert.equal(regularExecutedPayload.code, "REGULAR_TRANSFER_REQUEST");
+  assert.equal(
+    regularExecutedPayload.data.request.clientRequestId,
+    "hermes:rwd_12345678",
+  );
+  assert.doesNotMatch(
+    JSON.stringify(regularExecutedPayload),
+    /recipientBalanceBeforeWei|reconciliation/,
+  );
+  const regularExecutedText = regularExecuted.content.find((block) => block.type === "text");
+  assert.match(
+    regularExecutedText?.type === "text" ? regularExecutedText.text : "",
+    /Regular public transfer is not confirmed[\s\S]*wallet_get_regular_transfer_request/u,
   );
 
   const plan = await client.callTool({
@@ -972,6 +1069,52 @@ test("MCP native payment confirmation accepts, declines, and fails closed", asyn
       await server.close();
     }
   });
+});
+
+test("MCP regular transfer confirmation stays on the public path", async () => {
+  const runtime = fakeRuntime();
+  let regularCalls = 0;
+  let privateCalls = 0;
+  const executeRegular = runtime.executeRegularTransfer;
+  runtime.executeRegularTransfer = async (input) => {
+    regularCalls += 1;
+    assert.equal(input.userConfirmed, true);
+    return executeRegular(input);
+  };
+  runtime.executePrivatePayment = async () => {
+    privateCalls += 1;
+    throw new Error("private path must not execute");
+  };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = new Client(
+    { name: "regular-elicitation-test", version: "1.0.0" },
+    { capabilities: { elicitation: { form: {} } } },
+  );
+  let prompt = "";
+  client.setRequestHandler(ElicitRequestSchema, async (request) => {
+    prompt = request.params.message;
+    return { action: "accept", content: {} };
+  });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const response = await client.callTool({
+      name: "wallet_execute_regular_transfer",
+      arguments: { decision_id: "rwd_12345678" },
+    });
+    assert.equal(
+      (response.structuredContent as { code: string }).code,
+      "REGULAR_TRANSFER_REQUEST",
+    );
+    assert.equal(regularCalls, 1);
+    assert.equal(privateCalls, 0);
+    assert.match(prompt, /Confirm regular testnet transfer/u);
+    assert.match(prompt, /From: selected main public account/u);
+    assert.match(prompt, /regular public transfer/u);
+  } finally {
+    await client.close();
+    await server.close();
+  }
 });
 
 test("MCP error envelopes redact RPC credentials and local paths", async () => {

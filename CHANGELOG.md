@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added confirmation-gated regular Sepolia ETH transfers from the selected main
+  public account, with a live balance recheck, conservative gas reserve,
+  durable idempotent requests, and strict separation from private payments.
 - Fixed multi-turn Hermes wallet actions without changing Hermes: exact
   continuation IDs now survive compact-result rendering in private MCP
   metadata, user-entered ETH amounts are converted server-side, and
