@@ -167,11 +167,11 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   assert.match(walletContextTool?.description ?? "", /same turn/u);
   assert.match(
     walletContextTool?.description ?? "",
-    /Never answer from history, memory, onboarding state, or a prior tool result/u,
+    /History, memory, onboarding state, and prior tool results are not current-balance sources/u,
   );
   assert.match(
     walletContextTool?.description ?? "",
-    /do not convert balance_atomic yourself/u,
+    /without converting balance_atomic/u,
   );
   const egressStatus = await client.callTool({ name: "egress_status", arguments: {} });
   assert.equal(

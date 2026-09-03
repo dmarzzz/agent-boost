@@ -542,7 +542,7 @@ export async function createMcpServer(
     {
       title: "Refresh live wallet balance",
       description:
-        "MANDATORY LIVE READ: Call this tool in the same turn for every question about wallet balance, ETH held, funds, or affordability, even when conversation history already contains a balance. Never answer from history, memory, onboarding state, or a prior tool result. Use the preformatted decimal amount in the returned text; do not convert balance_atomic yourself. Report only the main-account balance unless the user specifically asks about private payment capacity, and do not reveal the address unless asked. Main means the account can fund subaccounts; it does not control, own, recover, or revoke them. Payment planning validates spendability separately. Returns no seed, key, password, or raw note material.",
+        "FRESHNESS REQUIREMENT: Call this tool in the same turn for every question about wallet balance, ETH held, funds, or affordability, even when conversation history already contains a balance. History, memory, onboarding state, and prior tool results are not current-balance sources. Use the preformatted decimal amount in the returned text without converting balance_atomic. The default response contains only the main-account balance; add the address or private payment capacity only when specifically requested. Main means the account can fund subaccounts; it does not control, own, recover, or revoke them. Payment planning validates spendability separately. Returns no seed, key, password, or raw note material.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
