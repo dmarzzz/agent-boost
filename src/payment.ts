@@ -5,6 +5,7 @@ import type {
   PaymentApproval,
   PaymentPlan,
   PaymentRequest,
+  WalletAuthorizationBinding,
   WalletAdapter,
 } from "./contracts.js";
 import {
@@ -24,13 +25,20 @@ export interface PaymentClock {
 
 const SYSTEM_CLOCK: PaymentClock = { now: () => new Date() };
 
-function digestIntent(recipient: string, amountWei: string): string {
+function digestIntent(
+  recipient: string,
+  amountWei: string,
+  authorization: WalletAuthorizationBinding,
+): string {
   const canonical = JSON.stringify({
     chain_id: "eip155:11155111",
     recipient: recipient.toLowerCase(),
     asset_type: "eip155:11155111/slip44:60",
     amount_atomic: amountWei,
     operation: "tornado_unshield_tail_call",
+    wallet_id: authorization.walletId,
+    selection_epoch: authorization.selectionEpoch,
+    authorization_id: authorization.authorizationId,
   });
   return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
 }
@@ -100,6 +108,7 @@ export class PaymentController {
     }
 
     const blockers: string[] = [];
+    await this.#store.ensureWalletProfile("agent-boost");
     let state = await this.#store.read();
     if (state.onboarding?.phase === "private_ready") {
       try {
@@ -115,6 +124,7 @@ export class PaymentController {
       }
     }
     const onboarding = state.onboarding;
+    const authorization = activeAuthorization(state);
     const amount = BigInt(input.amountWei);
     if (!this.#executeEnabled) blockers.push("EXECUTION_DISABLED");
     if (this.#paymentApproval === "deny") blockers.push("SECURITY_POLICY_DENIED");
@@ -124,7 +134,9 @@ export class PaymentController {
     if (!onboarding?.delegation.enabled) blockers.push("DELEGATION_DISABLED");
     if (
       onboarding &&
-      Object.keys(state.requests).length >= (onboarding.delegation.maxPayments ?? 1)
+      Object.values(state.requests).filter(
+        (request) => sameAuthorization(request.authorization, authorization),
+      ).length >= (onboarding.delegation.maxPayments ?? 1)
     ) {
       blockers.push("PAYMENT_COUNT_LIMIT");
     }
@@ -162,7 +174,8 @@ export class PaymentController {
       decisionId: `wd_${randomUUID()}`,
       recipient: input.recipient,
       amountWei: input.amountWei,
-      intentDigest: digestIntent(input.recipient, input.amountWei),
+      authorization,
+      intentDigest: digestIntent(input.recipient, input.amountWei, authorization),
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
       decision: blockers.length === 0 ? "allow" : "deny",
@@ -223,6 +236,12 @@ export class PaymentController {
     } finally {
       this.#execution = undefined;
     }
+  }
+
+  async getPlan(decisionId: string): Promise<PaymentPlan> {
+    const plan = (await this.#store.read()).plans[decisionId];
+    if (!plan) throw new Error("DECISION_NOT_FOUND");
+    return plan;
   }
 
   async getRequest(requestId: string): Promise<PaymentRequest> {
@@ -346,6 +365,7 @@ export class PaymentController {
       decisionId: plan.decisionId,
       recipient: plan.recipient,
       amountWei: plan.amountWei,
+      authorization: plan.authorization,
       phase: "executing",
       createdAt: now,
       updatedAt: now,
@@ -357,12 +377,15 @@ export class PaymentController {
     await this.#store.update((draft) => {
       const onboarding = draft.onboarding;
       const storedPlan = draft.plans[plan.decisionId];
+      const active = activeAuthorization(draft);
       if (
         !storedPlan ||
         storedPlan.decision !== "allow" ||
         storedPlan.intentDigest !== plan.intentDigest ||
         storedPlan.recipient !== plan.recipient ||
-        storedPlan.amountWei !== plan.amountWei
+        storedPlan.amountWei !== plan.amountWei ||
+        !sameAuthorization(storedPlan.authorization, plan.authorization) ||
+        !sameAuthorization(active, plan.authorization)
       ) {
         throw new Error("DECISION_CHANGED");
       }
@@ -373,7 +396,9 @@ export class PaymentController {
         throw new Error("CHAIN_NOT_SEPOLIA");
       }
       if (
-        Object.keys(draft.requests).length >=
+        Object.values(draft.requests).filter(
+          (existing) => sameAuthorization(existing.authorization, plan.authorization),
+        ).length >=
         (onboarding.delegation.maxPayments ?? 1)
       ) {
         throw new Error("PAYMENT_COUNT_LIMIT");
@@ -480,4 +505,33 @@ export class PaymentController {
       return updated.requests[request.requestId] as PaymentRequest;
     }
   }
+}
+
+function activeAuthorization(state: {
+  wallet?: { activeName: string; profiles: Record<string, import("./contracts.js").WalletProfileRecord> };
+}): WalletAuthorizationBinding {
+  const wallet = state.wallet;
+  const profile = wallet
+    ? Object.values(wallet.profiles).find((candidate) => candidate.name === wallet.activeName)
+    : undefined;
+  if (!profile || profile.selectionEpoch < 1 || !profile.authorizationId) {
+    throw new Error("ACTIVE_WALLET_AUTHORIZATION_MISSING");
+  }
+  return {
+    walletId: profile.walletId,
+    walletName: profile.name,
+    selectionEpoch: profile.selectionEpoch,
+    authorizationId: profile.authorizationId,
+  };
+}
+
+function sameAuthorization(
+  left: WalletAuthorizationBinding | undefined,
+  right: WalletAuthorizationBinding | undefined,
+): boolean {
+  if (!left || !right) return false;
+  return left.walletId === right.walletId &&
+    left.walletName === right.walletName &&
+    left.selectionEpoch === right.selectionEpoch &&
+    left.authorizationId === right.authorizationId;
 }

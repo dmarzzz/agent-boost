@@ -13,8 +13,15 @@ import type {
   PolicyUpdateReceipt,
   PublicOnboardingSnapshot,
   WalletPolicySnapshot,
+  RecoveryTransferPlan,
+  RecoveryTransferRequest,
 } from "./contracts.js";
 import type { CoveredFetchResult } from "./shade-tree/index.js";
+import {
+  TRADE_RESOURCE_URI,
+  tradeCapabilities,
+  tradeNotConfigured,
+} from "./trade.js";
 import { buildSepoliaFundingUri } from "./ui/index.js";
 
 export interface AgentBoostRuntime {
@@ -39,20 +46,38 @@ export interface AgentBoostRuntime {
     ttlMs?: number;
     enabled?: boolean;
   }): Promise<PolicyUpdatePlan>;
+  getPolicyUpdatePlan(decisionId: string): Promise<PolicyUpdatePlan>;
   applyPolicyUpdate(input: {
     decisionId: string;
     userConfirmed: boolean;
   }): Promise<PolicyUpdateReceipt>;
+  listWallets(): Promise<Record<string, unknown>>;
+  createWallet(input: { name: string; userConfirmed: boolean }): Promise<Record<string, unknown>>;
+  adoptWallet(input: { name: string; userConfirmed: boolean }): Promise<Record<string, unknown>>;
+  selectWallet(input: { walletId: string; userConfirmed: boolean }): Promise<Record<string, unknown>>;
+  archiveWallet(input: { walletId: string; userConfirmed: boolean }): Promise<Record<string, unknown>>;
+  planWalletReauthorization(): Promise<import("./contracts.js").WalletReauthorizationPlan>;
+  getWalletReauthorizationPlan(decisionId: string): Promise<import("./contracts.js").WalletReauthorizationPlan>;
+  reauthorizeWallet(input: { decisionId: string; userConfirmed: boolean }): Promise<Record<string, unknown>>;
   planPrivatePayment(input: {
     recipient: string;
     amountWei: string;
   }): Promise<PaymentPlan>;
+  getPaymentPlan(decisionId: string): Promise<PaymentPlan>;
   executePrivatePayment(input: {
     decisionId: string;
     clientRequestId: string;
     userConfirmed: boolean;
   }): Promise<PaymentRequest>;
   getRequest(requestId: string): Promise<PaymentRequest>;
+  planRecoveryTransfer(input: { recipient: string; amountWei: string }): Promise<RecoveryTransferPlan>;
+  getRecoveryPlan(decisionId: string): Promise<RecoveryTransferPlan>;
+  executeRecoveryTransfer(input: {
+    decisionId: string;
+    clientRequestId: string;
+    userConfirmed: boolean;
+  }): Promise<RecoveryTransferRequest>;
+  getRecoveryRequest(requestId: string): Promise<RecoveryTransferRequest>;
   egressCapabilities(): Promise<Record<string, unknown>>;
   egressStatus(): Promise<Record<string, unknown>>;
   egressFetch(input: {
@@ -80,6 +105,45 @@ type Outcome =
   | "failed"
   | "indeterminate";
 
+type PresentationState =
+  | "pending"
+  | "active"
+  | "complete"
+  | "attention"
+  | "cancelled";
+
+interface Presentation {
+  version: "1.0";
+  kind: "progress" | "confirmation" | "receipt" | "status";
+  title: string;
+  state: PresentationState;
+  step?: {
+    current: number;
+    total: number;
+    label: string;
+  };
+  markers?: Array<{
+    state: PresentationState;
+    label: string;
+  }>;
+  fields?: Array<{
+    label: string;
+    value: string;
+    format?: "amount" | "address" | "text";
+  }>;
+  notice?: {
+    tone: "info" | "warning";
+    text: string;
+  };
+  next_action?: string;
+  interaction?: {
+    kind: "confirmation";
+    transport: "mcp_elicitation";
+    approve_label: string;
+    decline_label: string;
+  };
+}
+
 function manifestDigest(capabilities: Record<string, unknown>): string {
   const { readiness: _readiness, ...manifest } = capabilities;
   return `sha256:${createHash("sha256")
@@ -98,6 +162,7 @@ function envelope(
     afterMs?: number;
   } = { mode: "never", safeWithSameArguments: false },
 ): Record<string, unknown> {
+  const presentation = buildPresentation(code, outcome, data);
   return {
     schema: "org.agentboost.tool-result",
     schema_version: "1.0",
@@ -109,8 +174,222 @@ function envelope(
       safe_with_same_arguments: retry.safeWithSameArguments,
       ...(retry.afterMs === undefined ? {} : { after_ms: retry.afterMs }),
     },
+    ...(presentation ? { presentation } : {}),
     data,
   };
+}
+
+function buildPresentation(
+  code: string,
+  outcome: Outcome,
+  data: Record<string, unknown>,
+): Presentation | undefined {
+  if (code === "TRADE_CAPABILITIES" || code === "TRADE_NOT_CONFIGURED") {
+    const mode = stringField(data, "requested_mode");
+    const action = stringField(data, "requested_action");
+    return {
+      version: "1.0",
+      kind: "status",
+      title: "Trading not set up",
+      state: "attention",
+      fields: [
+        ...(mode
+          ? [{ label: "Mode", value: mode, format: "text" as const }]
+          : []),
+        { label: "Network", value: "Sepolia", format: "text" },
+        ...(action
+          ? [{ label: "Action", value: action, format: "text" as const }]
+          : []),
+      ],
+      notice: {
+        tone: "warning",
+        text: mode === "private"
+          ? "The private-swap design and venue have not been selected."
+          : mode === "regular"
+            ? "A Sepolia swap venue has not been selected."
+            : "Regular and private Sepolia swaps are not configured.",
+      },
+      next_action: "No quote was requested and nothing was signed or submitted.",
+    };
+  }
+
+  if (
+    code === "ONBOARDING_STARTED" ||
+    code === "ONBOARDING_STATUS" ||
+    code === "DEMO_RESET_STARTED"
+  ) {
+    const setup = asRecord(data.setup);
+    const funding = asRecord(data.funding);
+    const phase = stringField(setup, "phase") ?? outcome;
+    const amount = stringField(funding, "remaining_amount_eth");
+    const address = stringField(funding, "address") ?? stringField(setup, "address");
+    if (phase === "private_ready") {
+      return {
+        version: "1.0",
+        kind: "progress",
+        title: "Dark Mode online",
+        state: "complete",
+        step: { current: 3, total: 3, label: "Ready" },
+        markers: [
+          { state: "complete", label: "Test wallet funded" },
+          { state: "complete", label: "Private balance prepared" },
+          { state: "complete", label: "Tor-routed wallet access ready" },
+        ],
+        next_action: "Return to Hermes and try a Sepolia test payment.",
+      };
+    }
+    if (phase === "funded_public" || phase === "shielding") {
+      return {
+        version: "1.0",
+        kind: "progress",
+        title: "Preparing private balance",
+        state: "active",
+        step: { current: 2, total: 3, label: "Prepare private balance" },
+        markers: [
+          { state: "complete", label: "Funding found" },
+          { state: "active", label: "Privacy preparation running" },
+        ],
+        next_action: "Reply “check again” in a minute.",
+      };
+    }
+    if (phase === "failed") {
+      const error = asRecord(setup.error);
+      return {
+        version: "1.0",
+        kind: "status",
+        title: "Setup needs attention",
+        state: "attention",
+        notice: {
+          tone: "warning",
+          text: stringField(error, "message") ?? "Agent Boost could not finish setup.",
+        },
+        next_action: "Follow the returned remediation, then ask Hermes to check again.",
+      };
+    }
+    return {
+      version: "1.0",
+      kind: "progress",
+      title: phase === "funding_pending" ? "More funding needed" : "Fund your test wallet",
+      state: "active",
+      step: { current: 1, total: 3, label: "Fund test wallet" },
+      fields: [
+        ...(amount ? [{ label: "Amount", value: `${amount} Sepolia ETH`, format: "amount" as const }] : []),
+        ...(address ? [{ label: "Address", value: address, format: "address" as const }] : []),
+      ],
+      notice: { tone: "warning", text: "Testnet only. Sepolia ETH has no monetary value." },
+      next_action: phase === "funding_pending"
+        ? "Send the remaining amount, then reply “check again”."
+        : "Send the test funds, then reply ✅ or say “sent”.",
+    };
+  }
+
+  if (
+    code === "PAYMENT_PLANNED" ||
+    code === "PAYMENT_DENIED" ||
+    code === "PAYMENT_CONFIRMATION_REQUIRED" ||
+    code === "PAYMENT_CANCELLED"
+  ) {
+    const plan = asRecord(data.plan);
+    const recipient = stringField(plan, "recipient") ?? "Unknown recipient";
+    const amountWei = stringField(plan, "amountWei");
+    const amount = amountWei ? `${formatEthWei(BigInt(amountWei))} Sepolia ETH` : "Unknown amount";
+    if (code === "PAYMENT_DENIED") {
+      return {
+        version: "1.0",
+        kind: "status",
+        title: "Payment blocked",
+        state: "attention",
+        fields: paymentFields(amount, recipient),
+        next_action: "Review the blocker before creating another payment plan.",
+      };
+    }
+    if (code === "PAYMENT_CANCELLED") {
+      return {
+        version: "1.0",
+        kind: "status",
+        title: "Payment cancelled",
+        state: "cancelled",
+        fields: paymentFields(amount, recipient),
+        next_action: "No payment was sent.",
+      };
+    }
+    return {
+      version: "1.0",
+      kind: "confirmation",
+      title: "Confirm private test payment",
+      state: "pending",
+      fields: paymentFields(amount, recipient),
+      notice: {
+        tone: "warning",
+        text: "Testnet only. On-chain activity remains visible.",
+      },
+      next_action: code === "PAYMENT_CONFIRMATION_REQUIRED"
+        ? "Show the receipt and wait for an explicit approval."
+        : "Request approval through the client’s native confirmation surface.",
+      ...(code === "PAYMENT_CONFIRMATION_REQUIRED"
+        ? {}
+        : {
+            interaction: {
+              kind: "confirmation" as const,
+              transport: "mcp_elicitation" as const,
+              approve_label: "Approve",
+              decline_label: "Cancel",
+            },
+          }),
+    };
+  }
+
+  if (code === "PAYMENT_REQUEST" || code === "PAYMENT_STATUS") {
+    const request = asRecord(data.request);
+    const phase = stringField(request, "phase") ?? outcome;
+    const recipient = stringField(request, "recipient") ?? "Unknown recipient";
+    const amountWei = stringField(request, "amountWei");
+    const amount = amountWei ? `${formatEthWei(BigInt(amountWei))} Sepolia ETH` : "Unknown amount";
+    const confirmed = phase === "confirmed";
+    const failed = phase === "failed";
+    return {
+      version: "1.0",
+      kind: "receipt",
+      title: confirmed ? "Sent" : failed ? "Not sent" : "Not confirmed yet",
+      state: confirmed ? "complete" : "attention",
+      fields: paymentFields(amount, recipient),
+      notice: {
+        tone: confirmed ? "info" : "warning",
+        text: confirmed
+          ? "Confirmed on Sepolia. On-chain activity remains visible."
+          : failed
+            ? "The payment failed and was not retried."
+            : "The result is unresolved. Retrying could send the payment twice.",
+      },
+      next_action: confirmed || failed
+        ? "No further action is required."
+        : "Check this exact request again; do not create a replacement.",
+    };
+  }
+
+  return undefined;
+}
+
+function paymentFields(
+  amount: string,
+  recipient: string,
+): NonNullable<Presentation["fields"]> {
+  return [
+    { label: "Amount", value: amount, format: "amount" },
+    { label: "To", value: recipient, format: "address" },
+    { label: "Network", value: "Sepolia", format: "text" },
+  ];
+}
+
+function paymentConfirmationMessage(plan: PaymentPlan): string {
+  return [
+    "Confirm private test payment",
+    "",
+    `Amount: ${formatEthWei(BigInt(plan.amountWei))} Sepolia ETH`,
+    `To: ${plan.recipient}`,
+    "Network: Sepolia testnet — no monetary value",
+    "Visibility: on-chain activity remains visible",
+  ].join("\n");
 }
 
 function result(
@@ -143,6 +422,15 @@ function compactToolText(structured: Record<string, unknown>): string {
     const effective = asRecord(security.effective);
     const approval = stringField(effective, "payment.execute") ?? "confirm";
     return `Sepolia-only capabilities loaded. Payment execution policy: ${approval}. Use structuredContent for exact reasoning; keep the user-facing answer concise.`;
+  }
+
+  if (code === "TRADE_CAPABILITIES") {
+    return "Sepolia trading is not set up yet. Regular and private swaps have no configured venue, quoting, signing, or submission path.";
+  }
+
+  if (code === "TRADE_NOT_CONFIGURED") {
+    const mode = stringField(data, "requested_mode") ?? "requested";
+    return `${mode === "private" ? "Private" : mode === "regular" ? "Regular" : "Requested"} Sepolia trading is not set up yet. No network request was made, no quote or approval was requested, and nothing was signed or submitted.`;
   }
 
   if (code === "EGRESS_CAPABILITIES") {
@@ -185,6 +473,23 @@ function compactToolText(structured: Record<string, unknown>): string {
       : "New demo wallet created. The previous demo remains archived locally.";
   }
 
+  if (code === "WALLET_LIST") {
+    const wallets = Array.isArray(data.wallets) ? data.wallets.length : 0;
+    return `${wallets} local Sepolia wallet profile${wallets === 1 ? "" : "s"} found. No seed, password, or private key was read or returned.`;
+  }
+
+  if (code === "WALLET_CREATED" || code === "WALLET_ADOPTED" || code === "WALLET_SELECTED") {
+    return "Wallet selection updated. Delegated signing remains disabled until the user separately confirms wallet reauthorization.";
+  }
+
+  if (code === "WALLET_ARCHIVED") {
+    return "Inactive wallet profile archived locally. Its encrypted Kohaku data was not deleted.";
+  }
+
+  if (code === "WALLET_REAUTHORIZED") {
+    return "The active wallet has a fresh, explicitly confirmed Sepolia-only authorization.";
+  }
+
   if (code === "WALLET_CONTEXT") {
     const balance = stringField(data, "balance_atomic");
     const amount = balance ? formatEthWei(BigInt(balance)) : "unknown";
@@ -222,8 +527,16 @@ function compactToolText(structured: Record<string, unknown>): string {
       return `Payment plan blocked for ${amount} Sepolia ETH to ${recipient}. Explain the blocker concisely; do not show internal IDs.`;
     }
     return confirmationRequired
-      ? `Payment ready for approval: ${amount} Sepolia ETH to ${recipient}. Ask the user to reply ✅, yes, or send it. The agent—not the user—must call the execution tool after approval.`
+      ? `Payment ready for native approval: ${amount} Sepolia ETH to ${recipient}. Call wallet_execute_private_payment with the decision ID and omit user_confirmed; the client will show the exact confirmation. Do not send a duplicate readback first.`
       : `Payment approved by the active local policy: ${amount} Sepolia ETH to ${recipient}. The agent may execute it now within the hard delegation limits.`;
+  }
+
+  if (code === "PAYMENT_CONFIRMATION_REQUIRED") {
+    return "Native confirmation is unavailable. Show the structured payment receipt, wait for explicit approval, then call wallet_execute_private_payment with user_confirmed: true for that same plan.";
+  }
+
+  if (code === "PAYMENT_CANCELLED") {
+    return "Payment cancelled. Nothing was sent. Do not retry without a new user request.";
   }
 
   if (code === "PAYMENT_REQUEST" || code === "PAYMENT_STATUS") {
@@ -239,6 +552,24 @@ function compactToolText(structured: Record<string, unknown>): string {
       return `Payment failed: ${amount} Sepolia ETH to ${recipient}. Do not retry without a new user request.`;
     }
     return `Payment is not confirmed (${phase}). Call wallet_get_request with the structured requestId. Never infer success from balances and never retry execution with a new ID.`;
+  }
+
+  if (code === "RECOVERY_PLANNED" || code === "RECOVERY_DENIED") {
+    const plan = asRecord(data.plan);
+    const recipient = stringField(plan, "recipient") ?? "unknown recipient";
+    const amountWei = stringField(plan, "amountWei");
+    const amount = amountWei ? formatEthWei(BigInt(amountWei)) : "unknown";
+    return code === "RECOVERY_DENIED"
+      ? `Recovery transfer blocked. Explain the blocker concisely; do not show internal IDs.`
+      : `Recovery transfer ready for approval: the exact private balance snapshot of ${amount} Sepolia ETH will be unshielded directly to ${recipient}. Ask for explicit confirmation.`;
+  }
+
+  if (code === "RECOVERY_REQUEST" || code === "RECOVERY_STATUS") {
+    const request = asRecord(data.request);
+    const phase = stringField(request, "phase") ?? outcome;
+    return phase === "confirmed"
+      ? "Recovery transfer confirmed."
+      : `Recovery transfer is ${phase}. Use wallet_get_recovery_request with the structured request ID; never submit a replacement.`;
   }
 
   return `Agent Boost result: ${outcome}. Use structuredContent internally and show only the user's next action.`;
@@ -420,7 +751,7 @@ function fundingDetails(
   };
 }
 
-function requestOutcome(request: PaymentRequest): Outcome {
+function requestOutcome(request: Pick<PaymentRequest, "phase">): Outcome {
   if (request.phase === "planned") return "ready";
   return request.phase;
 }
@@ -432,17 +763,58 @@ function publicPaymentRequest(request: PaymentRequest): Record<string, unknown> 
   return publicRequest;
 }
 
+function publicRecoveryRequest(
+  request: RecoveryTransferRequest,
+): Record<string, unknown> {
+  const publicRequest: Record<string, unknown> = { ...request };
+  delete publicRequest.recipientBalanceBeforeWei;
+  delete publicRequest.reconciliation;
+  return publicRequest;
+}
+
 export async function createMcpServer(
   runtime: AgentBoostRuntime,
 ): Promise<McpServer> {
   const capabilities = await runtime.capabilities();
   const digest = manifestDigest(capabilities);
+  const tradeCapabilityDocument = { ...tradeCapabilities() };
+  const tradeDigest = manifestDigest(tradeCapabilityDocument);
   const egressCapabilities = await runtime.egressCapabilities();
   const egressDigest = manifestDigest(egressCapabilities);
   const server = new McpServer(
     { name: "agent-boost", version: "0.1.0" },
     { capabilities: { tools: {}, resources: {} } },
   );
+  const observeConfirmation = async (
+    message: string,
+    trustedClientAttestation: boolean | undefined,
+  ): Promise<{
+    accepted: boolean;
+    mode: "mcp_elicitation" | "trusted_client_attestation" | "required";
+    reason?: "decline" | "cancel";
+  }> => {
+    if (server.server.getClientCapabilities()?.elicitation) {
+      try {
+        const elicited = await server.server.elicitInput({
+          mode: "form",
+          message,
+          requestedSchema: { type: "object", properties: {} },
+        });
+        return elicited.action === "accept"
+          ? { accepted: true, mode: "mcp_elicitation" }
+          : {
+              accepted: false,
+              mode: "mcp_elicitation",
+              reason: elicited.action === "decline" ? "decline" : "cancel",
+            };
+      } catch {
+        return { accepted: false, mode: "mcp_elicitation", reason: "cancel" };
+      }
+    }
+    return trustedClientAttestation === true
+      ? { accepted: true, mode: "trusted_client_attestation" }
+      : { accepted: false, mode: "required" };
+  };
 
   server.registerTool(
     "capabilities",
@@ -456,6 +828,136 @@ export async function createMcpServer(
     async () =>
       result(
         envelope(digest, "ready", "CAPABILITIES", await runtime.capabilities()),
+      ),
+  );
+
+  server.registerTool(
+    "trade_capabilities",
+    {
+      title: "Read trade capabilities",
+      description:
+        "Read the venue-neutral Sepolia swap contract and separate regular/private readiness. Both modes are intentionally not configured. This grants no authority and performs no network request.",
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () =>
+      result(
+        envelope(
+          tradeDigest,
+          "ready",
+          "TRADE_CAPABILITIES",
+          tradeCapabilityDocument,
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "trade_plan",
+    {
+      title: "Plan a Sepolia token swap",
+      description:
+        "Placeholder for one venue-neutral exact-input Sepolia swap in explicit regular or private mode. It currently always returns TRADE_NOT_CONFIGURED before any network request, quote, state change, approval, signing, or submission. Private mode never falls back to regular mode.",
+      inputSchema: z.object({
+        mode: z.enum(["regular", "private"]),
+        chain_id: z.literal("eip155:11155111"),
+        sell_asset_id: z.string().regex(
+          /^eip155:11155111\/(?:slip44:60|erc20:0x[0-9a-fA-F]{40})$/u,
+        ),
+        buy_asset_id: z.string().regex(
+          /^eip155:11155111\/(?:slip44:60|erc20:0x[0-9a-fA-F]{40})$/u,
+        ),
+        sell_amount_atomic: z.string().regex(/^(0|[1-9][0-9]*)$/u),
+        max_slippage_bps: z.number().int().min(0).max(10_000),
+        recipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/u),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({
+      mode,
+      chain_id,
+      sell_asset_id,
+      buy_asset_id,
+      sell_amount_atomic,
+      max_slippage_bps,
+      recipient,
+    }) =>
+      result(
+        envelope(
+          tradeDigest,
+          "blocked",
+          "TRADE_NOT_CONFIGURED",
+          tradeNotConfigured({
+            action: "plan",
+            mode,
+            intent: {
+              version: 1,
+              operation: "swap_exact_in",
+              mode,
+              chainId: chain_id,
+              sellAssetId: sell_asset_id,
+              buyAssetId: buy_asset_id,
+              sellAmountAtomic: sell_amount_atomic,
+              maxSlippageBps: max_slippage_bps,
+              recipient,
+            },
+          }),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "trade_execute",
+    {
+      title: "Execute an approved Sepolia token swap",
+      description:
+        "Reserved execution surface for a future immutable trade decision. It currently always returns TRADE_NOT_CONFIGURED and cannot request approval, access a signer, send a network request, or submit a transaction.",
+      inputSchema: z.object({
+        mode: z.enum(["regular", "private"]),
+        decision_id: z.string().startsWith("td_"),
+        client_request_id: z.string().min(8).max(200).optional(),
+        user_confirmed: z.boolean().optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async ({ mode, decision_id }) =>
+      result(
+        envelope(
+          tradeDigest,
+          "blocked",
+          "TRADE_NOT_CONFIGURED",
+          tradeNotConfigured({
+            action: "execute",
+            mode,
+            decisionId: decision_id,
+          }),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "trade_get_request",
+    {
+      title: "Read token-swap request status",
+      description:
+        "Reserved status surface for a future durable trade request. It currently always returns TRADE_NOT_CONFIGURED because no trade request can be created.",
+      inputSchema: z.object({
+        mode: z.enum(["regular", "private"]),
+        request_id: z.string().startsWith("tr_"),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ mode, request_id }) =>
+      result(
+        envelope(
+          tradeDigest,
+          "blocked",
+          "TRADE_NOT_CONFIGURED",
+          tradeNotConfigured({
+            action: "status",
+            mode,
+            requestId: request_id,
+          }),
+        ),
       ),
   );
 
@@ -635,6 +1137,224 @@ export async function createMcpServer(
   );
 
   server.registerTool(
+    "wallet_list",
+    {
+      title: "List local wallet profiles",
+      description:
+        "List redacted local Sepolia wallet profiles, active/archived status, selection epoch, and authorization state. Reads no seed, password, private key, or private note material.",
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      try {
+        return result(envelope(digest, "ready", "WALLET_LIST", await runtime.listWallets()));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_create",
+    {
+      title: "Create a local Sepolia wallet",
+      description:
+        "Create and select a named encrypted Kohaku Sepolia wallet after confirmation. The previous wallet state is archived. Selection does not authorize payments; create and confirm a separate reauthorization plan afterward.",
+      inputSchema: z.object({
+        name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+        user_confirmed: z.boolean().optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ name, user_confirmed }) => {
+      try {
+        const confirmation = await observeConfirmation(
+          `Create and select the Sepolia wallet named “${name}”? The current wallet workflow will be archived and payment authority will remain disabled.`,
+          user_confirmed,
+        );
+        if (!confirmation.accepted) {
+          return result(envelope(digest, "blocked", "WALLET_CREATE_CONFIRMATION_REQUIRED", {
+            name,
+            confirmation_mode: confirmation.mode,
+            ...(confirmation.reason ? { reason: confirmation.reason } : {}),
+          }));
+        }
+        return result(envelope(digest, "ready", "WALLET_CREATED", await runtime.createWallet({
+          name,
+          userConfirmed: true,
+        })));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_adopt_existing",
+    {
+      title: "Adopt an existing local Kohaku wallet",
+      description:
+        "Register and select an already-local Kohaku Sepolia wallet by name. This surface never accepts, reads, or returns a mnemonic, seed, password, private key, or secret-file path. The current workflow is archived, and signing remains disabled until a separate reauthorization plan is confirmed.",
+      inputSchema: z.object({
+        name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+        user_confirmed: z.boolean().optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ name, user_confirmed }) => {
+      try {
+        const confirmation = await observeConfirmation(
+          `Adopt and select the existing local Sepolia wallet named “${name}”? The current wallet workflow will be archived and payment authority will remain disabled.`,
+          user_confirmed,
+        );
+        if (!confirmation.accepted) {
+          return result(envelope(digest, "blocked", "WALLET_ADOPT_CONFIRMATION_REQUIRED", {
+            name,
+            confirmation_mode: confirmation.mode,
+            ...(confirmation.reason ? { reason: confirmation.reason } : {}),
+          }));
+        }
+        return result(envelope(digest, "ready", "WALLET_ADOPTED", await runtime.adoptWallet({
+          name,
+          userConfirmed: true,
+        })));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_select",
+    {
+      title: "Select a local wallet",
+      description:
+        "Select a registered Sepolia wallet after user confirmation. Drains in-flight work, archives current workflow state, restores the selected wallet state, advances its selection epoch, and disables delegated signing. A separate wallet_reauthorize confirmation is mandatory before any payment or recovery plan.",
+      inputSchema: z.object({
+        wallet_id: z.string().startsWith("wallet_"),
+        user_confirmed: z.boolean().optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async ({ wallet_id, user_confirmed }) => {
+      try {
+        const confirmation = await observeConfirmation(
+          `Select wallet ${wallet_id}? In-flight wallet work will drain, the current workflow will be archived, and delegated payment authority will be disabled.`,
+          user_confirmed,
+        );
+        if (!confirmation.accepted) {
+          return result(envelope(digest, "blocked", "WALLET_SELECT_CONFIRMATION_REQUIRED", {
+            wallet_id,
+            confirmation_mode: confirmation.mode,
+            ...(confirmation.reason ? { reason: confirmation.reason } : {}),
+          }));
+        }
+        return result(envelope(digest, "ready", "WALLET_SELECTED", await runtime.selectWallet({
+          walletId: wallet_id,
+          userConfirmed: true,
+        })));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_archive",
+    {
+      title: "Archive an inactive wallet profile",
+      description:
+        "Mark an inactive wallet profile archived after confirmation. Encrypted Kohaku data and private state archives are retained; the active wallet cannot be archived with this tool.",
+      inputSchema: z.object({
+        wallet_id: z.string().startsWith("wallet_"),
+        user_confirmed: z.boolean().optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async ({ wallet_id, user_confirmed }) => {
+      try {
+        const confirmation = await observeConfirmation(
+          `Archive inactive wallet profile ${wallet_id}? Encrypted wallet data and audit history will be retained.`,
+          user_confirmed,
+        );
+        if (!confirmation.accepted) {
+          return result(envelope(digest, "blocked", "WALLET_ARCHIVE_CONFIRMATION_REQUIRED", {
+            wallet_id,
+            confirmation_mode: confirmation.mode,
+            ...(confirmation.reason ? { reason: confirmation.reason } : {}),
+          }));
+        }
+        return result(envelope(digest, "ready", "WALLET_ARCHIVED", await runtime.archiveWallet({
+          walletId: wallet_id,
+          userConfirmed: true,
+        })));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_plan_reauthorization",
+    {
+      title: "Plan active-wallet reauthorization",
+      description:
+        "Create an immutable five-minute reauthorization decision bound to the active wallet and selection epoch. Planning does not authorize signing. Show the exact limits before confirmation.",
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      try {
+        const plan = await runtime.planWalletReauthorization();
+        return result(envelope(
+          digest,
+          plan.decision === "allow" ? "ready" : "blocked",
+          plan.decision === "allow" ? "WALLET_REAUTHORIZATION_PLANNED" : "WALLET_REAUTHORIZATION_DENIED",
+          { plan },
+        ));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_reauthorize",
+    {
+      title: "Reauthorize the active Sepolia wallet",
+      description:
+        "Apply one unexpired wallet reauthorization decision after exact confirmation. This mints fresh authority for the current selection epoch; wallet selection alone never authorizes signing.",
+      inputSchema: z.object({
+        decision_id: z.string().startsWith("wra_"),
+        user_confirmed: z.boolean().optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async ({ decision_id, user_confirmed }) => {
+      try {
+        const plan = await runtime.getWalletReauthorizationPlan(decision_id);
+        const confirmation = await observeConfirmation(
+          `Authorize Sepolia payments for wallet ${plan.wallet.walletName} (selection epoch ${plan.wallet.selectionEpoch}) with per-payment limit ${plan.proposedPolicy.perPaymentLimitWei} wei, lifetime limit ${plan.proposedPolicy.lifetimeLimitWei} wei, at most ${plan.proposedPolicy.maxPayments} payments, until ${plan.proposedPolicy.expiresAt}? This replaces the prior authorization and resets its spend and payment counters.`,
+          user_confirmed,
+        );
+        if (!confirmation.accepted) {
+          return result(envelope(digest, "blocked", "WALLET_REAUTHORIZATION_CONFIRMATION_REQUIRED", {
+            plan,
+            confirmation_mode: confirmation.mode,
+            ...(confirmation.reason ? { reason: confirmation.reason } : {}),
+          }));
+        }
+        return result(envelope(digest, "ready", "WALLET_REAUTHORIZED", await runtime.reauthorizeWallet({
+          decisionId: decision_id,
+          userConfirmed: true,
+        })));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
     "wallet_start_new_demo",
     {
       title: "Archive this demo and start a new wallet",
@@ -643,14 +1363,24 @@ export async function createMcpServer(
       inputSchema: z.object({
         user_confirmed: z.boolean().describe(
           "True only after the user confirms archiving the current demo and funding a new wallet.",
-        ),
+        ).optional(),
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
     async ({ user_confirmed }) => {
       try {
+        const confirmation = await observeConfirmation(
+          "Archive the current demo and create a fresh disposable Sepolia wallet? Unresolved payments will not be retried.",
+          user_confirmed,
+        );
+        if (!confirmation.accepted) {
+          return result(envelope(digest, "blocked", "DEMO_RESET_CONFIRMATION_REQUIRED", {
+            confirmation_mode: confirmation.mode,
+            ...(confirmation.reason ? { reason: confirmation.reason } : {}),
+          }));
+        }
         const started = await runtime.startNewDemo({
-          userConfirmed: user_confirmed,
+          userConfirmed: true,
         });
         return result(
           envelope(
@@ -764,7 +1494,7 @@ export async function createMcpServer(
         "The agent—not the user—calls this only after showing the exact permission card from wallet_plan_policy_update and receiving ordinary confirmation such as yes or ✅. This changes local delegated authority but never sends funds, moves funds, changes networks, enables mainnet, or exposes keys. Never ask the user for tool syntax, an ID, or a boolean.",
       inputSchema: z.object({
         decision_id: z.string().startsWith("wpd_"),
-        user_confirmed: z.boolean(),
+        user_confirmed: z.boolean().optional(),
       }),
       annotations: {
         readOnlyHint: false,
@@ -774,9 +1504,21 @@ export async function createMcpServer(
     },
     async ({ decision_id, user_confirmed }) => {
       try {
+        const plan = await runtime.getPolicyUpdatePlan(decision_id);
+        const confirmation = await observeConfirmation(
+          `Apply this Sepolia wallet policy to ${plan.wallet.walletName} (selection epoch ${plan.wallet.selectionEpoch}): ${plan.proposed.maxPayments} payments, ${plan.proposed.perPaymentLimitWei} wei per payment, ${plan.proposed.lifetimeLimitWei} wei lifetime, enabled=${plan.proposed.enabled}, expires ${plan.proposed.expiresAt}? Applying it rotates payment authority and starts a fresh payment-count epoch while preserving spent wei.`,
+          user_confirmed,
+        );
+        if (!confirmation.accepted) {
+          return result(envelope(digest, "blocked", "POLICY_UPDATE_CONFIRMATION_REQUIRED", {
+            plan,
+            confirmation_mode: confirmation.mode,
+            ...(confirmation.reason ? { reason: confirmation.reason } : {}),
+          }));
+        }
         const receipt = await runtime.applyPolicyUpdate({
           decisionId: decision_id,
-          userConfirmed: user_confirmed,
+          userConfirmed: true,
         });
         return result(
           envelope(digest, "confirmed", "POLICY_UPDATED", { receipt }),
@@ -827,24 +1569,46 @@ export async function createMcpServer(
     {
       title: "Execute a bounded shielded Sepolia test payment",
       description:
-        "The agent—not the user—calls this for one unexpired allow decision. Under the default confirm policy, call after the user approves the exact displayed plan using ordinary language or an approval emoji. Under an allow override, confirmation is not required. Hard Sepolia delegation limits always apply. Never ask the user to supply tool syntax, IDs, or booleans.",
+        "The agent—not the user—calls this for one unexpired allow decision. Under the default confirm policy, call immediately after planning and omit user_confirmed so the MCP client presents a native approval prompt. If native elicitation is unavailable, show the returned receipt, wait for explicit approval, then call again with user_confirmed=true. Under an allow override, confirmation is not required. Hard Sepolia delegation limits always apply. Never ask the user to supply tool syntax, IDs, or booleans.",
       inputSchema: z.object({
         decision_id: z.string().startsWith("wd_"),
         client_request_id: z.string().min(8).max(200).optional().describe(
           "Optional stable idempotency key. Omit to derive one from decision_id; the user never supplies this.",
         ),
         user_confirmed: z.boolean().optional().describe(
-          "Set true after the user approves the exact displayed plan. Omit under a local allow override.",
+          "Set true only after approval of the text fallback receipt. Omit for native client confirmation and under a local allow override.",
         ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
     async ({ decision_id, client_request_id, user_confirmed }) => {
       try {
+        const plan = await runtime.getPaymentPlan(decision_id);
+        let confirmed = false;
+        if (plan.approval.action === "confirm") {
+          const confirmation = await observeConfirmation(
+            paymentConfirmationMessage(plan),
+            user_confirmed,
+          );
+          if (!confirmation.accepted) {
+            return result(envelope(
+              digest,
+              "blocked",
+              confirmation.reason ? "PAYMENT_CANCELLED" : "PAYMENT_CONFIRMATION_REQUIRED",
+              {
+                plan,
+                confirmation_mode: confirmation.mode,
+                ...(confirmation.reason ? { reason: confirmation.reason } : {}),
+              },
+              { mode: "never", safeWithSameArguments: true },
+            ));
+          }
+          confirmed = true;
+        }
         const request = await runtime.executePrivatePayment({
           decisionId: decision_id,
           clientRequestId: client_request_id ?? `hermes:${decision_id}`,
-          userConfirmed: user_confirmed ?? false,
+          userConfirmed: confirmed,
         });
         return result(
           envelope(
@@ -886,6 +1650,107 @@ export async function createMcpServer(
     },
   );
 
+  server.registerTool(
+    "wallet_plan_recovery_transfer",
+    {
+      title: "Plan an exact recovery transfer",
+      description:
+        "Prepare an immutable five-minute Sepolia recovery decision for one exact recipient amount. It binds the active wallet and selection epoch, destination, amount, configured Tornado denomination, conservative fee reserve, live private-balance snapshot, and state revision. It is independent of delegated payment authority and is not a full-wallet sweep. Any additional private balance remains unrecovered and needs a later separately confirmed operation.",
+      inputSchema: z.object({
+        recipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+        amount_native: z.string().regex(/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/u),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ recipient, amount_native }) => {
+      try {
+        const plan = await runtime.planRecoveryTransfer({
+          recipient,
+          amountWei: parseEthToWei(amount_native),
+        });
+        return result(envelope(
+          digest,
+          plan.decision === "allow" ? "ready" : "blocked",
+          plan.decision === "allow" ? "RECOVERY_PLANNED" : "RECOVERY_DENIED",
+          { plan },
+          plan.decision === "allow"
+            ? { mode: "never", safeWithSameArguments: false }
+            : { mode: "refresh_plan", safeWithSameArguments: true },
+        ));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_execute_recovery_transfer",
+    {
+      title: "Execute a confirmed exact recovery transfer",
+      description:
+        "Execute one unexpired exact-amount recovery decision after confirmation. Kohaku withdraws one configured Tornado denomination to a fresh wallet-controlled account and tail-calls the exact recipient amount while reserving a conservative fee remainder. The durable request is consumed before Kohaku is invoked. This does not recover every note; never retry an unresolved request with a new ID.",
+      inputSchema: z.object({
+        decision_id: z.string().startsWith("wr_"),
+        client_request_id: z.string().min(8).max(200).optional(),
+        user_confirmed: z.boolean().optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async ({ decision_id, client_request_id, user_confirmed }) => {
+      try {
+        const plan = await runtime.getRecoveryPlan(decision_id);
+        const confirmation = await observeConfirmation(
+          `Recover exactly ${plan.amountWei} wei to ${plan.recipient} from wallet ${plan.wallet.walletName} (selection epoch ${plan.wallet.selectionEpoch}) by consuming one ${plan.withdrawalAmountWei}-wei Tornado denomination? ${plan.feeReserveWei} wei is conservatively reserved for fees and about ${plan.remainingPrivateBalanceEstimateWei} wei of private balance may remain unrecovered.`,
+          user_confirmed,
+        );
+        if (!confirmation.accepted) {
+          return result(envelope(digest, "blocked", "RECOVERY_CONFIRMATION_REQUIRED", {
+            plan,
+            confirmation_mode: confirmation.mode,
+            ...(confirmation.reason ? { reason: confirmation.reason } : {}),
+          }));
+        }
+        const request = await runtime.executeRecoveryTransfer({
+          decisionId: decision_id,
+          clientRequestId: client_request_id ?? `hermes:${decision_id}`,
+          userConfirmed: true,
+        });
+        return result(envelope(
+          digest,
+          requestOutcome(request),
+          "RECOVERY_REQUEST",
+          { request: publicRecoveryRequest(request) },
+          request.phase === "executing" || request.phase === "submitted"
+            ? { mode: "wait", safeWithSameArguments: true, afterMs: 3_000 }
+            : { mode: "never", safeWithSameArguments: false },
+        ));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_get_recovery_request",
+    {
+      title: "Read recovery-transfer request status",
+      description:
+        "Read durable, redacted recovery state. submitted and indeterminate are unresolved and must never be replaced with a new request.",
+      inputSchema: z.object({ request_id: z.string().startsWith("wrr_") }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ request_id }) => {
+      try {
+        const request = await runtime.getRecoveryRequest(request_id);
+        return result(envelope(digest, requestOutcome(request), "RECOVERY_STATUS", {
+          request: publicRecoveryRequest(request),
+        }));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
   server.registerResource(
     "wallet-capability-v1",
     "agent-boost://capabilities/wallet/v1",
@@ -902,6 +1767,29 @@ export async function createMcpServer(
           text: JSON.stringify({
             ...(await runtime.capabilities()),
             manifest_digest: digest,
+          }),
+        },
+      ],
+    }),
+  );
+
+  server.registerResource(
+    "trade-capability-v1",
+    TRADE_RESOURCE_URI,
+    {
+      title: "Agent Boost trade capability v1",
+      description:
+        "Venue-neutral Sepolia regular/private swap support and fail-closed readiness.",
+      mimeType: "application/json",
+    },
+    async (uri) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify({
+            ...tradeCapabilityDocument,
+            manifest_digest: tradeDigest,
           }),
         },
       ],

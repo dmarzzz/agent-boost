@@ -101,5 +101,12 @@
     "requires_user_confirmation": true,
     "archives_previous_state": true,
     "rebroadcasts_unresolved_payments": false
+  },
+  "wallet_management": {
+    "available": true,
+    "managed_wallets_only": true,
+    "accepts_seed_or_password": false,
+    "selection_requires_separate_reauthorization": true,
+    "recovery_transfer_available": true
   }
 }

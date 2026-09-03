@@ -4,17 +4,23 @@ import type {
   OnboardingRecord,
   PaymentApproval,
   PaymentRequest,
+  PolicyUpdatePlan,
 } from "../src/contracts.js";
 import type { AgentBoostRuntime } from "../src/mcp.js";
 import { runStdioMcp } from "../src/mcp.js";
 
 type Scenario =
   | "setup-awaiting-funding"
+  | "setup-funding-pending"
+  | "setup-shielding"
+  | "setup-ready"
+  | "setup-failed"
   | "payment-confirmed"
   | "payment-indeterminate"
   | "payment-denied"
   | "payment-allowed"
   | "policy-update"
+  | "payment-expired"
   | "egress-ready"
   | "egress-needs-enrollment";
 
@@ -22,11 +28,16 @@ const scenario = process.env.AGENT_BOOST_EVAL_SCENARIO as Scenario;
 const tracePath = process.env.AGENT_BOOST_EVAL_TRACE;
 const scenarios = new Set<Scenario>([
   "setup-awaiting-funding",
+  "setup-funding-pending",
+  "setup-shielding",
+  "setup-ready",
+  "setup-failed",
   "payment-confirmed",
   "payment-indeterminate",
   "payment-denied",
   "payment-allowed",
   "policy-update",
+  "payment-expired",
   "egress-ready",
   "egress-needs-enrollment",
 ]);
@@ -40,7 +51,7 @@ const REQUEST_ID = "req_eval_12345678";
 const NOW = "2026-09-01T00:00:00.000Z";
 
 function approval(): PaymentApproval {
-  if (scenario === "payment-denied") return "deny";
+  if (scenario === "payment-denied" || scenario === "payment-expired") return "deny";
   if (scenario === "payment-allowed") return "allow";
   return "confirm";
 }
@@ -54,7 +65,11 @@ function onboarding(phase: OnboardingRecord["phase"]): OnboardingRecord {
     createdAt: NOW,
     updatedAt: NOW,
     address: WALLET,
-    publicBalanceWei: phase === "awaiting_funding" ? "0" : "100000000000000000",
+    publicBalanceWei: phase === "awaiting_funding"
+      ? "0"
+      : phase === "funding_pending"
+        ? "50000000000000000"
+        : "200000000000000000",
     privateBalanceWei: phase === "private_ready" ? "100000000000000000" : "0",
     requiredFundingWei: "200000000000000000",
     shieldAmountWei: "100000000000000000",
@@ -68,6 +83,15 @@ function onboarding(phase: OnboardingRecord["phase"]): OnboardingRecord {
       expiresAt: "2026-09-02T00:00:00.000Z",
       enabled: true,
     },
+    ...(phase === "failed"
+      ? {
+          error: {
+            code: "SETUP_TIMEOUT",
+            message: "Funding was not confirmed before the setup deadline.",
+            retryable: true,
+          },
+        }
+      : {}),
   };
 }
 
@@ -109,8 +133,19 @@ async function trace(name: string, argumentsValue: Record<string, unknown>): Pro
 
 const ready = onboarding("private_ready");
 const awaiting = onboarding("awaiting_funding");
+const setupPhase: OnboardingRecord["phase"] = scenario === "setup-funding-pending"
+  ? "funding_pending"
+  : scenario === "setup-shielding"
+    ? "shielding"
+    : scenario === "setup-ready"
+      ? "private_ready"
+      : scenario === "setup-failed"
+        ? "failed"
+        : "awaiting_funding";
+const setupRecord = onboarding(setupPhase);
 let capabilityReads = 0;
 let egressCapabilityReads = 0;
+let lastPolicyPlan: PolicyUpdatePlan | undefined;
 const runtime: AgentBoostRuntime = {
   async capabilities() {
     if (capabilityReads > 0) await trace("capabilities", {});
@@ -131,8 +166,8 @@ const runtime: AgentBoostRuntime = {
         effective: { "payment.execute": action },
       },
       readiness: {
-        phase: scenario === "setup-awaiting-funding" ? "not_started" : "private_ready",
-        wallet_ready: scenario !== "setup-awaiting-funding",
+        phase: setupPhase === "awaiting_funding" ? "not_started" : setupPhase,
+        wallet_ready: setupPhase === "private_ready",
         rpc_egress: "ready",
       },
       privacy: {
@@ -144,8 +179,8 @@ const runtime: AgentBoostRuntime = {
   async startOnboarding() {
     await trace("onboarding_start", {});
     return {
-      record: awaiting,
-      snapshot: awaiting,
+      record: setupRecord,
+      snapshot: setupRecord,
       uiOpened: true,
       qrPngBase64:
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -153,7 +188,7 @@ const runtime: AgentBoostRuntime = {
   },
   async onboardingStatus(input) {
     await trace("onboarding_status", input);
-    return ready;
+    return setupRecord;
   },
   async walletContext() {
     await trace("wallet_get_context", {});
@@ -191,9 +226,15 @@ const runtime: AgentBoostRuntime = {
       paymentsUsed: 0,
       paymentsRemaining: 1,
     };
-    return {
+    const plan: PolicyUpdatePlan = {
       version: 1,
       decisionId: "wpd_eval_12345678",
+      wallet: {
+        walletId: "wallet_eval_12345678",
+        walletName: "agent-boost",
+        selectionEpoch: 1,
+      },
+      authorizationId: "auth_eval_12345678",
       createdAt: NOW,
       expiresAt: "2026-09-01T00:05:00.000Z",
       current,
@@ -208,6 +249,14 @@ const runtime: AgentBoostRuntime = {
       blockers: [],
       approval: { action: "confirm" as const, userConfirmationRequired: true as const },
     };
+    lastPolicyPlan = plan;
+    return plan;
+  },
+  async getPolicyUpdatePlan(decisionId) {
+    if (decisionId !== lastPolicyPlan?.decisionId) {
+      throw new Error("Eval policy decision ID changed");
+    }
+    return lastPolicyPlan;
   },
   async applyPolicyUpdate(input) {
     await trace("wallet_apply_policy_update", input);
@@ -244,7 +293,35 @@ const runtime: AgentBoostRuntime = {
       createdAt: NOW,
       expiresAt: "2026-09-01T00:05:00.000Z",
       decision: denied ? "deny" : "allow",
-      blockers: denied ? ["SECURITY_POLICY_DENIED"] : [],
+      blockers: scenario === "payment-expired"
+        ? ["DELEGATION_EXPIRED"]
+        : denied
+          ? ["SECURITY_POLICY_DENIED"]
+          : [],
+      approval: {
+        action,
+        userConfirmationRequired: action === "confirm",
+      },
+    };
+  },
+  async getPaymentPlan(decisionId) {
+    if (decisionId !== DECISION_ID) throw new Error("Eval decision ID changed");
+    const action = approval();
+    const denied = action === "deny";
+    return {
+      version: 1,
+      decisionId: DECISION_ID,
+      recipient: RECIPIENT,
+      amountWei: "10000000000000000",
+      intentDigest: `sha256:${"0".repeat(64)}`,
+      createdAt: NOW,
+      expiresAt: "2026-09-01T00:05:00.000Z",
+      decision: denied ? "deny" : "allow",
+      blockers: scenario === "payment-expired"
+        ? ["DELEGATION_EXPIRED"]
+        : denied
+          ? ["SECURITY_POLICY_DENIED"]
+          : [],
       approval: {
         action,
         userConfirmationRequired: action === "confirm",

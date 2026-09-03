@@ -5,6 +5,7 @@
 - the participant's natural-language request;
 - the exact MCP calls Hermes should own;
 - the expected structured result and compact MCP presentation hint;
+- any native client confirmation, including approve/cancel behavior;
 - the ideal participant-facing response;
 - the maximum number of visible lines.
 
@@ -16,6 +17,8 @@ npm run eval
 
 The runner connects an MCP client to the real Agent Boost MCP server over an
 in-memory transport and replays every tool step against a fake wallet runtime.
+Flows that contain a native confirmation advertise MCP form elicitation and
+exercise both accept and decline without trusting model-authored booleans.
 It never starts Tor, creates a key, contacts Sepolia, or signs a payment. It
 also rejects golden responses that expose tool names, IDs, booleans, wei, MCP
 syntax, or signing material.

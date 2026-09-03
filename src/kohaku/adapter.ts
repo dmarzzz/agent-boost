@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   DEFAULT_SHIELD_WEI,
   type WalletAdapter,
+  type WalletInventoryItem,
 } from "../contracts.js";
 import { KOHAKU_COMMIT } from "./pin.js";
 import {
@@ -98,7 +99,34 @@ export class KohakuWalletAdapter implements WalletAdapter {
     this.#walletName = walletName;
   }
 
+  listWallets(): Promise<WalletInventoryItem[]> {
+    return this.#serialized(async () => {
+      const result = await this.#run([
+        "list-wallets",
+        "--dataDir",
+        this.#dataDir,
+        "--non-interactive",
+      ]);
+      const payload = parseJsonObject(result.stdout, "list-wallets");
+      if (!isRecord(payload.wallets)) {
+        throw new Error("Kohaku list-wallets returned an invalid wallets object");
+      }
+      return Object.entries(payload.wallets).map(([name, value]) => {
+        if (!isRecord(value)) {
+          throw new Error("Kohaku list-wallets returned invalid wallet metadata");
+        }
+        const network = value.mainnet === false
+          ? "sepolia"
+          : value.mainnet === true
+            ? "mainnet"
+            : "unknown";
+        return { name, network };
+      });
+    });
+  }
+
   ensureWallet(): Promise<void> {
+    const walletName = this.#walletName;
     return this.#serialized(async () => {
       await this.#securePaths();
       const result = await this.#run([
@@ -113,11 +141,11 @@ export class KohakuWalletAdapter implements WalletAdapter {
         throw new Error("Kohaku list-wallets returned an invalid wallets object");
       }
 
-      const existing = wallets[this.#walletName];
+      const existing = wallets[walletName];
       if (existing !== undefined) {
         if (!isRecord(existing) || existing.mainnet !== false) {
           throw new Error(
-            `Existing Kohaku wallet ${this.#walletName} is not marked as Sepolia testnet`,
+            `Existing Kohaku wallet ${walletName} is not marked as Sepolia testnet`,
           );
         }
         return;
@@ -125,7 +153,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
 
       await this.#run([
         "create-wallet",
-        this.#walletName,
+        walletName,
         "--testnet",
         "--password",
         this.#passwordFile,
@@ -137,8 +165,10 @@ export class KohakuWalletAdapter implements WalletAdapter {
   }
 
   nextFreshAddress(): Promise<string> {
+    const walletName = this.#walletName;
     return this.#serialized(async () => {
       const result = await this.#runWalletCommand(
+        walletName,
         "next-fresh-address",
         [],
         false,
@@ -167,8 +197,9 @@ export class KohakuWalletAdapter implements WalletAdapter {
     if (amountWei <= 0n) {
       return Promise.reject(new Error("Shield amount must be positive"));
     }
+    const walletName = this.#walletName;
     return this.#serialized(async () => {
-      const result = await this.#runWalletCommand("shield", [
+      const result = await this.#runWalletCommand(walletName, "shield", [
         "--protocol",
         "tornado",
         "--from",
@@ -189,8 +220,9 @@ export class KohakuWalletAdapter implements WalletAdapter {
     publicBalanceWei: bigint;
     privateBalanceWei: bigint;
   }> {
+    const walletName = this.#walletName;
     return this.#serialized(async () => {
-      const result = await this.#runWalletCommand("balances", [
+      const result = await this.#runWalletCommand(walletName, "balances", [
         "--include",
         "tornado",
       ]);
@@ -253,9 +285,44 @@ export class KohakuWalletAdapter implements WalletAdapter {
       );
     }
 
+    const walletName = this.#walletName;
     return this.#serialized(async () => {
       const tailCall = `${input.recipient}:0x:${input.amountWei.toString()}`;
-      const result = await this.#runWalletCommand("unshield", [
+      const result = await this.#runWalletCommand(walletName, "unshield", [
+        "--protocol",
+        "tornado",
+        "--next",
+        "--amount-wei",
+        this.#tornadoWithdrawalWei.toString(),
+        "--tail-calls",
+        tailCall,
+        "--broadcast",
+      ]);
+      return optionalPaymentIdentifiers(result.stdout);
+    });
+  }
+
+  executeRecoveryTransfer(input: {
+    recipient: string;
+    amountWei: bigint;
+  }): Promise<{ transactionHash?: string; userOperationHash?: string }> {
+    if (!ETH_ADDRESS_RE.test(input.recipient)) {
+      return Promise.reject(new Error("Recovery recipient must be an Ethereum address"));
+    }
+    if (input.amountWei <= 0n) {
+      return Promise.reject(new Error("Recovery amount must be positive"));
+    }
+    if (input.amountWei >= this.#tornadoWithdrawalWei) {
+      return Promise.reject(
+        new Error(
+          "Recovery amount must be smaller than the Tornado withdrawal so the paymaster fee can be reserved",
+        ),
+      );
+    }
+    const walletName = this.#walletName;
+    return this.#serialized(async () => {
+      const tailCall = `${input.recipient}:0x:${input.amountWei.toString()}`;
+      const result = await this.#runWalletCommand(walletName, "unshield", [
         "--protocol",
         "tornado",
         "--next",
@@ -270,6 +337,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
   }
 
   async #runWalletCommand(
+    walletName: string,
     command: string,
     commandArgs: readonly string[] = [],
     includeRpc = true,
@@ -277,7 +345,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
     return this.#run([
       command,
       "--wallet",
-      this.#walletName,
+      walletName,
       "--password",
       this.#passwordFile,
       "--dataDir",
@@ -305,6 +373,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
           }
         : {}),
     };
+    const walletName = walletNameFromArgs(args) ?? this.#walletName;
     let result: CommandResult;
     try {
       result = await this.#runner.run(invocation);
@@ -312,7 +381,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
       try {
         await redactRelayTokenFromTrafficLog(
           this.#dataDir,
-          this.#walletName,
+          walletName,
           this.#rpcRelayToken,
         );
       } finally {
@@ -369,6 +438,11 @@ export class KohakuWalletAdapter implements WalletAdapter {
       }
     }
   }
+}
+
+function walletNameFromArgs(args: readonly string[]): string | undefined {
+  const index = args.indexOf("--wallet");
+  return index >= 0 ? args[index + 1] : undefined;
 }
 
 async function ensureSecureDirectory(path: string, label: string): Promise<void> {

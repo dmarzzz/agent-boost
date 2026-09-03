@@ -1,7 +1,7 @@
 ---
 name: agent-boost
 description: Manage a private Sepolia wallet and its permissions.
-version: 0.3.1
+version: 0.4.0
 platforms: [macos, linux]
 metadata:
   hermes:
@@ -71,6 +71,12 @@ redeemable value.
 - Keep normal replies to a headline plus at most three short lines. Hide wei,
   raw phases, policy internals, expiry timestamps, and privacy implementation
   details unless the user asks.
+- Use a stable visual grammar: **✓** complete, **◌** working, **!** needs
+  attention, and **✕** failed or cancelled. Use setup step numbers only during
+  onboarding; a payment confirmation is a receipt, not another numbered step.
+- Use bold sentence-case headings and bold field labels. Keep full addresses on
+  their own line when space is tight. End a pending state with one bold
+  **Next:** action; omit it when no action is required.
 - Under the default `confirm` policy, ordinary approval is enough after the
   exact plan is shown: `yes`, `send it`, `go ahead`, `approved`, `confirm`,
   `do it`, `proceed`, `✅`, and `👍` are valid. The words need not be exact.
@@ -141,27 +147,42 @@ mainnet support or recommend raising them without a user request.
 3. Once recipient and amount are exact, call `wallet_plan_private_payment`
    yourself. Branch on `data.plan.decision`; a denied or expired plan never
    executes.
-4. For an allowed plan under `confirm`, use this compact readback:
+4. For an allowed plan under `confirm`, prefer the tool's native confirmation:
+
+   - Immediately call `wallet_execute_private_payment` with the structured
+     `decision_id` and omit `user_confirmed`. Do not send a duplicate assistant
+     readback first. The tool will ask the MCP client to render the exact plan as
+     native **Approve** and **Cancel** controls. Telegram receives inline
+     buttons, Matrix receives reaction controls, interactive local clients
+     receive their native approval UI, and other clients fall back safely.
+   - If the result is `PAYMENT_CANCELLED`, say **✕ Payment cancelled** and that
+     nothing was sent. Do not retry.
+   - If the result is `PAYMENT_CONFIRMATION_REQUIRED`, native elicitation is not
+     available. Then use this text fallback and end the turn:
 
    ```text
-   Send <amount> Sepolia ETH
-   To <full recipient address>
-   Testnet only · on-chain activity remains visible
-   Reply ✅ or say yes to approve.
+   **Confirm private test payment**
+   **Amount:** <amount> Sepolia ETH
+   **To:** <full recipient address>
+   **Network:** Sepolia testnet · no monetary value
+   **Visibility:** On-chain activity remains visible
+   **Next:** Reply ✅ to approve or ✕ to cancel.
    ```
 
-   Do not add decision IDs, wei, protocol names, or a second explanation.
-5. After a valid approval, call `wallet_execute_private_payment` yourself with
-   the structured `decision_id` and `user_confirmed: true`. Omit
-   `client_request_id`; Agent Boost derives the stable value. Under an `allow`
-   override, call it with the decision ID and omit `user_confirmed`.
+   Do not add decision IDs, wei, protocol names, or a second explanation. After
+   an explicit fallback approval, call `wallet_execute_private_payment` with
+   the same structured `decision_id` and `user_confirmed: true`. A cancellation
+   or changed amount or destination requires a new user request and plan.
+5. Under an `allow` override, call `wallet_execute_private_payment` with the
+   decision ID and omit `user_confirmed`; no approval UI is shown. Always omit
+   `client_request_id`; Agent Boost derives the stable value.
 6. Preserve `data.request.requestId` internally. If execution is anything other
    than `confirmed` or `failed`, call `wallet_get_request` once with that exact
    ID. Never execute a replacement and never infer success from wallet balances,
    spent allowance, a missing private note, or elapsed time.
-7. Report `✅ Sent` only when `wallet_get_request` or the execution result says
-   `confirmed`. For `submitted` or `indeterminate`, say `⏳ Not confirmed yet`
-   and that it is unsafe to retry. For `failed`, say `✕ Not sent` and give the
+7. Report **✓ Sent** only when `wallet_get_request` or the execution result says
+   `confirmed`. For `submitted` or `indeterminate`, say **! Not confirmed yet**
+   and that it is unsafe to retry. For `failed`, say **✕ Not sent** and give the
    single actionable reason.
 
 ## Pitfalls

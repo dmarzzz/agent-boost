@@ -19,20 +19,207 @@
             "code": "ONBOARDING_STARTED",
             "outcome": "awaiting_funding",
             "text_includes": ["0.2 Sepolia ETH", "reply ✅ or say sent"],
-            "image": true
+            "image": true,
+            "presentation": {
+              "kind": "progress",
+              "state": "active",
+              "step": {"current": 1, "total": 3}
+            }
           }
         },
         {
           "actor": "assistant",
           "surface": "instruction_event",
           "max_lines": 3,
-          "text": "Fund your test wallet\nSend 0.2 Sepolia ETH on Sepolia. It has no monetary value.\nAfter sending, reply ✅ or say “sent”."
+          "text": "**1/3 · Fund your test wallet**\nSend **0.2 Sepolia ETH**. Testnet only; it has no monetary value.\n**Next:** Reply **✅** or say **sent** after submitting the transfer."
         },
         {
           "actor": "assistant",
           "surface": "qr_caption",
           "max_lines": 1,
           "text": "0x1111111111111111111111111111111111111111"
+        }
+      ]
+    },
+    {
+      "id": "setup-partial-funding",
+      "title": "Partial funding stays in step one with one next action",
+      "scenario": "setup-funding-pending",
+      "steps": [
+        {"actor": "user", "text": "I sent it. Check again."},
+        {
+          "actor": "tool",
+          "name": "onboarding_status",
+          "arguments": {"setup_id": "setup_eval_12345678", "since_revision": 3, "wait_ms": 30000},
+          "expect": {
+            "code": "ONBOARDING_STATUS",
+            "outcome": "awaiting_funding",
+            "text_includes": ["0.15 Sepolia ETH"],
+            "image": false,
+            "presentation": {
+              "kind": "progress",
+              "state": "active",
+              "step": {"current": 1, "total": 3}
+            }
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 3,
+          "text": "**1/3 · More funding needed**\n**Remaining:** 0.15 Sepolia ETH\n**Next:** Wait briefly, then reply **check again**."
+        }
+      ]
+    },
+    {
+      "id": "setup-preparing-private-balance",
+      "title": "Funding becomes a completed milestone during privacy preparation",
+      "scenario": "setup-shielding",
+      "steps": [
+        {"actor": "user", "text": "Check setup again."},
+        {
+          "actor": "tool",
+          "name": "onboarding_status",
+          "arguments": {"setup_id": "setup_eval_12345678", "since_revision": 3, "wait_ms": 90000},
+          "expect": {
+            "code": "ONBOARDING_STATUS",
+            "outcome": "executing",
+            "text_includes": ["Setup status: shielding"],
+            "image": false,
+            "presentation": {
+              "kind": "progress",
+              "state": "active",
+              "step": {"current": 2, "total": 3}
+            }
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 4,
+          "text": "**2/3 · Preparing private balance**\n✓ Funding found\n◌ Privacy preparation is still running\n**Next:** Reply **check again** in a minute."
+        }
+      ]
+    },
+    {
+      "id": "setup-ready",
+      "title": "Ready state closes the three-step setup with verified capabilities",
+      "scenario": "setup-ready",
+      "steps": [
+        {"actor": "user", "text": "Check setup again."},
+        {
+          "actor": "tool",
+          "name": "onboarding_status",
+          "arguments": {"setup_id": "setup_eval_12345678", "since_revision": 3, "wait_ms": 30000},
+          "expect": {
+            "code": "ONBOARDING_STATUS",
+            "outcome": "ready",
+            "text_includes": ["Setup ready"],
+            "image": false,
+            "presentation": {
+              "kind": "progress",
+              "state": "complete",
+              "step": {"current": 3, "total": 3}
+            }
+          }
+        },
+        {
+          "actor": "tool",
+          "name": "capabilities",
+          "arguments": {},
+          "expect": {
+            "code": "CAPABILITIES",
+            "outcome": "ready",
+            "text_includes": ["Sepolia-only capabilities loaded"],
+            "image": false
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 7,
+          "text": "**3/3 · Dark Mode online 🌑**\n\n✓ Test wallet ready\n✓ Private payment pocket ready\n✓ Wallet traffic routed through Tor\n\n**Next:** Try a Sepolia test payment."
+        }
+      ]
+    },
+    {
+      "id": "setup-failed",
+      "title": "Setup failure gives a direct recovery action",
+      "scenario": "setup-failed",
+      "steps": [
+        {"actor": "user", "text": "Check setup again."},
+        {
+          "actor": "tool",
+          "name": "onboarding_status",
+          "arguments": {"setup_id": "setup_eval_12345678", "since_revision": 3, "wait_ms": 30000},
+          "expect": {
+            "code": "ONBOARDING_STATUS",
+            "outcome": "failed",
+            "text_includes": ["Setup status: failed"],
+            "image": false,
+            "presentation": {"kind": "status", "state": "attention"}
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 3,
+          "text": "**! Setup needs attention**\nFunding was not confirmed before the setup deadline.\n**Next:** Add the remaining test funds, then ask me to check again."
+        }
+      ]
+    },
+    {
+      "id": "start-new-demo-wallet",
+      "title": "Starting over requires confirmation and returns to step one",
+      "scenario": "setup-awaiting-funding",
+      "steps": [
+        {"actor": "user", "text": "Start a new demo wallet."},
+        {
+          "actor": "assistant",
+          "max_lines": 2,
+          "text": "Your current demo and unresolved requests will be archived locally; the old wallet will remain on this device.\nCreate a fresh wallet that needs new Sepolia funding?"
+        },
+        {"actor": "user", "text": "Yes."},
+        {
+          "actor": "tool",
+          "name": "wallet_start_new_demo",
+          "arguments": {"user_confirmed": true},
+          "expect": {
+            "code": "DEMO_RESET_STARTED",
+            "outcome": "awaiting_funding",
+            "text_includes": ["New demo wallet ready for funding", "0.2 Sepolia ETH"],
+            "image": false,
+            "presentation": {
+              "kind": "progress",
+              "state": "active",
+              "step": {"current": 1, "total": 3}
+            }
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 3,
+          "text": "**1/3 · Fund your test wallet**\nSend **0.2 Sepolia ETH**. Testnet only; it has no monetary value.\n**Next:** Reply **✅** or say **sent** after submitting the transfer."
+        }
+      ]
+    },
+    {
+      "id": "advanced-setup-shows-live-policy",
+      "title": "Advanced setup starts with the live wallet permission",
+      "scenario": "setup-ready",
+      "steps": [
+        {"actor": "user", "text": "Show me advanced setup."},
+        {
+          "actor": "tool",
+          "name": "wallet_get_policy",
+          "arguments": {},
+          "expect": {
+            "code": "WALLET_POLICY",
+            "outcome": "ready",
+            "text_includes": ["Current private-payment permission", "up to 1 payments"],
+            "image": false
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 3,
+          "text": "🔐 **Current wallet permission**\n**1 send · up to 0.05 Sepolia ETH · 0.05 total**\nChange the send count, per-send limit, total limit, expiry, or turn it off."
         }
       ]
     },
@@ -54,7 +241,7 @@
     },
     {
       "id": "confirmed-payment-with-emoji",
-      "title": "Exact payment, compact approval, confirmed receipt",
+      "title": "Exact payment, native approval, confirmed receipt",
       "scenario": "payment-confirmed",
       "steps": [
         {
@@ -93,25 +280,24 @@
           "expect": {
             "code": "PAYMENT_PLANNED",
             "outcome": "ready",
-            "text_includes": ["0.01 Sepolia ETH", "reply ✅, yes, or send it"],
-            "image": false
+            "text_includes": ["0.01 Sepolia ETH", "native approval"],
+            "image": false,
+            "presentation": {"kind": "confirmation", "state": "pending"}
           }
         },
         {
-          "actor": "assistant",
-          "max_lines": 4,
-          "text": "Send 0.01 Sepolia ETH\nTo 0x2222222222222222222222222222222222222222\nTestnet only · on-chain activity remains visible\nReply ✅ or say yes to approve."
-        },
-        {
-          "actor": "user",
-          "text": "✅"
+          "actor": "client",
+          "surface": "native_confirmation",
+          "title": "Confirm private test payment",
+          "approve_label": "Approve",
+          "decline_label": "Cancel",
+          "decision": "accept"
         },
         {
           "actor": "tool",
           "name": "wallet_execute_private_payment",
           "arguments": {
-            "decision_id": "wd_eval_12345678",
-            "user_confirmed": true
+            "decision_id": "wd_eval_12345678"
           },
           "expect": {
             "code": "PAYMENT_REQUEST",
@@ -136,7 +322,7 @@
         {
           "actor": "assistant",
           "max_lines": 3,
-          "text": "✅ Sent\n0.01 Sepolia ETH to 0x2222222222222222222222222222222222222222\nSepolia testnet · on-chain activity remains visible"
+          "text": "**✓ Sent**\n0.01 Sepolia ETH to 0x2222222222222222222222222222222222222222\nSepolia testnet · on-chain activity remains visible"
         }
       ]
     },
@@ -170,25 +356,24 @@
           "expect": {
             "code": "PAYMENT_PLANNED",
             "outcome": "ready",
-            "text_includes": ["0.01 Sepolia ETH"],
-            "image": false
+            "text_includes": ["0.01 Sepolia ETH", "native approval"],
+            "image": false,
+            "presentation": {"kind": "confirmation", "state": "pending"}
           }
         },
         {
-          "actor": "assistant",
-          "max_lines": 4,
-          "text": "Send 0.01 Sepolia ETH\nTo 0x2222222222222222222222222222222222222222\nTestnet only · on-chain activity remains visible\nReply ✅ or say yes to approve."
-        },
-        {
-          "actor": "user",
-          "text": "Yes, send it."
+          "actor": "client",
+          "surface": "native_confirmation",
+          "title": "Confirm private test payment",
+          "approve_label": "Approve",
+          "decline_label": "Cancel",
+          "decision": "accept"
         },
         {
           "actor": "tool",
           "name": "wallet_execute_private_payment",
           "arguments": {
-            "decision_id": "wd_eval_12345678",
-            "user_confirmed": true
+            "decision_id": "wd_eval_12345678"
           },
           "expect": {
             "code": "PAYMENT_REQUEST",
@@ -213,8 +398,31 @@
         {
           "actor": "assistant",
           "max_lines": 3,
-          "text": "⏳ Not confirmed yet\n0.01 Sepolia ETH may have been submitted.\nI won’t retry it automatically."
+          "text": "**! Not confirmed yet**\n0.01 Sepolia ETH may have been submitted.\nI won’t retry it automatically."
         }
+      ]
+    },
+    {
+      "id": "native-payment-cancelled",
+      "title": "Cancelling a native confirmation never executes",
+      "scenario": "payment-confirmed",
+      "steps": [
+        {"actor": "user", "text": "Send 0.01 Sepolia ETH privately to 0x2222222222222222222222222222222222222222."},
+        {"actor": "tool", "name": "wallet_get_context", "arguments": {}, "expect": {"code": "WALLET_CONTEXT", "outcome": "ready", "text_includes": ["Main account balance: 0.1 Sepolia ETH"], "image": false}},
+        {"actor": "tool", "name": "wallet_plan_private_payment", "arguments": {"recipient": "0x2222222222222222222222222222222222222222", "amount_atomic": "10000000000000000"}, "expect": {"code": "PAYMENT_PLANNED", "outcome": "ready", "text_includes": ["native approval"], "image": false, "presentation": {"kind": "confirmation", "state": "pending"}}},
+        {"actor": "client", "surface": "native_confirmation", "title": "Confirm private test payment", "approve_label": "Approve", "decline_label": "Cancel", "decision": "decline"},
+        {"actor": "tool", "name": "wallet_execute_private_payment", "arguments": {"decision_id": "wd_eval_12345678"}, "expect": {"code": "PAYMENT_CANCELLED", "outcome": "blocked", "text_includes": ["Payment cancelled", "Nothing was sent"], "image": false, "presentation": {"kind": "status", "state": "cancelled"}}},
+        {"actor": "assistant", "max_lines": 2, "text": "**✕ Payment cancelled**\nNothing was sent."}
+      ]
+    },
+    {
+      "id": "main-balance-read",
+      "title": "A balance question gets one live main-account value",
+      "scenario": "payment-confirmed",
+      "steps": [
+        {"actor": "user", "text": "What is my Agent Boost balance?"},
+        {"actor": "tool", "name": "wallet_get_context", "arguments": {}, "expect": {"code": "WALLET_CONTEXT", "outcome": "ready", "text_includes": ["Main account balance: 0.1 Sepolia ETH"], "image": false}},
+        {"actor": "assistant", "max_lines": 2, "text": "**Main account balance**\n0.1 Sepolia ETH on the funding account."}
       ]
     },
     {
@@ -385,6 +593,17 @@
           "max_lines": 3,
           "text": "✅ Permission updated\n10 private sends · 1 Sepolia ETH max each · 10 Sepolia ETH total\nNo funds moved."
         }
+      ]
+    },
+    {
+      "id": "expired-delegation-blocked",
+      "title": "Expired delegated authority stops before confirmation",
+      "scenario": "payment-expired",
+      "steps": [
+        {"actor": "user", "text": "Send 0.01 Sepolia ETH privately to 0x2222222222222222222222222222222222222222."},
+        {"actor": "tool", "name": "wallet_get_context", "arguments": {}, "expect": {"code": "WALLET_CONTEXT", "outcome": "ready", "text_includes": ["Main account balance: 0.1 Sepolia ETH"], "image": false}},
+        {"actor": "tool", "name": "wallet_plan_private_payment", "arguments": {"recipient": "0x2222222222222222222222222222222222222222", "amount_atomic": "10000000000000000"}, "expect": {"code": "PAYMENT_DENIED", "outcome": "blocked", "text_includes": ["Payment plan blocked", "0.01 Sepolia ETH"], "image": false, "presentation": {"kind": "status", "state": "attention"}}},
+        {"actor": "assistant", "max_lines": 3, "text": "**! Payment blocked**\nThe delegated payment window has expired; your wallet and balance still remain.\n**Next:** Start a new demo before requesting another payment."}
       ]
     },
     {

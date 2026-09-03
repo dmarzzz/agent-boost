@@ -43,6 +43,46 @@ async function policyStore(options: {
   return store;
 }
 
+async function addHistoricalRequest(
+  store: StateStore,
+  input: { requestId: string; decisionId: string; clientRequestId: string; phase: "confirmed" | "indeterminate" },
+): Promise<void> {
+  const profile = await store.activeWalletProfile();
+  const authorization = {
+    walletId: profile.walletId,
+    walletName: profile.name,
+    selectionEpoch: profile.selectionEpoch,
+    authorizationId: profile.authorizationId!,
+  };
+  await store.update((draft) => {
+    draft.plans[input.decisionId] = {
+      version: 1,
+      decisionId: input.decisionId,
+      recipient: "0x2222222222222222222222222222222222222222",
+      amountWei: input.phase === "confirmed" ? "1000000000000000000" : "1",
+      authorization,
+      intentDigest: `sha256:${"0".repeat(64)}`,
+      createdAt: new Date(0).toISOString(),
+      expiresAt: new Date(86_400_000).toISOString(),
+      decision: "allow",
+      blockers: [],
+      approval: { action: "confirm", userConfirmationRequired: true },
+    };
+    draft.requests[input.requestId] = {
+      version: 1,
+      requestId: input.requestId,
+      clientRequestId: input.clientRequestId,
+      decisionId: input.decisionId,
+      recipient: "0x2222222222222222222222222222222222222222",
+      amountWei: input.phase === "confirmed" ? "1000000000000000000" : "1",
+      authorization,
+      phase: input.phase,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+  });
+}
+
 test("wallet policy changes are previewed, confirmed, atomic, and idempotent", async () => {
   const store = await policyStore();
   const controller = new WalletPolicyController({
@@ -96,18 +136,11 @@ test("policy updates cannot erase used authority or exceed testnet bounds", asyn
     maxPayments: 10,
     spentWei: "1000000000000000000",
   });
-  await store.update((draft) => {
-    draft.requests.req_used = {
-      version: 1,
-      requestId: "req_used",
-      clientRequestId: "hermes:used-payment",
-      decisionId: "wd_used",
-      recipient: "0x2222222222222222222222222222222222222222",
-      amountWei: "1000000000000000000",
-      phase: "confirmed",
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-    };
+  await addHistoricalRequest(store, {
+    requestId: "req_used",
+    clientRequestId: "hermes:used-payment",
+    decisionId: "wd_used",
+    phase: "confirmed",
   });
   const controller = new WalletPolicyController({
     store,
@@ -134,22 +167,14 @@ test("applying a stale policy preview fails closed", async () => {
     clock: { now: () => new Date(1_000) },
   });
   const plan = await controller.plan({ maxPayments: 9 });
-  await store.update((draft) => {
-    draft.requests.req_new = {
-      version: 1,
-      requestId: "req_new",
-      clientRequestId: "hermes:new-payment",
-      decisionId: "wd_new",
-      recipient: "0x2222222222222222222222222222222222222222",
-      amountWei: "1",
-      phase: "indeterminate",
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-    };
+  await addHistoricalRequest(store, {
+    requestId: "req_new",
+    clientRequestId: "hermes:new-payment",
+    decisionId: "wd_new",
+    phase: "indeterminate",
   });
   await assert.rejects(
     controller.apply({ decisionId: plan.decisionId, userConfirmed: true }),
     /POLICY_CHANGED_REFRESH_PLAN/,
   );
 });
-

@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import type {
   OnboardingRecord,
@@ -19,11 +20,16 @@ import { createMcpServer } from "../src/mcp.js";
 
 type Scenario =
   | "setup-awaiting-funding"
+  | "setup-funding-pending"
+  | "setup-shielding"
+  | "setup-ready"
+  | "setup-failed"
   | "payment-confirmed"
   | "payment-indeterminate"
   | "payment-denied"
   | "payment-allowed"
   | "policy-update"
+  | "payment-expired"
   | "egress-ready"
   | "egress-needs-enrollment";
 
@@ -39,6 +45,15 @@ interface AssistantStep {
   surface?: string;
 }
 
+interface ClientStep {
+  actor: "client";
+  surface: "native_confirmation";
+  title: string;
+  approve_label: string;
+  decline_label: string;
+  decision: "accept" | "decline";
+}
+
 interface ToolStep {
   actor: "tool";
   name: string;
@@ -48,6 +63,11 @@ interface ToolStep {
     outcome: string;
     text_includes: string[];
     image: boolean;
+    presentation?: {
+      kind: string;
+      state: string;
+      step?: { current: number; total: number };
+    };
   };
 }
 
@@ -55,7 +75,7 @@ interface EvalFlow {
   id: string;
   title: string;
   scenario: Scenario;
-  steps: Array<UserStep | AssistantStep | ToolStep>;
+  steps: Array<UserStep | AssistantStep | ClientStep | ToolStep>;
 }
 
 interface EvalCatalog {
@@ -72,6 +92,12 @@ const NOW = "2026-09-01T00:00:00.000Z";
 
 const expectedToolTraces: Record<string, string[]> = {
   "setup-funding-qr": ["onboarding_start"],
+  "setup-partial-funding": ["onboarding_status"],
+  "setup-preparing-private-balance": ["onboarding_status"],
+  "setup-ready": ["onboarding_status", "capabilities"],
+  "setup-failed": ["onboarding_status"],
+  "start-new-demo-wallet": ["wallet_start_new_demo"],
+  "advanced-setup-shows-live-policy": ["wallet_get_policy"],
   "ambiguous-amount-clarification": [],
   "confirmed-payment-with-emoji": [
     "capabilities",
@@ -86,6 +112,12 @@ const expectedToolTraces: Record<string, string[]> = {
     "wallet_execute_private_payment",
     "wallet_get_request",
   ],
+  "native-payment-cancelled": [
+    "wallet_get_context",
+    "wallet_plan_private_payment",
+    "wallet_execute_private_payment",
+  ],
+  "main-balance-read": ["wallet_get_context"],
   "local-deny-override": [
     "capabilities",
     "wallet_get_context",
@@ -101,6 +133,10 @@ const expectedToolTraces: Record<string, string[]> = {
     "wallet_plan_policy_update",
     "wallet_apply_policy_update",
   ],
+  "expired-delegation-blocked": [
+    "wallet_get_context",
+    "wallet_plan_private_payment",
+  ],
   "covered-public-read": ["egress_status", "egress_fetch"],
   "covered-read-needs-enrollment": ["egress_status"],
 };
@@ -115,7 +151,7 @@ const forbiddenVisiblePatterns = [
 ];
 
 function approvalFor(scenario: Scenario): PaymentApproval {
-  if (scenario === "payment-denied") return "deny";
+  if (scenario === "payment-denied" || scenario === "payment-expired") return "deny";
   if (scenario === "payment-allowed") return "allow";
   return "confirm";
 }
@@ -129,7 +165,11 @@ function onboardingRecord(phase: OnboardingRecord["phase"]): OnboardingRecord {
     createdAt: NOW,
     updatedAt: NOW,
     address: WALLET,
-    publicBalanceWei: phase === "awaiting_funding" ? "0" : "100000000000000000",
+    publicBalanceWei: phase === "awaiting_funding"
+      ? "0"
+      : phase === "funding_pending"
+        ? "50000000000000000"
+        : "200000000000000000",
     privateBalanceWei: phase === "private_ready" ? "100000000000000000" : "0",
     requiredFundingWei: "200000000000000000",
     shieldAmountWei: "100000000000000000",
@@ -145,6 +185,15 @@ function onboardingRecord(phase: OnboardingRecord["phase"]): OnboardingRecord {
       expiresAt: "2026-09-02T00:00:00.000Z",
       enabled: true,
     },
+    ...(phase === "failed"
+      ? {
+          error: {
+            code: "SETUP_TIMEOUT",
+            message: "Funding was not confirmed before the setup deadline.",
+            retryable: true,
+          },
+        }
+      : {}),
   };
 }
 
@@ -200,6 +249,16 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
   const approval = approvalFor(scenario);
   const awaiting = onboardingRecord("awaiting_funding");
   const ready = onboardingRecord("private_ready");
+  const setupPhase: OnboardingRecord["phase"] = scenario === "setup-funding-pending"
+    ? "funding_pending"
+    : scenario === "setup-shielding"
+      ? "shielding"
+      : scenario === "setup-ready"
+        ? "private_ready"
+        : scenario === "setup-failed"
+          ? "failed"
+          : "awaiting_funding";
+  const setupRecord = onboardingRecord(setupPhase);
 
   return {
     async capabilities() {
@@ -223,15 +282,15 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
     },
     async startOnboarding() {
       return {
-        record: awaiting,
-        snapshot: awaiting,
+        record: setupRecord,
+        snapshot: setupRecord,
         uiOpened: true,
         qrPngBase64:
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
       };
     },
     async onboardingStatus() {
-      return ready;
+      return setupRecord;
     },
     async walletContext() {
       return {
@@ -264,6 +323,12 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
       return {
         version: 1,
         decisionId: "wpd_eval_12345678",
+        wallet: {
+          walletId: "wallet_eval_12345678",
+          walletName: "agent-boost",
+          selectionEpoch: 1,
+        },
+        authorizationId: "auth_eval_12345678",
         createdAt: NOW,
         expiresAt: "2026-09-01T00:05:00.000Z",
         current,
@@ -278,6 +343,12 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
         blockers: [],
         approval: { action: "confirm", userConfirmationRequired: true },
       };
+    },
+    async getPolicyUpdatePlan() {
+      return this.planPolicyUpdate({
+        maxPayments: 10,
+        perPaymentLimitWei: "1000000000000000000",
+      });
     },
     async applyPolicyUpdate(input): Promise<PolicyUpdateReceipt> {
       assert.equal(input.decisionId, "wpd_eval_12345678");
@@ -297,7 +368,17 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
       };
     },
     async planPrivatePayment(input) {
-      return paymentPlan(input, approval);
+      const plan = paymentPlan(input, approval);
+      if (scenario === "payment-expired") {
+        plan.blockers = ["DELEGATION_EXPIRED"];
+      }
+      return plan;
+    },
+    async getPaymentPlan() {
+      return paymentPlan(
+        { recipient: RECIPIENT, amountWei: "10000000000000000" },
+        approval,
+      );
     },
     async executePrivatePayment(input) {
       assert.equal(input.decisionId, DECISION_ID);
@@ -377,6 +458,12 @@ function assertIdealVisibleResponse(step: AssistantStep, flow: EvalFlow): void {
   }
 }
 
+function assertClientInteraction(step: ClientStep, flow: EvalFlow): void {
+  assert.equal(step.title, "Confirm private test payment", `${flow.id}: native title drifted`);
+  assert.equal(step.approve_label, "Approve", `${flow.id}: native approve label drifted`);
+  assert.equal(step.decline_label, "Cancel", `${flow.id}: native cancel label drifted`);
+}
+
 test("ideal conversation flows replay through the real MCP contract", async (t) => {
   const catalog = JSON.parse(
     await readFile(new URL("../evals/ideal-flows.json", import.meta.url), "utf8"),
@@ -406,11 +493,26 @@ test("ideal conversation flows replay through the real MCP contract", async (t) 
 
       for (const step of flow.steps) {
         if (step.actor === "assistant") assertIdealVisibleResponse(step, flow);
+        if (step.actor === "client") assertClientInteraction(step, flow);
       }
 
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       const server = await createMcpServer(evalRuntime(flow.scenario));
-      const client = new Client({ name: "agent-boost-eval", version: "1.0.0" });
+      const interaction = flow.steps.find(
+        (step): step is ClientStep => step.actor === "client",
+      );
+      const client = new Client(
+        { name: "agent-boost-eval", version: "1.0.0" },
+        interaction ? { capabilities: { elicitation: { form: {} } } } : undefined,
+      );
+      if (interaction) {
+        client.setRequestHandler(ElicitRequestSchema, async (request) => {
+          assert.match(request.params.message, /Confirm private test payment/u);
+          assert.match(request.params.message, /0\.01 Sepolia ETH/u);
+          assert.match(request.params.message, new RegExp(RECIPIENT, "u"));
+          return { action: interaction.decision };
+        });
+      }
       await Promise.all([
         server.connect(serverTransport),
         client.connect(clientTransport),
@@ -429,6 +531,21 @@ test("ideal conversation flows replay through the real MCP contract", async (t) 
           };
           assert.equal(structured.code, step.expect.code);
           assert.equal(structured.outcome, step.expect.outcome);
+          if (step.expect.presentation) {
+            const presentation = (response.structuredContent as {
+              presentation: {
+                kind: string;
+                state: string;
+                step?: { current: number; total: number };
+              };
+            }).presentation;
+            assert.equal(presentation.kind, step.expect.presentation.kind);
+            assert.equal(presentation.state, step.expect.presentation.state);
+            if (step.expect.presentation.step) {
+              assert.equal(presentation.step?.current, step.expect.presentation.step.current);
+              assert.equal(presentation.step?.total, step.expect.presentation.step.total);
+            }
+          }
 
           const textBlock = response.content.find((block) => block.type === "text");
           assert.equal(textBlock?.type, "text");

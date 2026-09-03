@@ -158,7 +158,10 @@ export async function installHermesIntegration(
       : undefined;
 
   if (existingServer !== undefined) {
-    if (!deepEqual(existingServer, desiredServer)) {
+    if (
+      !deepEqual(existingServer, desiredServer) &&
+      !isSafeAgentBoostUpgrade(existingServer, desiredServer)
+    ) {
       throw new HermesInstallError(
         "MCP_SERVER_CONFLICT",
         `Hermes already has a conflicting ${HERMES_SERVER_NAME} MCP entry; refusing to replace it.`,
@@ -168,8 +171,10 @@ export async function installHermesIntegration(
   }
 
   const configChanged =
-    existingServer === undefined || shouldDefaultToolUseEnforcement;
-  if (existingServer === undefined) {
+    existingServer === undefined ||
+    !deepEqual(existingServer, desiredServer) ||
+    shouldDefaultToolUseEnforcement;
+  if (existingServer === undefined || !deepEqual(existingServer, desiredServer)) {
     document.setIn(["mcp_servers", HERMES_SERVER_NAME], desiredServer);
   }
   if (shouldDefaultToolUseEnforcement) {
@@ -273,6 +278,31 @@ export function createHermesServerConfig(executablePath: string): object {
       prompts: false,
     },
   };
+}
+
+function isSafeAgentBoostUpgrade(existing: unknown, desired: unknown): boolean {
+  if (!isPlainRecord(existing) || !isPlainRecord(desired)) return false;
+  const existingTools = existing.tools;
+  const desiredTools = desired.tools;
+  if (!isPlainRecord(existingTools) || !isPlainRecord(desiredTools)) return false;
+  const existingInclude = existingTools.include;
+  const desiredInclude = desiredTools.include;
+  if (!Array.isArray(existingInclude) || !Array.isArray(desiredInclude)) return false;
+  if (
+    !existingInclude.every((tool) =>
+      typeof tool === "string" && desiredInclude.includes(tool)
+    ) ||
+    new Set(existingInclude).size !== existingInclude.length
+  ) {
+    return false;
+  }
+  return deepEqual(
+    {
+      ...existing,
+      tools: { ...existingTools, include: desiredInclude },
+    },
+    desired,
+  );
 }
 
 async function resolveHermesConfigPath(

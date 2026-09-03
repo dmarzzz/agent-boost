@@ -111,6 +111,19 @@ function envelope(data: Record<string, unknown>): Record<string, unknown> {
     manifest_digest: `sha256:${"a".repeat(64)}`,
     outcome: "awaiting_funding",
     code: "ONBOARDING_STARTED",
+    presentation: {
+      version: "1.0",
+      kind: "progress",
+      title: "Fund your test wallet",
+      state: "active",
+      step: { current: 1, total: 3, label: "Fund test wallet" },
+      fields: [
+        { label: "Amount", value: "0.2 Sepolia ETH", format: "amount" },
+        { label: "Address", value: ADDRESS, format: "address" },
+      ],
+      notice: { tone: "warning", text: "Testnet only." },
+      next_action: "Send the test funds, then reply ✅ or say sent.",
+    },
     retry: { mode: "wait", safe_with_same_arguments: true, after_ms: 2000 },
     data,
   };

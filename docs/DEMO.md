@@ -68,15 +68,17 @@ Tell Hermes, for example:
 > Send 0.02 Sepolia ETH privately to
 > 0x2222222222222222222222222222222222222222.
 
-Hermes reads current wallet context and creates a short-lived plan itself. It
-shows the exact Sepolia ETH amount, full recipient address, and a short testnet
-privacy warning. Under the default security policy, reply ✅, `yes`, or `send
-it` to approve. Hermes owns the MCP calls, decision IDs, atomic units, and
-idempotency key; the user never types them.
+Hermes reads current wallet context and creates a short-lived plan itself. Under
+the default security policy, the client shows a native receipt with the exact
+Sepolia ETH amount, full recipient address, testnet privacy warning, and
+**Approve** / **Cancel** controls. Hermes owns the MCP calls, decision IDs,
+atomic units, and idempotency key; the user never types them.
 
-Agent Boost does not listen to the conversation itself. Hermes reports the
-user's confirmation with `user_confirmed: true`; this is a conversational demo
-control, not independent authentication or an out-of-band approval channel.
+If the client cannot render MCP elicitation, Agent Boost returns the same
+structured receipt for Hermes to read back. In that fallback only, reply ✅,
+`yes`, or `send it`, and Hermes retries the unchanged decision with
+`user_confirmed: true`. This remains a conversational demo control, not
+independent authentication or an out-of-band approval channel.
 
 After confirmation, Hermes executes the immutable plan with a stable request
 ID. The default wallet policy permits:

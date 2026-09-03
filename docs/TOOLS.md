@@ -29,10 +29,13 @@ How a payment works, in the order the tools are called:
    limits, and balance, then returns a five-minute immutable plan with a SHA-256
    digest over chain, recipient, asset, amount, and operation. Plans never
    sign, submit, or reserve funds.
-6. `wallet_execute_private_payment` takes the decision ID and the user's
-   confirmation, atomically consumes one send and its amount allowance, then
-   calls Kohaku. Recipient and amount come from the plan, never from the call.
-   An uncertain outcome never restores authority for an automatic retry.
+6. `wallet_execute_private_payment` takes the decision ID and asks a capable MCP
+   client for one native **Approve** or **Cancel** decision. Acceptance atomically
+   consumes one send and its amount allowance before Kohaku is called. If the client
+   cannot elicit, the tool returns a structured receipt for Hermes to read back
+   and accepts `user_confirmed: true` only on the retry. Recipient and amount
+   always come from the plan. An uncertain outcome never restores authority for
+   an automatic retry.
 7. `wallet_get_request` reads the durable, redacted result and reconciles a
    non-terminal request from a real receipt or the recipient-balance checkpoint.
    Reconciliation never rebroadcasts.
@@ -50,7 +53,7 @@ public archive ID and a new QR, never a path or a secret.
 | `wallet_plan_policy_update` | any of `max_payments`, `per_payment_limit_native`, `lifetime_limit_native`, `expires_in_hours`, `enabled` | `wpd_` preview with current and proposed policies |
 | `wallet_apply_policy_update` | `decision_id`, `user_confirmed` | idempotent policy-update receipt |
 | `wallet_plan_private_payment` | `recipient`, `amount_atomic` | `wd_` decision, digest, expiry, whether confirmation is required |
-| `wallet_execute_private_payment` | `decision_id`, `user_confirmed` | `req_` request in `executing` or later |
+| `wallet_execute_private_payment` | `decision_id`, `client_request_id`, optional `user_confirmed` fallback | native confirmation, cancellation, fallback receipt, or a `req_` request in `executing` or later |
 | `wallet_get_request` | `request_id` | one redacted request state |
 | `wallet_start_new_demo` | `user_confirmed` | archive ID, new setup, new QR |
 

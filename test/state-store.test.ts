@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -30,6 +30,7 @@ test("StateStore writes atomically with private permissions and wakes waiters", 
         perPaymentLimitWei: "100000000000000000",
         lifetimeLimitWei: "100000000000000000",
         spentWei: "0",
+        maxPayments: 1,
         expiresAt: new Date(86_400_000).toISOString(),
         enabled: true,
       },
@@ -46,7 +47,27 @@ test("StateStore archives a complete demo before starting fresh state", async ()
   const store = new StateStore(root);
   await store.initialize();
   await store.ensureWalletProfile("agent-boost");
+  const profile = await store.activeWalletProfile();
+  const authorization = {
+    walletId: profile.walletId,
+    walletName: profile.name,
+    selectionEpoch: profile.selectionEpoch,
+    authorizationId: profile.authorizationId!,
+  };
   await store.update((draft) => {
+    draft.plans.wd_unresolved = {
+      version: 1,
+      decisionId: "wd_unresolved",
+      recipient: "0x2222222222222222222222222222222222222222",
+      amountWei: "1",
+      authorization,
+      intentDigest: `sha256:${"0".repeat(64)}`,
+      createdAt: new Date(0).toISOString(),
+      expiresAt: new Date(1).toISOString(),
+      decision: "deny",
+      blockers: ["STATE_MIGRATION_REPLAN_REQUIRED"],
+      approval: { action: "deny", userConfirmationRequired: false },
+    };
     draft.requests.req_unresolved = {
       version: 1,
       requestId: "req_unresolved",
@@ -54,6 +75,7 @@ test("StateStore archives a complete demo before starting fresh state", async ()
       decisionId: "wd_unresolved",
       recipient: "0x2222222222222222222222222222222222222222",
       amountWei: "1",
+      authorization,
       phase: "indeterminate",
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
@@ -62,13 +84,17 @@ test("StateStore archives a complete demo before starting fresh state", async ()
 
   const reset = await store.archiveAndReset("agent-boost-new");
   assert.equal(reset.previous.requests.req_unresolved?.phase, "indeterminate");
-  assert.deepEqual(reset.current, {
-    version: 1,
-    wallet: { activeName: "agent-boost-new" },
-    plans: {},
-    policyPlans: {},
-    requests: {},
-  });
+  assert.equal(reset.current.version, 2);
+  assert.equal(reset.current.wallet?.activeName, "agent-boost-new");
+  assert.deepEqual(reset.current.policyPlans, {});
+  assert.deepEqual(reset.current.recoveryPlans, {});
+  assert.deepEqual(reset.current.recoveryRequests, {});
+  assert.deepEqual(reset.current.reauthorizationPlans, {});
+  const newProfile = Object.values(reset.current.wallet?.profiles ?? {}).find(
+    (profile) => profile.name === "agent-boost-new",
+  );
+  assert.equal(newProfile?.selectionEpoch, 1);
+  assert.equal(newProfile?.authorizationId, undefined);
   const archivePath = join(root, "archives", reset.archiveId, "state.json");
   const archived = JSON.parse(await readFile(archivePath, "utf8")) as {
     requests: Record<string, { phase: string }>;
@@ -82,8 +108,10 @@ test("StateStore conservatively migrates pre-policy-editor wallets", async () =>
   const root = await mkdtemp(join(tmpdir(), "agent-boost-state-legacy-"));
   const store = new StateStore(root);
   await store.initialize();
-  await store.update((draft) => {
-    draft.onboarding = {
+  await writeFile(store.path, `${JSON.stringify({
+    version: 1,
+    wallet: { activeName: "agent-boost" },
+    onboarding: {
       version: 1,
       setupId: "setup-legacy",
       revision: 1,
@@ -100,16 +128,15 @@ test("StateStore conservatively migrates pre-policy-editor wallets", async () =>
         perPaymentLimitWei: "50000000000000000",
         lifetimeLimitWei: "50000000000000000",
         spentWei: "0",
-        maxPayments: 1,
         expiresAt: new Date(86_400_000).toISOString(),
         enabled: true,
       },
-    };
-    delete (draft.onboarding.delegation as Partial<
-      typeof draft.onboarding.delegation
-    >).maxPayments;
-    delete (draft as Partial<typeof draft>).policyPlans;
-  });
+    },
+    plans: {},
+    requests: {},
+  }, null, 2)}\n`, "utf8");
+
+  await store.initialize();
 
   const migrated = await store.read();
   assert.equal(migrated.onboarding?.delegation.maxPayments, 1);

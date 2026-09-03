@@ -1,7 +1,7 @@
 ---
 name: agent-boost-setup
 description: Set up and fund a local Sepolia wallet conversationally.
-version: 0.3.0
+version: 0.4.0
 platforms: [macos, linux]
 metadata:
   hermes:
@@ -22,14 +22,19 @@ guidance instead of trying to bootstrap through an unavailable tool.
 
 ## Conversation contract
 
-Use four participant-facing states and no implementation vocabulary:
+Use three participant-facing steps and no implementation vocabulary:
 
-1. **Fund your test wallet** — show the exact remaining amount, address, and QR.
-2. **Funding found** — the full amount is visible on Sepolia.
-3. **Preparing the private balance** — automatic privacy preparation is still
-   running.
-4. **Ready** — the private balance and Tor-routed Sepolia access both passed
-   verification.
+1. **1/3 · Fund your test wallet** — show the exact remaining amount, address,
+   and QR. Partial funding remains in this step.
+2. **2/3 · Prepare the private balance** — show **✓ Funding found** as a
+   completed milestone while automatic privacy preparation is still running.
+3. **3/3 · Ready** — the private balance and Tor-routed Sepolia access both
+   passed verification.
+
+Use the same state marks everywhere: **✓** complete, **◌** working,
+**!** needs attention, and **✕** failed or cancelled. End every non-terminal
+state with one bold **Next:** line. Numbers are reserved for this real setup
+sequence; do not number one-off confirmations or errors.
 
 Never say MCP, toolset, process lock, loopback, shielding transaction, or
 Tornado unless the user asks for technical detail. Never promise anonymity.
@@ -63,7 +68,6 @@ The vault combination stays home. I’m printing Hermes a tiny permission slip i
 🌳 Leaving covered web asleep… shhh
 🙋 Payments will knock first.
 🔐 Default permission: 10 sends · up to 1 Sepolia ETH each.
-Like turning knobs? Say advanced setup ⚙️
 ```
 
 Do not report fake percentages or mark a capability ready before its check
@@ -116,17 +120,23 @@ opened. Keep the local funding page as an optional same-device fallback only.
    On Matrix, create this mobile-friendly sequence:
 
    1. Use `send_message` with `action: send` and `target: matrix` for one short
-      instruction: send exactly the server-provided `remaining_amount_eth`
-      Sepolia ETH, Sepolia ETH has no real or redeemable value, and reply with
-      **✅** or say **sent** after submitting the transfer. Do not include the
-      address or funding URI in this event.
+      instruction in this exact structure, substituting the server-provided
+      `remaining_amount_eth` value. Do not include the address or funding URI
+      in this event:
+
+      ```text
+      **1/3 · Fund your test wallet**
+      Send **<remaining_amount_eth> Sepolia ETH**. Testnet only; it has no monetary value.
+      **Next:** Reply **✅** or say **sent** after submitting the transfer.
+      ```
    2. Make the final visible response exactly the server-provided funding
       address. No label, prefix, suffix, punctuation, Markdown, backticks, or
       code fence. The gateway will append the QR as its own image event.
 
-   If `send_message` is unavailable, keep the final response compact: exact
-   amount and warning, the address on a line by itself, then “Reply ✅ or say
-   sent after you send it.” The QR still attaches automatically. The exact
+   If `send_message` is unavailable, keep the final response compact using the
+   same **1/3** heading and **Next:** line: exact amount and warning, the address
+   on a line by itself, then the next action. The QR still attaches
+   automatically. The exact
    server-provided `funding_uri` is the fallback only when the image is absent
    or the user asks for a wallet link.
 5. Do not begin a 90-second status loop while the participant still needs to
@@ -153,6 +163,15 @@ amount using the same funding interaction above. Never ask the user for tool
 syntax or a boolean, never invoke the reset without confirmation, and never
 describe it as deleting or retrying the prior payment.
 
+## Advanced setup requests
+
+Advanced wallet permissions are available after setup is ready. If the
+participant asks to change send count, per-send amount, total amount, expiry,
+or enabled state, hand off to the operational `agent-boost` skill and use its
+wallet-policy tools. Keep this outside the numbered onboarding sequence, show
+the exact proposed limits, and require a separate confirmation. Never imply
+that a policy change moves funds or approves a payment.
+
 ## When the participant indicates they sent funds or asks for status
 
 1. If the current conversation contains the latest `setupId` and `revision`,
@@ -160,14 +179,28 @@ describe it as deleting or retrying the prior payment.
    either value is unavailable, call `onboarding_start` once to resume and
    recover them.
 2. If the phase remains `awaiting_funding` or `funding_pending`, report only the
-   exact server-provided remaining Sepolia ETH and say that it is not fully
-   visible yet. Ask the participant to wait briefly and reply **check again**.
+   exact server-provided remaining Sepolia ETH using this structure. Say that
+   the full amount is not visible yet:
+
+   ```text
+   **1/3 · More funding needed**
+   **Remaining:** <remaining_amount_eth> Sepolia ETH
+   **Next:** Wait briefly, then reply **check again**.
+   ```
+
    Do not resend the QR unless they ask to see it again.
 3. When the phase becomes `funded_public` or `shielding`, say **Funding found.
    Preparing the private balance now.** Then make at most one
    `onboarding_status` call with the latest revision and `wait_ms: 90000` in
-   this turn. If it is still running afterward, say so and ask the participant
-   to reply **check again**; do not hold the conversation in an unbounded loop.
+   this turn; do not hold the conversation in an unbounded loop. If it is still
+   running afterward, use this structure:
+
+   ```text
+   **2/3 · Preparing private balance**
+   ✓ Funding found
+   ◌ Privacy preparation is still running
+   **Next:** Reply **check again** in a minute.
+   ```
 4. Setup is complete only when the phase is `private_ready`,
    `privateBalanceWei` is at least `shieldAmountWei`, and a fresh
    `capabilities` call reports `readiness.rpc_egress: ready`. Then say that
@@ -177,23 +210,18 @@ describe it as deleting or retrying the prior payment.
    with the feature fragment derived from live state:
 
    ```text
-   ╭────────────────────────╮
-   │  🌑 DARK MODE: ONLINE  │
-   ╰────────────────────────╯
+   **3/3 · Dark Mode online 🌑**
 
-   The vault combination stayed home. Hermes got the menu. 😎
-   💳 Ethereum test wallet — ready
-   🕶️ Private payment pocket — ready
-   🧅 Wallet traffic — taking the onion route
-   🌳 Covered web — napping for now
+   ✓ Test wallet ready
+   ✓ Private payment pocket ready
+   ✓ Wallet traffic routed through Tor
 
    [View your agent’s loadout 🎒](<capability-receipt URL>)
 
-   Ready to take Dark Mode for a spin? 🚀
-   You can say advanced setup anytime to change send limits or expiry.
+   **Next:** Try a Sepolia test payment—or say **advanced setup** to change limits.
    ```
-5. Preserve the newest revision after every status result. Narrate only the four
-   participant-facing states above; do not print raw phase names or wei unless
+5. Preserve the newest revision after every status result. Narrate only the three
+   participant-facing milestones above; do not print raw phase names or wei unless
    the user asks.
 
 ## Safety

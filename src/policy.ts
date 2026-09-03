@@ -8,6 +8,8 @@ import {
   type DelegationPolicy,
   type PolicyUpdatePlan,
   type PolicyUpdateReceipt,
+  type WalletAuthorizationBinding,
+  type WalletSelectionBinding,
   type WalletPolicySnapshot,
 } from "./contracts.js";
 import { StateStore } from "./state/store.js";
@@ -80,7 +82,13 @@ export class WalletPolicyController {
   async get(): Promise<WalletPolicySnapshot> {
     const state = await this.#store.read();
     if (!state.onboarding) throw new Error("WALLET_NOT_INITIALIZED");
-    return snapshot(state.onboarding.delegation, Object.keys(state.requests).length);
+    return snapshot(state.onboarding.delegation, paymentsUsedByActiveAuthorization(state));
+  }
+
+  async getPlan(decisionId: string): Promise<PolicyUpdatePlan> {
+    const plan = (await this.#store.read()).policyPlans[decisionId];
+    if (!plan) throw new Error("POLICY_DECISION_NOT_FOUND");
+    return plan;
   }
 
   async plan(input: {
@@ -123,7 +131,8 @@ export class WalletPolicyController {
     const state = await this.#store.read();
     if (!state.onboarding) throw new Error("WALLET_NOT_INITIALIZED");
     const now = this.#clock.now();
-    const paymentsUsed = Object.keys(state.requests).length;
+    const active = activeWalletContext(state);
+    const paymentsUsed = paymentsUsedByAuthorization(state, active.authorizationId);
     const current = snapshot(state.onboarding.delegation, paymentsUsed);
     const perPayment = requestedPerPayment ?? BigInt(current.perPaymentLimitWei);
     const maximumPayments = input.maxPayments ?? current.maxPayments;
@@ -179,11 +188,16 @@ export class WalletPolicyController {
     if (new Date(expiresAt).getTime() - now.getTime() > MAX_POLICY_TTL_MS) {
       blockers.push("HARD_MAX_EXPIRY");
     }
+    if (proposed.enabled && !active.authorizationId) {
+      blockers.push("REAUTHORIZATION_REQUIRED");
+    }
     if (samePolicy(current, proposed)) blockers.push("NOTHING_CHANGED");
 
     const plan: PolicyUpdatePlan = {
       version: 1,
       decisionId: `wpd_${randomUUID()}`,
+      wallet: active.wallet,
+      ...(active.authorizationId ? { authorizationId: active.authorizationId } : {}),
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
       current,
@@ -211,11 +225,15 @@ export class WalletPolicyController {
       if (!plan) throw new Error("POLICY_DECISION_NOT_FOUND");
       if (plan.decision !== "allow") throw new Error("POLICY_DECISION_DENIED");
       if (plan.appliedAt) {
+        if (!plan.appliedPolicy) throw new Error("POLICY_RECEIPT_MISSING");
         receipt = {
           version: 1,
           decisionId: plan.decisionId,
+          wallet: plan.wallet,
           appliedAt: plan.appliedAt,
-          policy: plan.proposed,
+          policy: plan.appliedPolicy,
+          authorizationEffect: "preserved",
+          counterEffect: "preserved",
         };
         return;
       }
@@ -224,9 +242,14 @@ export class WalletPolicyController {
         throw new Error("POLICY_DECISION_EXPIRED");
       }
       if (!draft.onboarding) throw new Error("WALLET_NOT_INITIALIZED");
+      const active = activeWalletContext(draft);
+      if (!sameWallet(active.wallet, plan.wallet) ||
+        active.authorizationId !== plan.authorizationId) {
+        throw new Error("WALLET_SELECTION_CHANGED");
+      }
       const live = snapshot(
         draft.onboarding.delegation,
-        Object.keys(draft.requests).length,
+        paymentsUsedByAuthorization(draft, active.authorizationId),
       );
       if (!samePolicy(live, plan.current)) {
         throw new Error("POLICY_CHANGED_REFRESH_PLAN");
@@ -237,11 +260,18 @@ export class WalletPolicyController {
       draft.onboarding.revision += 1;
       draft.onboarding.updatedAt = now.toISOString();
       plan.appliedAt = now.toISOString();
+      plan.appliedPolicy = snapshot(delegation, paymentsUsedByAuthorization(
+        draft,
+        active.authorizationId,
+      ));
       receipt = {
         version: 1,
         decisionId: plan.decisionId,
+        wallet: plan.wallet,
         appliedAt: plan.appliedAt,
-        policy: snapshot(delegation, Object.keys(draft.requests).length),
+        policy: plan.appliedPolicy,
+        authorizationEffect: "preserved",
+        counterEffect: "preserved",
       };
     });
     if (receipt) return receipt;
@@ -250,8 +280,52 @@ export class WalletPolicyController {
     return {
       version: 1,
       decisionId: plan.decisionId,
+      wallet: plan.wallet,
       appliedAt: plan.appliedAt,
-      policy: plan.proposed,
+      policy: plan.appliedPolicy ?? plan.proposed,
+      authorizationEffect: "preserved",
+      counterEffect: "preserved",
     };
   }
+}
+
+function activeWalletContext(state: Awaited<ReturnType<StateStore["read"]>>): {
+  wallet: WalletSelectionBinding;
+  authorizationId?: string;
+} {
+  const registry = state.wallet;
+  const profile = registry?.profiles[registry.activeWalletId];
+  if (!profile || profile.selectionEpoch < 1) throw new Error("ACTIVE_WALLET_MISSING");
+  if (state.onboarding?.delegation.enabled && !profile.authorizationId) {
+    throw new Error("ACTIVE_WALLET_AUTHORIZATION_MISSING");
+  }
+  return {
+    wallet: {
+      walletId: profile.walletId,
+      walletName: profile.name,
+      selectionEpoch: profile.selectionEpoch,
+    },
+    ...(profile.authorizationId ? { authorizationId: profile.authorizationId } : {}),
+  };
+}
+
+function paymentsUsedByActiveAuthorization(
+  state: Awaited<ReturnType<StateStore["read"]>>,
+): number {
+  return paymentsUsedByAuthorization(state, activeWalletContext(state).authorizationId);
+}
+
+function paymentsUsedByAuthorization(
+  state: Awaited<ReturnType<StateStore["read"]>>,
+  authorizationId: string | undefined,
+): number {
+  if (!authorizationId) return 0;
+  return Object.values(state.requests).filter(
+    (request) => request.authorization.authorizationId === authorizationId,
+  ).length;
+}
+
+function sameWallet(left: WalletSelectionBinding, right: WalletSelectionBinding): boolean {
+  return left.walletId === right.walletId && left.walletName === right.walletName &&
+    left.selectionEpoch === right.selectionEpoch;
 }

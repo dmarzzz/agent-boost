@@ -17,7 +17,8 @@
     "privacy",
     "adapters",
     "readiness",
-    "demo_reset"
+    "demo_reset",
+    "wallet_management"
   ],
   "properties": {
     "contract": {"const": "org.agentboost.wallet/1.4"},
@@ -246,6 +247,24 @@
         "requires_user_confirmation": {"const": true},
         "archives_previous_state": {"const": true},
         "rebroadcasts_unresolved_payments": {"const": false}
+      }
+    },
+    "wallet_management": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available",
+        "managed_wallets_only",
+        "accepts_seed_or_password",
+        "selection_requires_separate_reauthorization",
+        "recovery_transfer_available"
+      ],
+      "properties": {
+        "available": {"type": "boolean"},
+        "managed_wallets_only": {"const": true},
+        "accepts_seed_or_password": {"const": false},
+        "selection_requires_separate_reauthorization": {"const": true},
+        "recovery_transfer_available": {"type": "boolean"}
       }
     }
   },

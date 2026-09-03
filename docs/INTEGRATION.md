@@ -80,12 +80,13 @@ payment sequences:
 2. inspect or preview wallet-policy changes in ordinary native-token units;
 3. confirm and apply policy changes separately from payments;
 4. plan an exact recipient and wei amount;
-5. read back the exact terms and privacy limitations, including the scoped Tor
-   RPC route and uncovered general traffic;
-6. obtain an unambiguous verbal confirmation;
-7. execute with `user_confirmed: true` and
-   `client_request_id: hermes:<decision_id>`;
-8. preserve the returned request ID until terminal.
+5. immediately execute the immutable plan with
+   `client_request_id: hermes:<decision_id>` and omit `user_confirmed`, allowing
+   the MCP client to render the exact one-shot **Approve** / **Cancel** receipt;
+6. only when native elicitation is unavailable, read back the returned receipt,
+   obtain unambiguous verbal confirmation, and retry that same decision with
+   `user_confirmed: true`;
+7. preserve the returned request ID until terminal.
 
 The skills are choreography. Sepolia enforcement, adjustable hard ceilings,
 expiry, payment-count use, balance checks, policy-plan binding, and idempotency
@@ -136,12 +137,14 @@ Planning refreshes Kohaku's private balance, reads the durable delegation, and
 returns `allow` or `deny` with explicit blockers. It creates no transaction.
 
 `wallet_execute_private_payment` accepts only the returned decision ID, a
-stable client request ID, and the user's confirmation boolean. It never accepts
-a second copy of the recipient or amount. A repeat with the same client ID and
-decision returns the original request; a conflicting repeat is rejected.
-
-The boolean is Hermes's attestation that the exact readback was confirmed.
-Agent Boost does not receive audio or independently authenticate the speaker.
+stable client request ID, and an optional fallback confirmation boolean. It
+never accepts a second copy of the recipient or amount. Under the default
+policy, Agent Boost requests native form elicitation from the MCP client; a
+decline or cancellation never executes. A client without elicitation receives a
+structured receipt and may retry the same plan after verbal approval with
+`user_confirmed: true`. That boolean is Hermes's attestation, not independent
+speaker authentication. A repeat with the same client ID and decision returns
+the original request; a conflicting repeat is rejected.
 
 The execution tool can cause signing and broadcast. The authority is constrained
 to the active count, per-send, total, and expiry policy, with non-adjustable

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -136,7 +136,7 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.match(setupSkill, /\/reload-skills.*\/reload-mcp/su);
   assert.match(setupSkill, /D A R K  M O D E/u);
   assert.match(setupSkill, /tiny permission slip/u);
-  assert.match(setupSkill, /DARK MODE: ONLINE/u);
+  assert.match(setupSkill, /3\/3 · Dark Mode online/u);
   assert.match(setupSkill, /agent-boost-phi\.vercel\.app\/#v=1/u);
   assert.match(setupSkill, /never put[\s\S]*address[\s\S]*balance[\s\S]*setup ID/u);
   assert.match(setupSkill, /remote Hermes cannot open a[\s\S]*participant’s device/u);
@@ -230,6 +230,44 @@ test("an identical repeat is idempotent and does not create another backup", asy
     ["hermes", "config", "path"],
     ["hermes", "mcp", "test", "agent-boost"],
   ]);
+});
+
+test("upgrades a prior Agent Boost tool subset without weakening conflict safety", async () => {
+  const fixture = await createFixture();
+  const previous = createHermesServerConfig(
+    await realpath(fixture.executablePath),
+  ) as {
+    tools: { include: string[] };
+  };
+  previous.tools.include = previous.tools.include.filter(
+    (tool) => ![
+      "wallet_get_policy",
+      "wallet_plan_policy_update",
+      "wallet_apply_policy_update",
+    ].includes(tool),
+  );
+  await writeFile(
+    fixture.configPath,
+    `mcp_servers:\n  agent-boost: ${JSON.stringify(previous)}\n`,
+    { mode: 0o600 },
+  );
+  const calls: string[][] = [];
+
+  const result = await installHermesIntegration({
+    executablePath: fixture.executablePath,
+    runCommand: successfulRunner(fixture.configPath, calls),
+    now: () => new Date("2026-09-02T12:00:00.000Z"),
+  });
+
+  assert.equal(result.configChanged, true);
+  assert.ok(result.configBackupPath);
+  const config = parse(await readFile(fixture.configPath, "utf8")) as {
+    mcp_servers: Record<string, unknown>;
+  };
+  assert.deepEqual(
+    config.mcp_servers["agent-boost"],
+    createHermesServerConfig(result.executablePath),
+  );
 });
 
 test("refuses a conflicting agent-boost entry without modifying files", async () => {

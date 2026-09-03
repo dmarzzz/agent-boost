@@ -14,6 +14,40 @@ export const MAX_POLICY_TTL_MS = 30 * 24 * 60 * 60_000;
 
 export type PaymentApproval = "allow" | "confirm" | "deny";
 
+export type WalletProfileOrigin = "created" | "adopted" | "discovered";
+
+export interface WalletProfileRecord {
+  version: 1;
+  walletId: string;
+  name: string;
+  origin: WalletProfileOrigin;
+  status: "available" | "archived";
+  createdAt: string;
+  updatedAt: string;
+  lastSelectedAt?: string;
+  selectionEpoch: number;
+  authorizationId?: string;
+  /** Private state archive identifiers. Paths are never returned through MCP. */
+  archiveIds: string[];
+  /** Last durable workflow state for this wallet, including while inactive. */
+  onboarding?: OnboardingRecord;
+}
+
+export interface WalletSelectionBinding {
+  walletId: string;
+  walletName: string;
+  selectionEpoch: number;
+}
+
+export interface WalletAuthorizationBinding extends WalletSelectionBinding {
+  authorizationId: string;
+}
+
+export interface WalletInventoryItem {
+  name: string;
+  network: "sepolia" | "mainnet" | "unknown";
+}
+
 export type OnboardingPhase =
   | "not_started"
   | "creating_wallet"
@@ -52,6 +86,9 @@ export interface WalletPolicySnapshot extends DelegationPolicy {
 export interface PolicyUpdatePlan {
   version: 1;
   decisionId: string;
+  wallet: WalletSelectionBinding;
+  /** Authority in effect when this decision was planned, if any. */
+  authorizationId?: string;
   createdAt: string;
   expiresAt: string;
   current: WalletPolicySnapshot;
@@ -63,13 +100,17 @@ export interface PolicyUpdatePlan {
     userConfirmationRequired: true;
   };
   appliedAt?: string;
+  appliedPolicy?: WalletPolicySnapshot;
 }
 
 export interface PolicyUpdateReceipt {
   version: 1;
   decisionId: string;
+  wallet: WalletSelectionBinding;
   appliedAt: string;
   policy: WalletPolicySnapshot;
+  authorizationEffect: "preserved";
+  counterEffect: "preserved";
 }
 
 export interface OnboardingRecord {
@@ -99,6 +140,7 @@ export interface PaymentPlan {
   decisionId: string;
   recipient: string;
   amountWei: string;
+  authorization: WalletAuthorizationBinding;
   intentDigest: string;
   createdAt: string;
   expiresAt: string;
@@ -117,6 +159,7 @@ export interface PaymentRequest {
   decisionId: string;
   recipient: string;
   amountWei: string;
+  authorization: WalletAuthorizationBinding;
   phase: PaymentPhase;
   createdAt: string;
   updatedAt: string;
@@ -137,6 +180,80 @@ export interface PaymentRequest {
     code: string;
     message: string;
   };
+}
+
+export interface RecoveryTransferPlan {
+  version: 1;
+  decisionId: string;
+  wallet: WalletSelectionBinding;
+  recipient: string;
+  /** Exact amount sent by the wallet-controlled tail call. */
+  amountWei: string;
+  /** One configured Tornado denomination consumed by this operation. */
+  withdrawalAmountWei: string;
+  /** Conservative amount left outside the tail call for paymaster fees. */
+  feeReserveWei: string;
+  maxRecipientAmountWei: string;
+  privateBalanceSnapshotWei: string;
+  remainingPrivateBalanceEstimateWei: string;
+  balanceRevision: number;
+  scope: "single_tornado_denomination";
+  feeModel: "reserved_from_wallet_controlled_remainder";
+  intentDigest: string;
+  createdAt: string;
+  expiresAt: string;
+  decision: "allow" | "deny";
+  blockers: string[];
+  approval: {
+    action: "confirm";
+    userConfirmationRequired: true;
+  };
+  consumedByRequestId?: string;
+}
+
+export interface RecoveryTransferRequest {
+  version: 1;
+  requestId: string;
+  clientRequestId: string;
+  decisionId: string;
+  wallet: WalletSelectionBinding;
+  recipient: string;
+  amountWei: string;
+  withdrawalAmountWei: string;
+  feeReserveWei: string;
+  remainingPrivateBalanceEstimateWei: string;
+  scope: "single_tornado_denomination";
+  feeModel: "reserved_from_wallet_controlled_remainder";
+  phase: Exclude<PaymentPhase, "planned">;
+  createdAt: string;
+  updatedAt: string;
+  transactionHash?: string;
+  userOperationHash?: string;
+  confirmation?: PaymentRequest["confirmation"];
+  /** Internal reconciliation checkpoint. Omitted from MCP responses. */
+  recipientBalanceBeforeWei?: string;
+  /** Internal reconciliation bookkeeping. Omitted from MCP responses. */
+  reconciliation?: PaymentRequest["reconciliation"];
+  error?: PaymentRequest["error"];
+}
+
+export interface WalletReauthorizationPlan {
+  version: 1;
+  decisionId: string;
+  wallet: WalletSelectionBinding;
+  priorAuthorizationId?: string;
+  currentPolicy: WalletPolicySnapshot;
+  proposedPolicy: WalletPolicySnapshot;
+  authorizationEffect: "replace";
+  counterEffect: "reset_spend_and_payment_count";
+  intentDigest: string;
+  createdAt: string;
+  expiresAt: string;
+  decision: "allow" | "deny";
+  blockers: string[];
+  approval: { action: "confirm"; userConfirmationRequired: true };
+  appliedAt?: string;
+  appliedAuthorizationId?: string;
 }
 
 export interface PublicOnboardingSnapshot {
@@ -162,6 +279,8 @@ export interface PublicOnboardingSnapshot {
 export interface WalletAdapter {
   /** Select an existing or not-yet-created local wallet profile. */
   selectWallet?(walletName: string): void;
+  /** Enumerate public wallet metadata only. */
+  listWallets?(): Promise<WalletInventoryItem[]>;
   ensureWallet(): Promise<void>;
   nextFreshAddress(): Promise<string>;
   prewarmPrivacy(): Promise<void>;
@@ -175,6 +294,15 @@ export interface WalletAdapter {
     privateBalanceWei: bigint;
   }>;
   executePrivatePayment(input: {
+    recipient: string;
+    amountWei: bigint;
+  }): Promise<{
+    transactionHash?: string;
+    userOperationHash?: string;
+    confirmed?: boolean;
+  }>;
+  /** Recover an exact amount through a fresh wallet-controlled account + tail call. */
+  executeRecoveryTransfer?(input: {
     recipient: string;
     amountWei: bigint;
   }): Promise<{

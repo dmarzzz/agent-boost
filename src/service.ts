@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, open, realpath } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -11,7 +11,12 @@ import type {
   PolicyUpdatePlan,
   PolicyUpdateReceipt,
   PublicOnboardingSnapshot,
+  RecoveryTransferPlan,
+  RecoveryTransferRequest,
   WalletAdapter,
+  WalletProfileRecord,
+  WalletReauthorizationPlan,
+  WalletSelectionBinding,
 } from "./contracts.js";
 import {
   MAX_POLICY_LIFETIME_LIMIT_WEI,
@@ -24,6 +29,7 @@ import type { AgentBoostRuntime } from "./mcp.js";
 import { OnboardingController } from "./onboarding.js";
 import { PaymentController } from "./payment.js";
 import { WalletPolicyController } from "./policy.js";
+import { RecoveryTransferController } from "./recovery.js";
 import { SepoliaRpcClient } from "./rpc/index.js";
 import {
   ShadeTreeEgress,
@@ -31,7 +37,7 @@ import {
   type CoveredFetchInput,
   type CoveredFetchResult,
 } from "./shade-tree/index.js";
-import { StateStore } from "./state/store.js";
+import { StateStore, type StateDocument } from "./state/store.js";
 import { RuntimeLock } from "./state/runtime-lock.js";
 import {
   TorRpcProxy,
@@ -75,15 +81,17 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   readonly #onboarding: OnboardingController;
   readonly #payments: PaymentController;
   readonly #policy: WalletPolicyController;
+  readonly #recovery: RecoveryTransferController;
   readonly #ui: OnboardingUiServer;
   readonly #openBrowser: (url: string) => Promise<boolean>;
   readonly #egress: CoveredEgressPort;
   #reset: Promise<NewDemoResult> | undefined;
+  #walletOperationQueue: Promise<unknown> = Promise.resolve();
   #shuttingDown = false;
 
   constructor(config: AgentBoostConfig, dependencies: RuntimeDependencies = {}) {
     this.#config = config;
-    this.#store = new StateStore(config.stateDir);
+    this.#store = new StateStore(config.stateDir, config.kohakuWalletName);
     const needsRpcRoute =
       dependencies.rpcRoute !== undefined ||
       dependencies.wallet === undefined ||
@@ -141,6 +149,13 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       store: this.#store,
       defaultTtlMs: config.delegationTtlMs,
     });
+    this.#recovery = new RecoveryTransferController({
+      store: this.#store,
+      wallet: this.#wallet,
+      chain: this.#chain,
+      executeEnabled: config.executeEnabled,
+      withdrawalAmountWei: config.shieldAmountWei,
+    });
     this.#ui = new OnboardingUiServer({
       getSnapshot: () => this.#getPublicSnapshot(),
       host: config.uiHost,
@@ -167,6 +182,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       await this.#rpcProxy?.start();
       await this.#egress.start();
       await this.#payments.recoverInterruptedRequests();
+      await this.#recovery.recoverInterruptedRequests();
       await this.#onboarding.resume();
     } catch (error) {
       await this.#rpcProxy?.stop().catch(() => undefined);
@@ -180,9 +196,11 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   async shutdown(): Promise<void> {
     this.#shuttingDown = true;
     await this.#reset?.catch(() => undefined);
+    await this.#walletOperationQueue.catch(() => undefined);
     await Promise.allSettled([
       this.#onboarding.stop(),
       this.#payments.stop(),
+      this.#recovery.stop(),
       this.#ui.stop(),
       this.#egress.stop(),
     ]);
@@ -296,10 +314,29 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         archives_previous_state: true,
         rebroadcasts_unresolved_payments: false,
       },
+      wallet_management: {
+        available:
+          this.#wallet.selectWallet !== undefined &&
+          this.#wallet.listWallets !== undefined,
+        managed_wallets_only: true,
+        accepts_seed_or_password: false,
+        selection_requires_separate_reauthorization: true,
+        recovery_transfer_available:
+          this.#wallet.executeRecoveryTransfer !== undefined,
+      },
     };
   }
 
-  async startOnboarding(): Promise<{
+  startOnboarding(): Promise<{
+    record: OnboardingRecord;
+    snapshot: PublicOnboardingSnapshot;
+    uiOpened: boolean;
+    qrPngBase64?: string;
+  }> {
+    return this.#withWalletOperation(() => this.#startOnboardingUnlocked());
+  }
+
+  async #startOnboardingUnlocked(): Promise<{
     record: OnboardingRecord;
     snapshot: PublicOnboardingSnapshot;
     uiOpened: boolean;
@@ -350,7 +387,11 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return this.#onboarding.status(input);
   }
 
-  async walletContext(): Promise<Record<string, unknown>> {
+  walletContext(): Promise<Record<string, unknown>> {
+    return this.#withWalletOperation(() => this.#walletContextUnlocked());
+  }
+
+  async #walletContextUnlocked(): Promise<Record<string, unknown>> {
     let record = await this.#onboarding.getRecord();
     let observedAt = record.updatedAt;
     while (record.address) {
@@ -425,7 +466,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     recipient: string;
     amountWei: string;
   }): Promise<PaymentPlan> {
-    return this.#payments.plan(input);
+    return this.#withWalletOperation(() => this.#payments.plan(input));
   }
 
   walletPolicy() {
@@ -439,14 +480,22 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     ttlMs?: number;
     enabled?: boolean;
   }): Promise<PolicyUpdatePlan> {
-    return this.#policy.plan(input);
+    return this.#withWalletOperation(() => this.#policy.plan(input));
+  }
+
+  getPolicyUpdatePlan(decisionId: string): Promise<PolicyUpdatePlan> {
+    return this.#policy.getPlan(decisionId);
   }
 
   applyPolicyUpdate(input: {
     decisionId: string;
     userConfirmed: boolean;
   }): Promise<PolicyUpdateReceipt> {
-    return this.#policy.apply(input);
+    return this.#withWalletOperation(() => this.#policy.apply(input));
+  }
+
+  getPaymentPlan(decisionId: string): Promise<PaymentPlan> {
+    return this.#payments.getPlan(decisionId);
   }
 
   executePrivatePayment(input: {
@@ -454,11 +503,315 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     clientRequestId: string;
     userConfirmed: boolean;
   }): Promise<PaymentRequest> {
-    return this.#payments.execute(input).then(publicPaymentRequest);
+    return this.#withWalletOperation(() =>
+      this.#payments.execute(input).then(publicPaymentRequest)
+    );
   }
 
   getRequest(requestId: string): Promise<PaymentRequest> {
     return this.#payments.getRequest(requestId).then(publicPaymentRequest);
+  }
+
+  async listWallets(): Promise<Record<string, unknown>> {
+    const state = await this.#store.read();
+    const profiles = Object.values(state.wallet?.profiles ?? {});
+    const wallets = profiles.map((profile) => publicWalletProfile(
+      profile,
+      state,
+    ));
+    return {
+      active_wallet_id: wallets.find((wallet) => wallet.active)?.wallet_id,
+      wallets,
+    };
+  }
+
+  async createWallet(input: {
+    name: string;
+    userConfirmed: boolean;
+  }): Promise<Record<string, unknown>> {
+    if (!input.userConfirmed) {
+      throw new Error("The user must confirm creating and selecting a new wallet");
+    }
+    if (!this.#wallet.listWallets || !this.#wallet.selectWallet) {
+      throw new Error("WALLET_MANAGEMENT_UNAVAILABLE");
+    }
+    return this.#withWalletOperation(async () => {
+      const inventory = await this.#wallet.listWallets!();
+      if (inventory.some((wallet) => wallet.name === input.name)) {
+        throw new Error("WALLET_NAME_ALREADY_EXISTS");
+      }
+      const previousName = (await this.#store.read()).wallet?.activeName ??
+        this.#config.kohakuWalletName;
+      await this.#stopWalletWork();
+      this.#wallet.selectWallet!(input.name);
+      let activated;
+      try {
+        await this.#wallet.ensureWallet();
+        const profile = await this.#store.registerManagedWallet(input.name);
+        activated = await this.#store.activateWalletProfile(profile.walletId);
+      } catch (error) {
+        this.#wallet.selectWallet!(previousName);
+        this.#resetWalletControllers();
+        await this.#onboarding.resume().catch(() => undefined);
+        throw error;
+      }
+      this.#resetWalletControllers();
+      const started = await this.#startOnboardingUnlocked();
+      return {
+        wallet: publicWalletProfile(activated.profile, activated.current),
+        archive_id: activated.archiveId,
+        setup_phase: started.record.phase,
+        authorization_required: true,
+      };
+    });
+  }
+
+  async adoptWallet(input: {
+    name: string;
+    userConfirmed: boolean;
+  }): Promise<Record<string, unknown>> {
+    if (!input.userConfirmed) {
+      throw new Error("The user must confirm adopting and selecting the wallet");
+    }
+    if (!this.#wallet.listWallets || !this.#wallet.selectWallet) {
+      throw new Error("WALLET_MANAGEMENT_UNAVAILABLE");
+    }
+    return this.#withWalletOperation(async () => {
+      const inventory = await this.#wallet.listWallets!();
+      const localWallet = inventory.find((wallet) => wallet.name === input.name);
+      if (!localWallet) throw new Error("LOCAL_WALLET_NOT_FOUND");
+      if (localWallet.network !== "sepolia") {
+        throw new Error("ONLY_SEPOLIA_WALLETS_CAN_BE_ADOPTED");
+      }
+
+      const before = await this.#store.read();
+      const existing = Object.values(before.wallet?.profiles ?? {}).find(
+        (profile) => profile.name === input.name,
+      );
+      if (existing && before.wallet?.activeWalletId === existing.walletId) {
+        return {
+          wallet: publicWalletProfile(existing, before),
+          changed: false,
+          authorization_required: existing.authorizationId === undefined,
+        };
+      }
+
+      const previousName = before.wallet?.activeName ?? this.#config.kohakuWalletName;
+      await this.#stopWalletWork();
+      this.#wallet.selectWallet!(input.name);
+      let activated;
+      try {
+        // The inventory check above makes this a validation-only call; a
+        // missing or non-Sepolia wallet is rejected before selection changes.
+        await this.#wallet.ensureWallet();
+        const profile = existing ??
+          await this.#store.registerManagedWallet(input.name, "adopted");
+        activated = await this.#store.activateWalletProfile(profile.walletId);
+      } catch (error) {
+        this.#wallet.selectWallet!(previousName);
+        this.#resetWalletControllers();
+        await this.#onboarding.resume().catch(() => undefined);
+        throw error;
+      }
+
+      this.#resetWalletControllers();
+      let setup = activated.current.onboarding;
+      if (setup) await this.#onboarding.resume();
+      else setup = (await this.#startOnboardingUnlocked()).record;
+      return {
+        wallet: publicWalletProfile(activated.profile, activated.current),
+        changed: true,
+        archive_id: activated.archiveId,
+        setup_phase: setup.phase,
+        authorization_required: true,
+      };
+    });
+  }
+
+  async selectWallet(input: {
+    walletId: string;
+    userConfirmed: boolean;
+  }): Promise<Record<string, unknown>> {
+    if (!input.userConfirmed) {
+      throw new Error("The user must confirm changing the active wallet");
+    }
+    if (!this.#wallet.selectWallet || !this.#wallet.listWallets) {
+      throw new Error("WALLET_MANAGEMENT_UNAVAILABLE");
+    }
+    return this.#withWalletOperation(async () => {
+      const before = await this.#store.read();
+      const profile = before.wallet?.profiles[input.walletId];
+      if (!profile) throw new Error("WALLET_NOT_FOUND");
+      if (before.wallet?.activeName === profile.name) {
+        const authorization = walletAuthorizationStatus(profile, before);
+        return {
+          wallet: publicWalletProfile(profile, before),
+          changed: false,
+          authorization_required: authorization !== "active",
+          authorization_status: authorization,
+        };
+      }
+      const previousName = before.wallet?.activeName ?? this.#config.kohakuWalletName;
+      await this.#stopWalletWork();
+      this.#wallet.selectWallet!(profile.name);
+      let activated;
+      try {
+        activated = await this.#store.activateWalletProfile(profile.walletId);
+      } catch (error) {
+        this.#wallet.selectWallet!(previousName);
+        this.#resetWalletControllers();
+        await this.#onboarding.resume().catch(() => undefined);
+        throw error;
+      }
+      // Durable state and adapter now agree. Later onboarding failures stay on
+      // this selected wallet and must never roll the adapter back independently.
+      this.#resetWalletControllers();
+      let setup = activated.current.onboarding;
+      if (setup) await this.#onboarding.resume();
+      else setup = (await this.#startOnboardingUnlocked()).record;
+      return {
+        wallet: publicWalletProfile(activated.profile, activated.current),
+        changed: true,
+        archive_id: activated.archiveId,
+        setup_phase: setup.phase,
+        authorization_required: true,
+      };
+    });
+  }
+
+  async archiveWallet(input: {
+    walletId: string;
+    userConfirmed: boolean;
+  }): Promise<Record<string, unknown>> {
+    if (!input.userConfirmed) {
+      throw new Error("The user must confirm archiving this wallet profile");
+    }
+    return this.#withWalletOperation(async () => {
+      const profile = await this.#store.archiveWalletProfile(input.walletId);
+      return { wallet: publicWalletProfile(profile, await this.#store.read()) };
+    });
+  }
+
+  async planWalletReauthorization(): Promise<WalletReauthorizationPlan> {
+    return this.#withWalletOperation(() => this.#planWalletReauthorizationUnlocked());
+  }
+
+  async #planWalletReauthorizationUnlocked(): Promise<WalletReauthorizationPlan> {
+    const state = await this.#store.read();
+    const profile = state.wallet?.profiles[state.wallet.activeWalletId];
+    if (!profile || !state.onboarding) throw new Error("WALLET_SETUP_NOT_STARTED");
+    const blockers: string[] = [];
+    if (!this.#config.executeEnabled) blockers.push("EXECUTION_DISABLED");
+    if (this.#config.security.effective["payment.execute"] === "deny") {
+      blockers.push("SECURITY_POLICY_DENIED");
+    }
+    if (state.onboarding.phase !== "private_ready") {
+      blockers.push("PRIVATE_BALANCE_NOT_READY");
+    }
+    const now = new Date();
+    const wallet = {
+      walletId: profile.walletId,
+      walletName: profile.name,
+      selectionEpoch: profile.selectionEpoch,
+    };
+    const paymentsUsed = profile.authorizationId
+      ? Object.values(state.requests).filter(
+        (request) => request.authorization.authorizationId === profile.authorizationId,
+      ).length
+      : 0;
+    const currentPolicy = {
+      ...state.onboarding.delegation,
+      paymentsUsed,
+      paymentsRemaining: Math.max(
+        0,
+        state.onboarding.delegation.maxPayments - paymentsUsed,
+      ),
+    };
+    const proposedPolicy = {
+      ...currentPolicy,
+      spentWei: "0",
+      paymentsUsed: 0,
+      paymentsRemaining: currentPolicy.maxPayments,
+      expiresAt: new Date(now.getTime() + this.#config.delegationTtlMs).toISOString(),
+      enabled: true,
+    };
+    const plan: WalletReauthorizationPlan = {
+      version: 1,
+      decisionId: `wra_${randomUUID()}`,
+      wallet,
+      ...(profile.authorizationId ? { priorAuthorizationId: profile.authorizationId } : {}),
+      currentPolicy,
+      proposedPolicy,
+      authorizationEffect: "replace",
+      counterEffect: "reset_spend_and_payment_count",
+      intentDigest: reauthorizationDigest({
+        wallet,
+        ...(profile.authorizationId
+          ? { priorAuthorizationId: profile.authorizationId }
+          : {}),
+        currentPolicy,
+        proposedPolicy,
+      }),
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
+      decision: blockers.length === 0 ? "allow" : "deny",
+      blockers,
+      approval: { action: "confirm", userConfirmationRequired: true },
+    };
+    await this.#store.storeReauthorizationPlan(plan);
+    return plan;
+  }
+
+  async reauthorizeWallet(input: {
+    decisionId: string;
+    userConfirmed: boolean;
+  }): Promise<Record<string, unknown>> {
+    if (!input.userConfirmed) {
+      throw new Error("The user must confirm a fresh wallet authorization");
+    }
+    return this.#withWalletOperation(async () => {
+      const plan = (await this.#store.read()).reauthorizationPlans[input.decisionId];
+      if (!plan || plan.decision !== "allow") {
+        throw new Error("REAUTHORIZATION_DECISION_NOT_ALLOWED");
+      }
+      const applied = await this.#store.applyReauthorizationPlan(input.decisionId);
+      const state = await this.#store.read();
+      return {
+        wallet: publicWalletProfile(applied.profile, state),
+        delegation: applied.onboarding.delegation,
+      };
+    });
+  }
+
+  async getWalletReauthorizationPlan(decisionId: string): Promise<WalletReauthorizationPlan> {
+    const plan = (await this.#store.read()).reauthorizationPlans[decisionId];
+    if (!plan) throw new Error("REAUTHORIZATION_DECISION_NOT_FOUND");
+    return plan;
+  }
+
+  planRecoveryTransfer(input: {
+    recipient: string;
+    amountWei: string;
+  }): Promise<RecoveryTransferPlan> {
+    return this.#withWalletOperation(() => this.#recovery.plan(input));
+  }
+
+  getRecoveryPlan(decisionId: string): Promise<RecoveryTransferPlan> {
+    return this.#recovery.getPlan(decisionId);
+  }
+
+  executeRecoveryTransfer(input: {
+    decisionId: string;
+    clientRequestId: string;
+    userConfirmed: boolean;
+  }): Promise<RecoveryTransferRequest> {
+    return this.#withWalletOperation(() =>
+      this.#recovery.execute(input).then(publicRecoveryRequest)
+    );
+  }
+
+  getRecoveryRequest(requestId: string): Promise<RecoveryTransferRequest> {
+    return this.#recovery.getRequest(requestId).then(publicRecoveryRequest);
   }
 
   startNewDemo(input: { userConfirmed: boolean }): Promise<NewDemoResult> {
@@ -474,7 +827,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       return Promise.reject(new Error("DEMO_RESET_UNAVAILABLE"));
     }
     if (this.#reset) return this.#reset;
-    this.#reset = this.#startNewDemo().finally(() => {
+    this.#reset = this.#withWalletOperation(() => this.#startNewDemo()).finally(() => {
       this.#reset = undefined;
     });
     return this.#reset;
@@ -511,6 +864,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   async #startNewDemo(): Promise<NewDemoResult> {
     await this.#onboarding.stop();
     await this.#payments.stop();
+    await this.#recovery.stop();
     const previous = await this.#store.read();
     const previousWalletName = previous.wallet?.activeName ?? this.#config.kohakuWalletName;
     const newWalletName = `agent-boost-${randomBytes(8).toString("hex")}`;
@@ -522,11 +876,13 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     } catch (error) {
       this.#wallet.selectWallet?.(previousWalletName);
       this.#payments.resetForNewDemo();
+      this.#recovery.resetForWalletSelection();
       await this.#onboarding.resume().catch(() => undefined);
       throw error;
     }
     this.#payments.resetForNewDemo();
-    const started = await this.startOnboarding();
+    this.#recovery.resetForWalletSelection();
+    const started = await this.#startOnboardingUnlocked();
     return {
       archiveId: archived.archiveId,
       ...(archived.previous.onboarding?.setupId
@@ -536,6 +892,26 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       ...started,
     };
   }
+
+  #withWalletOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const queued = this.#walletOperationQueue.then(async () => {
+      if (this.#shuttingDown) throw new Error("AGENT_BOOST_RUNTIME_STOPPING");
+      return operation();
+    });
+    this.#walletOperationQueue = queued.then(() => undefined, () => undefined);
+    return queued;
+  }
+
+  async #stopWalletWork(): Promise<void> {
+    await this.#onboarding.stop();
+    await this.#payments.stop();
+    await this.#recovery.stop();
+  }
+
+  #resetWalletControllers(): void {
+    this.#payments.resetForNewDemo();
+    this.#recovery.resetForWalletSelection();
+  }
 }
 
 function publicPaymentRequest(request: PaymentRequest): PaymentRequest {
@@ -543,6 +919,83 @@ function publicPaymentRequest(request: PaymentRequest): PaymentRequest {
   delete publicRequest.recipientBalanceBeforeWei;
   delete publicRequest.reconciliation;
   return publicRequest;
+}
+
+function publicRecoveryRequest(
+  request: RecoveryTransferRequest,
+): RecoveryTransferRequest {
+  const publicRequest = { ...request };
+  delete publicRequest.recipientBalanceBeforeWei;
+  delete publicRequest.reconciliation;
+  return publicRequest;
+}
+
+function publicWalletProfile(
+  profile: WalletProfileRecord,
+  state: StateDocument,
+): Record<string, unknown> & { active: boolean; wallet_id: string } {
+  const active = state.wallet?.activeWalletId === profile.walletId;
+  const onboarding = active ? state.onboarding : profile.onboarding;
+  const authorizationStatus = walletAuthorizationStatus(profile, state);
+  return {
+    wallet_id: profile.walletId,
+    name: profile.name,
+    network: "sepolia",
+    chain_id: "eip155:11155111",
+    origin: profile.origin,
+    status: profile.status,
+    active,
+    selection_epoch: profile.selectionEpoch,
+    authorized: authorizationStatus === "active",
+    authorization_status: authorizationStatus,
+    ...(active && onboarding?.delegation.expiresAt
+      ? { authorization_expires_at: onboarding.delegation.expiresAt }
+      : {}),
+    created_at: profile.createdAt,
+    updated_at: profile.updatedAt,
+  };
+}
+
+function walletAuthorizationStatus(
+  profile: WalletProfileRecord,
+  state: StateDocument,
+): "inactive" | "missing" | "disabled" | "expired" | "exhausted" | "active" {
+  if (state.wallet?.activeWalletId !== profile.walletId) return "inactive";
+  if (!profile.authorizationId) return "missing";
+  const onboarding = state.onboarding;
+  if (!onboarding?.delegation.enabled) return "disabled";
+  if (new Date(onboarding.delegation.expiresAt).getTime() <= Date.now()) {
+    return "expired";
+  }
+  const requestsUsed = Object.values(state.requests).filter(
+    (request) => request.authorization.authorizationId === profile.authorizationId,
+  ).length;
+  if (
+    BigInt(onboarding.delegation.spentWei) >=
+      BigInt(onboarding.delegation.lifetimeLimitWei) ||
+    requestsUsed >= onboarding.delegation.maxPayments
+  ) {
+    return "exhausted";
+  }
+  return "active";
+}
+
+function reauthorizationDigest(input: {
+  wallet: WalletSelectionBinding;
+  priorAuthorizationId?: string;
+  currentPolicy: Record<string, unknown>;
+  proposedPolicy: Record<string, unknown>;
+}): string {
+  return `sha256:${createHash("sha256").update(JSON.stringify({
+    operation: "wallet_reauthorization",
+    chain_id: "eip155:11155111",
+    wallet_id: input.wallet.walletId,
+    wallet_name: input.wallet.walletName,
+    selection_epoch: input.wallet.selectionEpoch,
+    prior_authorization_id: input.priorAuthorizationId,
+    current_policy: input.currentPolicy,
+    proposed_policy: input.proposedPolicy,
+  })).digest("hex")}`;
 }
 
 function requiredRpcRoute(route: TorRpcRoutePort | undefined): TorRpcRoutePort {
@@ -632,7 +1085,7 @@ export async function createLocalRuntime(
 export async function readLocalStatus(
   config: AgentBoostConfig,
 ): Promise<Record<string, unknown>> {
-  const store = new StateStore(config.stateDir);
+  const store = new StateStore(config.stateDir, config.kohakuWalletName);
   await store.initialize();
   const state = await store.read();
   return {

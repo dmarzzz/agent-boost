@@ -25,7 +25,7 @@ seed storage, Tornado proving, signing, and broadcast.
 
 | Component | Responsibility |
 | --- | --- |
-| Hermes | Conversation, exact readback, verbal confirmation, MCP orchestration |
+| Hermes | Conversation, fallback readback, MCP orchestration |
 | Agent Boost MCP server | Schemas, policy, state, idempotency, UI lifecycle |
 | Onboarding UI | Read-only loopback QR, address, funding and shield progress |
 | Kohaku adapter | Wallet operations through fixed, non-shell argv |
@@ -89,7 +89,8 @@ wallet_get_context
   → wallet_get_policy / wallet_plan_policy_update
   → separate confirmation → wallet_apply_policy_update
   → wallet_plan_private_payment(recipient, amount)
-  → verbal confirmation of immutable plan
+  → native one-shot confirmation of immutable plan
+    ↳ structured readback + verbal confirmation only if elicitation is unavailable
   → wallet_execute_private_payment(decision_id, stable client ID)
   → Kohaku unshield --next + exact value tail call
   → submitted

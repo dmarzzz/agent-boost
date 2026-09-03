@@ -42,6 +42,7 @@ const ENVELOPE_KEYS = [
   "data",
   "manifest_digest",
   "outcome",
+  "presentation",
   "retry",
   "schema",
   "schema_version",
@@ -154,6 +155,7 @@ export function validateOnboardingResult(response, options = {}) {
     throw new Error(`Expected awaiting_funding, received ${String(structured.outcome)}`);
   }
   const data = record(structured.data, "data");
+  validateFundingPresentation(structured.presentation);
   exactKeys(data, START_DATA_KEYS, "onboarding data");
   if (options.expectUiOpened === false && data.ui_opened !== false) {
     throw new Error("Headless release gate unexpectedly opened a UI");
@@ -222,6 +224,7 @@ export function validateOnboardingStatus(response, expected) {
     throw new Error("Unexpected onboarding_status envelope");
   }
   const data = record(structured.data, "data");
+  validateFundingPresentation(structured.presentation);
   exactKeys(data, ["funding", "setup"], "onboarding status data");
   const setup = record(data.setup, "data.setup");
   const funding = record(data.funding, "data.funding");
@@ -242,6 +245,21 @@ export function validateOnboardingStatus(response, expected) {
     throw new Error("onboarding_status incorrectly claims to attach a QR");
   }
   assertNoPublicLeaks(response);
+}
+
+function validateFundingPresentation(value) {
+  const presentation = record(value, "presentation");
+  if (
+    presentation.version !== "1.0" ||
+    presentation.kind !== "progress" ||
+    presentation.state !== "active"
+  ) {
+    throw new Error("Onboarding presentation contract changed");
+  }
+  const step = record(presentation.step, "presentation.step");
+  if (step.current !== 1 || step.total !== 3 || step.label !== "Fund test wallet") {
+    throw new Error("Onboarding funding step is not the required 1/3 sequence");
+  }
 }
 
 export function validatePersistence(first, repeated, label = "retry") {

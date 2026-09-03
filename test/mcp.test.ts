@@ -3,11 +3,23 @@ import test from "node:test";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import type { AgentBoostRuntime } from "../src/mcp.js";
 import { createMcpServer } from "../src/mcp.js";
 
 const WALLET_ADDRESS = "0x1111111111111111111111111111111111111111";
+const AUTHORIZATION = {
+  walletId: "wallet_12345678",
+  walletName: "agent-boost",
+  selectionEpoch: 1,
+  authorizationId: "auth_12345678",
+};
+const WALLET_SELECTION = {
+  walletId: AUTHORIZATION.walletId,
+  walletName: AUTHORIZATION.walletName,
+  selectionEpoch: AUTHORIZATION.selectionEpoch,
+};
 
 function fakeRuntime(): AgentBoostRuntime {
   const setup = {
@@ -88,10 +100,38 @@ function fakeRuntime(): AgentBoostRuntime {
       return {
         version: 1,
         decisionId: "wpd_12345678",
+        wallet: WALLET_SELECTION,
+        authorizationId: AUTHORIZATION.authorizationId,
         createdAt: new Date(0).toISOString(),
         expiresAt: new Date(300_000).toISOString(),
         current,
         proposed,
+        decision: "allow",
+        blockers: [],
+        approval: { action: "confirm", userConfirmationRequired: true },
+      };
+    },
+    async getPolicyUpdatePlan() {
+      const current = {
+        ...setup.delegation,
+        paymentsUsed: 0,
+        paymentsRemaining: 10,
+      };
+      return {
+        version: 1,
+        decisionId: "wpd_12345678",
+        wallet: WALLET_SELECTION,
+        authorizationId: AUTHORIZATION.authorizationId,
+        createdAt: new Date(0).toISOString(),
+        expiresAt: new Date(300_000).toISOString(),
+        current,
+        proposed: {
+          ...current,
+          perPaymentLimitWei: "1000000000000000000",
+          lifetimeLimitWei: "10000000000000000000",
+          maxPayments: 10,
+          paymentsRemaining: 10,
+        },
         decision: "allow",
         blockers: [],
         approval: { action: "confirm", userConfirmationRequired: true },
@@ -114,12 +154,82 @@ function fakeRuntime(): AgentBoostRuntime {
         },
       };
     },
+    async listWallets() {
+      return { active_wallet_id: AUTHORIZATION.walletId, wallets: [] };
+    },
+    async createWallet() {
+      return { authorization_required: true };
+    },
+    async adoptWallet() {
+      return { authorization_required: true };
+    },
+    async selectWallet() {
+      return { authorization_required: true };
+    },
+    async archiveWallet() {
+      return {};
+    },
+    async planWalletReauthorization() {
+      const currentPolicy = {
+        ...setup.delegation,
+        paymentsUsed: 0,
+        paymentsRemaining: 10,
+      };
+      return {
+        version: 1,
+        decisionId: "wra_12345678",
+        wallet: WALLET_SELECTION,
+        priorAuthorizationId: AUTHORIZATION.authorizationId,
+        currentPolicy,
+        proposedPolicy: {
+          ...currentPolicy,
+          spentWei: "0",
+          paymentsUsed: 0,
+          paymentsRemaining: 10,
+          expiresAt: new Date(86_400_000).toISOString(),
+          enabled: true,
+        },
+        authorizationEffect: "replace",
+        counterEffect: "reset_spend_and_payment_count",
+        intentDigest: `sha256:${"2".repeat(64)}`,
+        createdAt: new Date(0).toISOString(),
+        expiresAt: new Date(300_000).toISOString(),
+        decision: "allow",
+        blockers: [],
+        approval: { action: "confirm", userConfirmationRequired: true },
+      };
+    },
+    async getWalletReauthorizationPlan() {
+      return this.planWalletReauthorization();
+    },
+    async reauthorizeWallet() {
+      return {};
+    },
     async planPrivatePayment(input) {
       return {
         version: 1,
         decisionId: "wd_12345678",
         recipient: input.recipient,
         amountWei: input.amountWei,
+        authorization: AUTHORIZATION,
+        intentDigest: `sha256:${"0".repeat(64)}`,
+        createdAt: new Date(0).toISOString(),
+        expiresAt: new Date(300_000).toISOString(),
+        decision: "allow",
+        blockers: [],
+        approval: {
+          action: "confirm" as const,
+          userConfirmationRequired: true,
+        },
+      };
+    },
+    async getPaymentPlan() {
+      return {
+        version: 1,
+        decisionId: "wd_12345678",
+        recipient: "0x2222222222222222222222222222222222222222",
+        amountWei: "20000000000000000",
+        authorization: AUTHORIZATION,
         intentDigest: `sha256:${"0".repeat(64)}`,
         createdAt: new Date(0).toISOString(),
         expiresAt: new Date(300_000).toISOString(),
@@ -150,6 +260,40 @@ function fakeRuntime(): AgentBoostRuntime {
       };
     },
     async getRequest() {
+      throw new Error("not used");
+    },
+    async planRecoveryTransfer(input) {
+      return {
+        version: 1,
+        decisionId: "wr_12345678",
+        authorization: AUTHORIZATION,
+        recipient: input.recipient,
+        amountWei: "100000000000000000",
+        privateBalanceSnapshotWei: "100000000000000000",
+        balanceRevision: 4,
+        intentDigest: `sha256:${"1".repeat(64)}`,
+        createdAt: new Date(0).toISOString(),
+        expiresAt: new Date(300_000).toISOString(),
+        decision: "allow",
+        blockers: [],
+        approval: { action: "confirm", userConfirmationRequired: true },
+      };
+    },
+    async executeRecoveryTransfer(input) {
+      return {
+        version: 1,
+        requestId: "wrr_12345678",
+        clientRequestId: input.clientRequestId,
+        decisionId: input.decisionId,
+        authorization: AUTHORIZATION,
+        recipient: "0x2222222222222222222222222222222222222222",
+        amountWei: "100000000000000000",
+        phase: "submitted",
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      };
+    },
+    async getRecoveryRequest() {
       throw new Error("not used");
     },
     async egressCapabilities() {
@@ -207,13 +351,27 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
       "egress_status",
       "onboarding_start",
       "onboarding_status",
+      "trade_capabilities",
+      "trade_execute",
+      "trade_get_request",
+      "trade_plan",
+      "wallet_adopt_existing",
       "wallet_apply_policy_update",
+      "wallet_archive",
+      "wallet_create",
       "wallet_execute_private_payment",
+      "wallet_execute_recovery_transfer",
       "wallet_get_context",
       "wallet_get_policy",
+      "wallet_get_recovery_request",
       "wallet_get_request",
+      "wallet_list",
       "wallet_plan_policy_update",
       "wallet_plan_private_payment",
+      "wallet_plan_reauthorization",
+      "wallet_plan_recovery_transfer",
+      "wallet_reauthorize",
+      "wallet_select",
       "wallet_start_new_demo",
     ],
   );
@@ -380,8 +538,23 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   });
   const planText = plan.content.find((block) => block.type === "text");
   assert.equal(planText?.type, "text");
-  assert.match(planText?.type === "text" ? planText.text : "", /reply ✅, yes, or send it/u);
+  assert.match(planText?.type === "text" ? planText.text : "", /native approval/u);
   assert.doesNotMatch(planText?.type === "text" ? planText.text : "", /wd_|amountWei|intentDigest/u);
+  const planPresentation = (plan.structuredContent as {
+    presentation: {
+      kind: string;
+      title: string;
+      interaction: { transport: string };
+      fields: Array<{ label: string; value: string }>;
+    };
+  }).presentation;
+  assert.equal(planPresentation.kind, "confirmation");
+  assert.equal(planPresentation.title, "Confirm private test payment");
+  assert.equal(planPresentation.interaction.transport, "mcp_elicitation");
+  assert.deepEqual(
+    planPresentation.fields.map((field) => field.label),
+    ["Amount", "To", "Network"],
+  );
 
   const executeTool = tools.tools.find(
     (tool) => tool.name === "wallet_execute_private_payment",
@@ -415,6 +588,123 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
 
   await client.close();
   await server.close();
+});
+
+test("MCP native payment confirmation accepts, declines, and fails closed", async (t) => {
+  await t.test("accepted elicitation executes the exact plan", async () => {
+    const runtime = fakeRuntime();
+    let executeCalls = 0;
+    const execute = runtime.executePrivatePayment;
+    runtime.executePrivatePayment = async (input) => {
+      executeCalls += 1;
+      assert.equal(input.userConfirmed, true);
+      return execute(input);
+    };
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = await createMcpServer(runtime);
+    const client = new Client(
+      { name: "elicitation-test", version: "1.0.0" },
+      { capabilities: { elicitation: { form: {} } } },
+    );
+    let prompt = "";
+    client.setRequestHandler(ElicitRequestSchema, async (request) => {
+      assert.equal(request.params.mode, "form");
+      prompt = request.params.message;
+      return { action: "accept", content: {} };
+    });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const response = await client.callTool({
+        name: "wallet_execute_private_payment",
+        arguments: { decision_id: "wd_12345678" },
+      });
+      assert.equal(
+        (response.structuredContent as { code: string }).code,
+        "PAYMENT_REQUEST",
+      );
+      assert.equal(executeCalls, 1);
+      assert.match(prompt, /Confirm private test payment/u);
+      assert.match(prompt, /Amount: 0\.02 Sepolia ETH/u);
+      assert.match(prompt, /0x2222222222222222222222222222222222222222/u);
+      assert.match(prompt, /on-chain activity remains visible/u);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  await t.test("declined elicitation never executes", async () => {
+    const runtime = fakeRuntime();
+    let executed = false;
+    runtime.executePrivatePayment = async () => {
+      executed = true;
+      throw new Error("must not execute");
+    };
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = await createMcpServer(runtime);
+    const client = new Client(
+      { name: "elicitation-test", version: "1.0.0" },
+      { capabilities: { elicitation: { form: {} } } },
+    );
+    client.setRequestHandler(ElicitRequestSchema, async () => ({ action: "decline" }));
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const response = await client.callTool({
+        name: "wallet_execute_private_payment",
+        arguments: { decision_id: "wd_12345678" },
+      });
+      const structured = response.structuredContent as {
+        code: string;
+        outcome: string;
+        presentation: { state: string };
+      };
+      assert.equal(structured.code, "PAYMENT_CANCELLED");
+      assert.equal(structured.outcome, "blocked");
+      assert.equal(structured.presentation.state, "cancelled");
+      assert.equal(executed, false);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  await t.test("client without elicitation receives a text fallback contract", async () => {
+    const runtime = fakeRuntime();
+    let executed = false;
+    runtime.executePrivatePayment = async () => {
+      executed = true;
+      throw new Error("must not execute");
+    };
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = await createMcpServer(runtime);
+    const client = new Client({ name: "legacy-test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const response = await client.callTool({
+        name: "wallet_execute_private_payment",
+        arguments: { decision_id: "wd_12345678" },
+      });
+      const structured = response.structuredContent as {
+        code: string;
+        presentation: {
+          kind: string;
+          fields: Array<{ label: string; value: string }>;
+          interaction?: unknown;
+        };
+      };
+      assert.equal(structured.code, "PAYMENT_CONFIRMATION_REQUIRED");
+      assert.equal(structured.presentation.kind, "confirmation");
+      assert.equal(structured.presentation.interaction, undefined);
+      assert.deepEqual(
+        structured.presentation.fields.map((field) => field.label),
+        ["Amount", "To", "Network"],
+      );
+      assert.equal(executed, false);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });
 
 test("MCP error envelopes redact RPC credentials and local paths", async () => {

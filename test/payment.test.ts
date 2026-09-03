@@ -378,14 +378,23 @@ test("a reverted receipt becomes failed without restoring payment authority", as
 
 test("restart marks an interrupted payment indeterminate without restoring authority", async () => {
   const store = await readyStore();
+  const interruptedPlan = await new PaymentController({
+    store,
+    wallet: new PaymentWallet(),
+    clock: { now: () => new Date(1_000) },
+  }).plan({
+    recipient: "0x2222222222222222222222222222222222222222",
+    amountWei: "20000000000000000",
+  });
   await store.update((draft) => {
     draft.requests.req_interrupted = {
       version: 1,
       requestId: "req_interrupted",
       clientRequestId: "hermes:wd_interrupted",
-      decisionId: "wd_interrupted",
+      decisionId: interruptedPlan.decisionId,
       recipient: "0x2222222222222222222222222222222222222222",
       amountWei: "20000000000000000",
+      authorization: interruptedPlan.authorization,
       phase: "executing",
       createdAt: new Date(1_000).toISOString(),
       updatedAt: new Date(1_000).toISOString(),

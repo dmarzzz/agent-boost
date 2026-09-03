@@ -23,6 +23,12 @@ const fixtures = JSON.parse(
 
 const expectedTraces = {
   "setup-funding-qr": ["onboarding_start"],
+  "setup-partial-funding": ["onboarding_status"],
+  "setup-preparing-private-balance": ["onboarding_status"],
+  "setup-ready": ["onboarding_status", "capabilities"],
+  "setup-failed": ["onboarding_status"],
+  "start-new-demo-wallet": ["wallet_start_new_demo"],
+  "advanced-setup-shows-live-policy": ["wallet_get_policy"],
   "ambiguous-amount-clarification": [],
   "confirmed-payment-with-emoji": [
     "capabilities",
@@ -37,6 +43,12 @@ const expectedTraces = {
     "wallet_execute_private_payment",
     "wallet_get_request",
   ],
+  "native-payment-cancelled": [
+    "wallet_get_context",
+    "wallet_plan_private_payment",
+    "wallet_execute_private_payment",
+  ],
+  "main-balance-read": ["wallet_get_context"],
   "local-deny-override": [
     "capabilities",
     "wallet_get_context",
@@ -52,24 +64,51 @@ const expectedTraces = {
     "wallet_plan_policy_update",
     "wallet_apply_policy_update",
   ],
+  "expired-delegation-blocked": [
+    "wallet_get_context",
+    "wallet_plan_private_payment",
+  ],
   "covered-public-read": ["egress_status", "egress_fetch"],
   "covered-read-needs-enrollment": ["egress_status"],
 };
 
 const responseRules = {
   "setup-funding-qr": [
-    { includes: ["0.2", "Sepolia", "0x1111111111111111111111111111111111111111"], maxLines: 5 },
+    { includes: ["1/3", "0.2", "Sepolia", "0x1111111111111111111111111111111111111111"], maxLines: 7 },
+  ],
+  "setup-partial-funding": [
+    { includes: ["1/3", "0.15", "Next", "check again"], maxLines: 4 },
+  ],
+  "setup-preparing-private-balance": [
+    { includes: ["2/3", "Funding found", "check again"], maxLines: 5 },
+  ],
+  "setup-ready": [
+    { includes: ["3/3", "Dark Mode", "Tor", "Sepolia test payment"], maxLines: 9 },
+  ],
+  "setup-failed": [
+    { includes: ["needs attention", "deadline", "Next"], maxLines: 4 },
+  ],
+  "start-new-demo-wallet": [
+    { includes: ["archive", "fresh wallet", "Sepolia funding"], maxLines: 4 },
+    { includes: ["1/3", "0.2", "Next"], maxLines: 5 },
+  ],
+  "advanced-setup-shows-live-policy": [
+    { includes: ["Current wallet permission", "1 send", "0.05", "expiry"], maxLines: 4 },
   ],
   "ambiguous-amount-clarification": [
     { includes: ["exact amount", "0x2222222222222222222222222222222222222222"], maxLines: 2 },
   ],
   "confirmed-payment-with-emoji": [
-    { includes: ["0.01", "0x2222222222222222222222222222222222222222", "approve"], maxLines: 5 },
-    { includes: ["Sent", "0.01", "0x2222222222222222222222222222222222222222"], maxLines: 4 },
+    { includes: ["Sent", "0.01", "0x2222222222222222222222222222222222222222"], maxLines: 16 },
   ],
   "indeterminate-payment-stays-unresolved": [
-    { includes: ["0.01", "0x2222222222222222222222222222222222222222", "approve"], maxLines: 5 },
-    { includes: ["Not confirmed", "won’t retry"], maxLines: 4 },
+    { includes: ["Not confirmed", "won’t retry"], maxLines: 16 },
+  ],
+  "native-payment-cancelled": [
+    { includes: ["cancelled", "Nothing was sent"], maxLines: 14 },
+  ],
+  "main-balance-read": [
+    { includes: ["Main account balance", "0.1 Sepolia ETH"], maxLines: 3 },
   ],
   "local-deny-override": [
     { includes: ["blocked", "security policy"], excludes: ["approve"], maxLines: 3 },
@@ -80,6 +119,9 @@ const responseRules = {
   "policy-update-with-confirmation": [
     { includes: ["New wallet permission", "10", "1", "approve"], maxLines: 8 },
     { includes: ["Permission updated", "10", "1", "No funds moved"], maxLines: 4 },
+  ],
+  "expired-delegation-blocked": [
+    { includes: ["blocked", "expired", "wallet"], excludes: ["approve"], maxLines: 4 },
   ],
   "covered-public-read": [
     { includes: ["status", "ok", "no direct fallback"], maxLines: 4 },
@@ -199,7 +241,13 @@ async function runFlow(flow, hermes, options) {
   const outputs = [];
   let sessionId;
   try {
+    const nativeInteraction = flow.steps.find((entry) => entry.actor === "client");
+    let nativeInputSent = false;
     for (const step of flow.steps.filter((entry) => entry.actor === "user")) {
+      const usesSetupSkill = flow.id.startsWith("setup-") || [
+        "start-new-demo-wallet",
+        "advanced-setup-shows-live-policy",
+      ].includes(flow.id);
       const args = [
         "chat",
         "-q",
@@ -210,7 +258,7 @@ async function runFlow(flow, hermes, options) {
         "--toolsets",
         "agent-boost",
         "--skills",
-        flow.id === "setup-funding-qr" ? "agent-boost-setup" : "agent-boost",
+        usesSetupSkill ? "agent-boost-setup" : "agent-boost",
         "--max-turns",
         "12",
         ...(sessionId ? ["--resume", sessionId] : []),
@@ -221,7 +269,11 @@ async function runFlow(flow, hermes, options) {
         cwd: sandbox,
         env: environment,
         timeoutMs: options.timeoutMs,
+        stdin: nativeInteraction && !nativeInputSent
+          ? nativeInteraction.decision === "accept" ? "o\n" : "d\n"
+          : "",
       });
+      if (nativeInteraction && !nativeInputSent) nativeInputSent = true;
       if (result.exitCode !== 0) {
         throw new Error(`Hermes exited ${result.exitCode}: ${publicDiagnostic(result.stderr)}`);
       }
@@ -350,8 +402,9 @@ function spawnCapture(command, args, options) {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
+    child.stdin.end(options.stdin ?? "");
     const stdout = [];
     const stderr = [];
     const timer = setTimeout(() => {

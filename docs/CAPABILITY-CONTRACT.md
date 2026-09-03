@@ -80,6 +80,19 @@ Every expected result appears in MCP `structuredContent`:
     "mode": "never",
     "safe_with_same_arguments": false
   },
+  "presentation": {
+    "version": "1.0",
+    "kind": "confirmation",
+    "title": "Confirm private test payment",
+    "state": "pending",
+    "fields": [],
+    "interaction": {
+      "kind": "confirmation",
+      "transport": "mcp_elicitation",
+      "approve_label": "Approve",
+      "decline_label": "Cancel"
+    }
+  },
   "data": {}
 }
 ```
@@ -88,6 +101,15 @@ The MCP text content is deliberately not a second serialized copy. It is a
 short presentation hint with the human amount, status, and next action. Hermes
 uses the structured content for exact decisions while keeping raw wei, phases,
 digests, and identifiers out of ordinary replies.
+
+`presentation` is an optional, non-authoritative rendering contract. It gives
+clients a stable title, semantic state, real setup step, labeled fields, status
+markers, warning, next action, and interaction hint without changing the
+authority-bearing `data`. Setup uses three participant-facing steps. Payment
+confirmation uses MCP form elicitation, so clients can render native controls;
+clients without elicitation receive `PAYMENT_CONFIRMATION_REQUIRED` and use the
+same fields as a text fallback. A decline returns `PAYMENT_CANCELLED` and never
+executes the plan.
 
 Known outcomes are `ready`, `blocked`, `awaiting_funding`, `executing`,
 `submitted`, `confirmed`, `failed`, and `indeterminate`. Retry advice is

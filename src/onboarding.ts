@@ -45,6 +45,7 @@ export class OnboardingController {
 
   async start(): Promise<OnboardingRecord> {
     this.#stopped = false;
+    await this.#store.ensureWalletProfile(this.#config.kohakuWalletName);
     const existing = (await this.#store.read()).onboarding;
     if (existing) {
       if (existing.phase !== "failed") {
@@ -87,6 +88,7 @@ export class OnboardingController {
     }
 
     const now = this.#clock.now();
+    const walletProfile = await this.#store.activeWalletProfile();
     const record: OnboardingRecord = {
       version: 1,
       setupId: `setup_${randomUUID()}`,
@@ -109,6 +111,7 @@ export class OnboardingController {
           now.getTime() + this.#config.delegationTtlMs,
         ).toISOString(),
         enabled:
+          walletProfile.authorizationId !== undefined &&
           this.#config.executeEnabled &&
           this.#config.security.effective["payment.execute"] !== "deny",
       },

@@ -24,8 +24,9 @@ correct decision-making, not secrets.
 2. Wallet commands are a fixed allowlist with validated fields and no shell.
 3. Mainnet and non-Sepolia RPC endpoints are rejected.
 4. Payment terms cannot change between plan and execution.
-5. A payment requires explicit verbal confirmation and stays within a one-use,
-   expiring amount delegation.
+5. A payment requires explicit one-shot confirmation—native client elicitation
+   when available, with a verbal fallback—and stays within a one-use, expiring
+   amount delegation.
 6. Stable client IDs prevent ordinary retries from double-executing.
 7. Uncertain side effects fail safe and do not restore payment authority.
 8. The onboarding UI is local, read-only, and exposes only the public funding
@@ -79,7 +80,7 @@ formal verification. The event boundary is disposable, valueless Sepolia ETH.
 | --- | --- | --- |
 | Prompt asks for mainnet payment | Hard-coded Sepolia client and capability | Same-user shell could bypass Agent Boost entirely |
 | Prompt changes recipient after approval | Decision binds exact recipient/amount | User may verbally confirm misleading text |
-| Hermes falsely reports approval | Exact `user_confirmed` gate and bounded delegation | Agent Boost does not hear speech; confirmation is Hermes-attested, not independent authentication |
+| Hermes or the MCP host falsely reports approval | One-shot native elicitation where supported, exact fallback `user_confirmed` gate, and bounded delegation | Client acceptance and verbal fallback are host-attested, not independent authentication |
 | Tool retry duplicates payment | Stable client ID and durable request | New malicious client ID is blocked only after first request exists |
 | Shell injection through recipient/path | Address/path validation and `shell: false` | Vulnerabilities in Node or Kohaku remain |
 | Secret appears in MCP output | Explicit public projections, stable adapter errors, URL/path redaction, and no raw upstream stderr | Same-user process inspection remains possible |
