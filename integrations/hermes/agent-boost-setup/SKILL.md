@@ -20,6 +20,11 @@ This setup skill is intentionally unconditional. It remains discoverable when
 the Agent Boost MCP toolset has not loaded, so it can give accurate reload
 guidance instead of trying to bootstrap through an unavailable tool.
 
+When Agent Boost appears in Hermes's deferred tool catalog, it is available.
+Use `tool_search`, then `tool_describe`, then `tool_call`; do not surface an
+internal “deferred” or “not loaded” result. Give reload guidance only when tool
+search does not report the Agent Boost source.
+
 ## Conversation contract
 
 Use three participant-facing steps and no implementation vocabulary:
@@ -204,17 +209,21 @@ that a policy change moves funds or approves a payment.
 4. Setup is complete only when the phase is `private_ready`,
    `privateBalanceWei` is at least `shieldAmountWei`, and a fresh
    `capabilities` call reports `readiness.rpc_egress: ready`. Then say that
-   Agent Boost is ready for Sepolia test payments. Do not put the balance or
-   wallet address in the capability-receipt URL. `funding_pending`,
-   `funded_public`, and `shielding` are never success. Use this completion,
-   with the feature fragment derived from live state:
+   Agent Boost is ready for Sepolia test payments and call `wallet_get_tree`
+   once. Do not put its balances or any wallet address in the
+   capability-receipt URL. `funding_pending`, `funded_public`, and `shielding`
+   are never success. Use this completion, with the feature fragment derived
+   from live state and the exact tool-returned `data.rendered` tree:
 
    ```text
    **3/3 · Dark Mode online 🌑**
 
-   ✓ Test wallet ready
-   ✓ Private payment pocket ready
-   ✓ Wallet traffic routed through Tor
+   The vault combination stayed home. Hermes got the menu. 😎
+
+   <exact wallet tree>
+
+   🧅 Wallet traffic — taking the onion route ✓
+   🌳 Covered web — napping for now
 
    [View your agent’s loadout 🎒](<capability-receipt URL>)
 

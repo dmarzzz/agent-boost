@@ -25,6 +25,7 @@ const HERMES_NATIVE_TOOLS = [
   "onboarding_start",
   "onboarding_status",
   "wallet_get_context",
+  "wallet_get_tree",
   "wallet_get_policy",
   "wallet_plan_policy_update",
   "wallet_apply_policy_update",
@@ -481,7 +482,14 @@ export async function inspectCandidate(sourceRoot, runCommand = spawnCapture) {
     timeoutMs: 30_000,
   });
   if (revision.exitCode !== 0) throw new Error(`Could not resolve candidate: ${diagnostic(revision)}`);
-  const dirty = await runCommand("git", ["-C", sourceRoot, "diff", "--quiet"], {
+  const dirty = await runCommand("git", [
+    "-C",
+    sourceRoot,
+    "diff",
+    "--quiet",
+    "HEAD",
+    "--",
+  ], {
     timeoutMs: 30_000,
   });
   if (dirty.exitCode !== 0 && dirty.exitCode !== 1) {

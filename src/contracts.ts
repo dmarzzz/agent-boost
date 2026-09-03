@@ -83,6 +83,39 @@ export interface WalletPolicySnapshot extends DelegationPolicy {
   paymentsRemaining: number;
 }
 
+export interface WalletTreeSnapshot {
+  version: 1;
+  chainId: typeof SEPOLIA_CHAIN_ID;
+  network: "Sepolia";
+  observedAt: string;
+  profiles: WalletTreeProfile[];
+  archivedProfiles: number;
+  relationship: {
+    type: "profile_container";
+    impliesControl: false;
+  };
+}
+
+export interface WalletTreeProfile {
+  shortName: string;
+  active: boolean;
+  setupPhase: OnboardingPhase;
+  main: WalletTreeAccount & {
+    shortName: "main";
+    role: "main_funding_source";
+  };
+  subwallets: Array<WalletTreeAccount & {
+    shortName: "private";
+    role: "private_payment_pocket";
+  }>;
+}
+
+export interface WalletTreeAccount {
+  balanceWei?: string;
+  status: "ready" | "preparing" | "not_created" | "unavailable";
+  freshness: "live" | "last_known" | "unavailable";
+}
+
 export interface PolicyUpdatePlan {
   version: 1;
   decisionId: string;

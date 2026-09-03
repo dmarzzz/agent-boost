@@ -48,6 +48,7 @@ class SetupWallet implements WalletAdapter {
 
 class SnapshotWallet extends SetupWallet {
   snapshotReads = 0;
+  privateReads = 0;
 
   constructor(
     readonly publicBalanceWei: bigint,
@@ -57,6 +58,7 @@ class SnapshotWallet extends SetupWallet {
   }
 
   override async getPrivateBalanceWei(): Promise<bigint> {
+    this.privateReads += 1;
     return this.privateBalanceWei;
   }
 
@@ -408,6 +410,88 @@ test("wallet context reports only the live balance of its displayed address", as
     assert.equal(context.balance_atomic, "200000000000000000");
     assert.equal(context.balances, undefined);
     assert.equal(wallet.snapshotReads, 0);
+  } finally {
+    await runtime.shutdown();
+  }
+});
+
+test("wallet tree refreshes main and private balances without returning an address", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-boost-wallet-tree-"));
+  const config = {
+    ...loadConfig({
+      AGENT_BOOST_STATE_DIR: root,
+      AGENT_BOOST_FUNDING_POLL_MS: "1",
+    }, root),
+    uiPort: 0,
+  };
+  await seedOnboarding(
+    root,
+    "private_ready",
+    1n,
+    1n,
+  );
+  const seededStore = new StateStore(root);
+  await seededStore.initialize();
+  const inactiveProfile = await seededStore.registerManagedWallet("travel", "adopted");
+  await seededStore.update((draft) => {
+    const profile = draft.wallet?.profiles[inactiveProfile.walletId];
+    if (!profile || !draft.onboarding) throw new Error("test wallet profile missing");
+    profile.onboarding = {
+      ...structuredClone(draft.onboarding),
+      setupId: "setup_inactive_wallet",
+      address: "0x2222222222222222222222222222222222222222",
+      publicBalanceWei: "2",
+      privateBalanceWei: "100000000000000000",
+    };
+  });
+  const wallet = new SnapshotWallet(
+    999n,
+    250_000_000_000_000_000n,
+  );
+  let publicReadsFail = false;
+  const runtime = await createLocalRuntime(config, {
+    wallet,
+    chain: {
+      async assertSepolia() {},
+      async getBalanceWei(address) {
+        if (publicReadsFail) throw new Error("temporary RPC failure");
+        return address === "0x2222222222222222222222222222222222222222"
+          ? 750_000_000_000_000_000n
+          : 1_500_000_000_000_000_000n;
+      },
+    },
+  });
+  try {
+    const readsBefore = wallet.privateReads;
+    const tree = await runtime.walletTree();
+    assert.equal(tree.profiles[0]?.shortName, "agent-boost");
+    assert.equal(tree.profiles[0]?.active, true);
+    assert.equal(tree.profiles[0]?.main.shortName, "main");
+    assert.equal(tree.profiles[0]?.main.balanceWei, "1500000000000000000");
+    assert.equal(tree.profiles[0]?.main.freshness, "live");
+    assert.equal(tree.profiles[0]?.subwallets[0]?.shortName, "private");
+    assert.equal(tree.profiles[0]?.subwallets[0]?.balanceWei, "250000000000000000");
+    assert.equal(tree.profiles[0]?.subwallets[0]?.freshness, "live");
+    assert.equal(tree.profiles[1]?.shortName, "travel");
+    assert.equal(tree.profiles[1]?.active, false);
+    assert.equal(tree.profiles[1]?.main.balanceWei, "750000000000000000");
+    assert.equal(tree.profiles[1]?.main.freshness, "live");
+    assert.equal(tree.profiles[1]?.subwallets[0]?.balanceWei, "100000000000000000");
+    assert.equal(tree.profiles[1]?.subwallets[0]?.freshness, "last_known");
+    assert.equal(tree.relationship.impliesControl, false);
+    assert.equal(wallet.privateReads, readsBefore + 1);
+    assert.doesNotMatch(
+      JSON.stringify(tree),
+      /0x1111111111111111111111111111111111111111/u,
+    );
+
+    publicReadsFail = true;
+    const degraded = await runtime.walletTree();
+    assert.equal(degraded.profiles[0]?.main.status, "unavailable");
+    assert.equal(degraded.profiles[0]?.main.balanceWei, undefined);
+    assert.equal(degraded.profiles[1]?.main.status, "unavailable");
+    assert.equal(degraded.profiles[1]?.main.balanceWei, undefined);
+    assert.equal(degraded.profiles[1]?.subwallets[0]?.freshness, "last_known");
   } finally {
     await runtime.shutdown();
   }

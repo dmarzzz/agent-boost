@@ -152,7 +152,7 @@ const runtime: AgentBoostRuntime = {
     capabilityReads += 1;
     const action = approval();
     return {
-      contract: "org.agentboost.wallet/1.4",
+      contract: "org.agentboost.wallet/1.5",
       chain_id: "eip155:11155111",
       network_name: "Sepolia",
       authority: {
@@ -203,6 +203,36 @@ const runtime: AgentBoostRuntime = {
       delegation: ready.delegation,
       security: { payment_execute: approval() },
       rpc_route: { mode: "tor", status: "ready", direct_fallback: false },
+    };
+  },
+  async walletTree() {
+    await trace("wallet_get_tree", {});
+    return {
+      version: 1,
+      chainId: 11_155_111,
+      network: "Sepolia",
+      observedAt: NOW,
+      profiles: [{
+        shortName: "agent-boost",
+        active: true,
+        setupPhase: "private_ready",
+        main: {
+          shortName: "main",
+          role: "main_funding_source",
+          balanceWei: "1500000000000000000",
+          status: "ready",
+          freshness: "live",
+        },
+        subwallets: [{
+          shortName: "private",
+          role: "private_payment_pocket",
+          balanceWei: "250000000000000000",
+          status: "ready",
+          freshness: "live",
+        }],
+      }],
+      archivedProfiles: 0,
+      relationship: { type: "profile_container", impliesControl: false },
     };
   },
   async walletPolicy() {

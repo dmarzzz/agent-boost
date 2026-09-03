@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a deterministic, privacy-safe wallet tree for Hermes: friendly profile
+  names with sibling main/private balances, explicit live/last-known freshness,
+  and no addresses, wallet IDs, raw atomic values, or aggregate total.
 - README cut to the essentials; the install details, demo walkthrough, tools,
   configuration, privacy claims, and runtime hardening notes moved to `docs/`
   with an index at `docs/README.md`.

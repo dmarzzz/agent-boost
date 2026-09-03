@@ -15,6 +15,7 @@ import type {
   WalletPolicySnapshot,
   RecoveryTransferPlan,
   RecoveryTransferRequest,
+  WalletTreeSnapshot,
 } from "./contracts.js";
 import type { CoveredFetchResult } from "./shade-tree/index.js";
 import {
@@ -38,6 +39,7 @@ export interface AgentBoostRuntime {
     waitMs?: number;
   }): Promise<OnboardingRecord>;
   walletContext(): Promise<Record<string, unknown>>;
+  walletTree(): Promise<WalletTreeSnapshot>;
   walletPolicy(): Promise<WalletPolicySnapshot>;
   planPolicyUpdate(input: {
     perPaymentLimitWei?: string;
@@ -367,6 +369,25 @@ function buildPresentation(
     };
   }
 
+  if (code === "WALLET_TREE") {
+    const profiles = Array.isArray(data.profiles) ? data.profiles.length : 0;
+    return {
+      version: "1.0",
+      kind: "status",
+      title: "Wallet map",
+      state: "complete",
+      fields: [
+        { label: "Profiles", value: String(profiles), format: "text" },
+        { label: "Network", value: "Sepolia", format: "text" },
+      ],
+      notice: {
+        tone: "info",
+        text: "Friendly names and balances only—no addresses or wallet IDs.",
+      },
+      next_action: "Show the exact rendered wallet tree.",
+    };
+  }
+
   return undefined;
 }
 
@@ -495,6 +516,13 @@ function compactToolText(structured: Record<string, unknown>): string {
     const amount = balance ? formatEthWei(BigInt(balance)) : "unknown";
     const phase = stringField(data, "setup_phase") ?? "unknown";
     return `Live wallet read complete (${phase}). Quote exactly: Main account balance: ${amount} Sepolia ETH. Do not recalculate this amount from balance_atomic or reuse a prior balance. “Main” means the funding source; it has no control over subaccounts. Do not reveal the address or raw atomic value unless asked.`;
+  }
+
+  if (code === "WALLET_TREE") {
+    const rendered = stringField(data, "rendered");
+    return rendered
+      ? `Live wallet map. Quote data.rendered exactly and do not add an address:\n${rendered}`
+      : "The live wallet map is unavailable.";
   }
 
   if (code === "WALLET_POLICY") {
@@ -687,6 +715,74 @@ function formatEthWei(wei: bigint): string {
     .padStart(18, "0")
     .replace(/0+$/u, "");
   return fractional ? `${whole.toString()}.${fractional}` : whole.toString();
+}
+
+function walletTreeBalance(
+  balanceWei: string | undefined,
+  status: string,
+  freshness: string,
+): string {
+  if (balanceWei !== undefined) {
+    const age = freshness === "last_known" ? " · last known" : " · live";
+    return `${formatEthWei(BigInt(balanceWei))} Sepolia ETH${age}`;
+  }
+  if (status === "not_created") return "not created";
+  if (status === "preparing") return "preparing...";
+  return "unavailable";
+}
+
+function publicWalletTree(snapshot: WalletTreeSnapshot): Record<string, unknown> {
+  const lines = ["🗂 wallets/"];
+  for (const [index, profile] of snapshot.profiles.entries()) {
+    const privateWallet = profile.subwallets[0];
+    if (!privateWallet) {
+      throw new Error("WALLET_TREE_CONTRACT_VIOLATION: missing private wallet");
+    }
+    const lastProfile = index === snapshot.profiles.length - 1;
+    const branch = lastProfile ? "`--" : "|--";
+    const childPrefix = lastProfile ? "    " : "|   ";
+    lines.push(
+      `${branch} 💼 ${profile.shortName}/${profile.active ? " [active]" : ""}`,
+      `${childPrefix}|-- 🌐 ${profile.main.shortName}/      ${walletTreeBalance(
+        profile.main.balanceWei,
+        profile.main.status,
+        profile.main.freshness,
+      )}`,
+      `${childPrefix}\`-- 🥷 ${privateWallet.shortName}/   ${walletTreeBalance(
+        privateWallet.balanceWei,
+        privateWallet.status,
+        privateWallet.freshness,
+      )}`,
+    );
+  }
+  if (snapshot.profiles.length === 0) lines.push("`-- no available wallet profiles");
+  lines.push("", "Folders organize wallet views; they do not imply custody or control.");
+  return {
+    rendered: lines.join("\n"),
+    observed_at: snapshot.observedAt,
+    network: snapshot.network,
+    addresses_included: false,
+    raw_atomic_values_included: false,
+    archived_profiles_hidden: snapshot.archivedProfiles,
+    profiles: snapshot.profiles.map((profile) => ({
+      short_name: profile.shortName,
+      active: profile.active,
+      accounts: [profile.main, ...profile.subwallets].map((account) => ({
+        short_name: account.shortName,
+        role: account.role,
+        balance_native: account.balanceWei === undefined
+          ? undefined
+          : formatEthWei(BigInt(account.balanceWei)),
+        asset: "Sepolia ETH",
+        status: account.status,
+        freshness: account.freshness,
+      })),
+    })),
+    relationship: {
+      type: snapshot.relationship.type,
+      implies_control: snapshot.relationship.impliesControl,
+    },
+  };
 }
 
 function parseEthToWei(amount: string): string {
@@ -1148,6 +1244,27 @@ export async function createMcpServer(
     async () => {
       try {
         return result(envelope(digest, "ready", "WALLET_LIST", await runtime.listWallets()));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_get_tree",
+    {
+      title: "Show the live wallet tree",
+      description:
+        "Call this whenever the user asks to see all wallets, accounts, subwallets, their balances, or a wallet tree. It refreshes every available profile's main balance and the active profile's private balance, then returns one deterministic ASCII-style tree with friendly short names. Quote data.rendered exactly. Inactive private balances are explicitly labeled last known. Addresses, wallet IDs, raw atomic values, and secrets are intentionally excluded. The folders organize views only; they never imply custody or control.",
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      try {
+        const tree = await runtime.walletTree();
+        return result(
+          envelope(digest, "ready", "WALLET_TREE", publicWalletTree(tree)),
+        );
       } catch (error) {
         return domainError(digest, error);
       }

@@ -133,9 +133,21 @@
           }
         },
         {
+          "actor": "tool",
+          "name": "wallet_get_tree",
+          "arguments": {},
+          "expect": {
+            "code": "WALLET_TREE",
+            "outcome": "ready",
+            "text_includes": ["🗂 wallets/", "agent-boost/ [active]", "1.5 Sepolia ETH · live"],
+            "image": false,
+            "presentation": {"kind": "status", "state": "complete"}
+          }
+        },
+        {
           "actor": "assistant",
-          "max_lines": 7,
-          "text": "**3/3 · Dark Mode online 🌑**\n\n✓ Test wallet ready\n✓ Private payment pocket ready\n✓ Wallet traffic routed through Tor\n\n**Next:** Try a Sepolia test payment."
+          "max_lines": 11,
+          "text": "**3/3 · Dark Mode online 🌑**\n\nThe vault combination stayed home. Hermes got the menu. 😎\n\n🗂 wallets/\n`-- 💼 agent-boost/ [active]\n    |-- 🌐 main/      1.5 Sepolia ETH · live\n    `-- 🥷 private/   0.25 Sepolia ETH · live\n\nFolders organize wallet views; they do not imply custody or control.\n**Next:** Try a Sepolia test payment."
         }
       ]
     },
@@ -220,6 +232,31 @@
           "actor": "assistant",
           "max_lines": 3,
           "text": "🔐 **Current wallet permission**\n**1 send · up to 0.05 Sepolia ETH · 0.05 total**\nChange the send count, per-send limit, total limit, expiry, or turn it off."
+        }
+      ]
+    },
+    {
+      "id": "wallet-tree-without-identifiers",
+      "title": "Wallet overview is live, friendly, and address-free",
+      "scenario": "setup-ready",
+      "steps": [
+        {"actor": "user", "text": "Show me all my wallets as a tree."},
+        {
+          "actor": "tool",
+          "name": "wallet_get_tree",
+          "arguments": {},
+          "expect": {
+            "code": "WALLET_TREE",
+            "outcome": "ready",
+            "text_includes": ["🗂 wallets/", "agent-boost/ [active]", "private/", "do not imply custody or control"],
+            "image": false,
+            "presentation": {"kind": "status", "state": "complete"}
+          }
+        },
+        {
+          "actor": "assistant",
+          "max_lines": 6,
+          "text": "🗂 wallets/\n`-- 💼 agent-boost/ [active]\n    |-- 🌐 main/      1.5 Sepolia ETH · live\n    `-- 🥷 private/   0.25 Sepolia ETH · live\n\nFolders organize wallet views; they do not imply custody or control."
         }
       ]
     },

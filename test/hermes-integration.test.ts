@@ -141,11 +141,15 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.match(setupSkill, /never put[\s\S]*address[\s\S]*balance[\s\S]*setup ID/u);
   assert.match(setupSkill, /remote Hermes cannot open a[\s\S]*participant’s device/u);
   assert.match(setupSkill, /View your agent’s loadout/u);
+  assert.match(setupSkill, /`wallet_get_tree`/u);
+  assert.match(setupSkill, /exact tool-returned `data\.rendered` tree/u);
   assert.match(operationalSkill, /testnet_delegated/u);
   assert.match(operationalSkill, /wallet_plan_private_payment/u);
   assert.match(operationalSkill, /`user_confirmed: true`/u);
   assert.match(operationalSkill, /agent operates every tool/iu);
   assert.match(operationalSkill, /Never ask the user to type a tool name/iu);
+  assert.match(operationalSkill, /wallet tree is a live view/iu);
+  assert.match(operationalSkill, /shortened address[\s\S]*aggregate total/iu);
   assert.match(
     operationalSkill,
     /tool_search[\s\S]*tool_describe[\s\S]*tool_call[\s\S]*loaded path/u,
@@ -386,6 +390,7 @@ test("uses native tool names and never encodes Hermes version prefixes", () => {
     "onboarding_start",
     "onboarding_status",
     "wallet_get_context",
+    "wallet_get_tree",
     "wallet_get_policy",
     "wallet_plan_policy_update",
     "wallet_apply_policy_update",

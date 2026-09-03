@@ -15,6 +15,14 @@ const gate = await import("../scripts/lib/release-gate.mjs") as {
     stdout: string;
     stderr: string;
   }): Record<string, unknown>;
+  inspectCandidate(
+    sourceRoot: string,
+    runCommand: (
+      executable: string,
+      args: string[],
+      options?: Record<string, unknown>,
+    ) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
+  ): Promise<{ sha: string; trackedChanges: boolean }>;
   validateOnboardingResult(
     response: Record<string, unknown>,
     options?: { expectUiOpened?: boolean },
@@ -47,6 +55,18 @@ const SETUP_ID = "setup_12345678";
 const FUNDING_URI = `ethereum:${ADDRESS}@11155111?value=200000000000000000`;
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+test("release gate reports staged tracked changes", async () => {
+  const calls: string[][] = [];
+  const inspected = await gate.inspectCandidate("/candidate", async (_command, args) => {
+    calls.push(args);
+    return args.includes("rev-parse")
+      ? { exitCode: 0, stdout: `${"a".repeat(40)}\n`, stderr: "" }
+      : { exitCode: 1, stdout: "", stderr: "" };
+  });
+  assert.equal(inspected.trackedChanges, true);
+  assert.deepEqual(calls[1], ["-C", "/candidate", "diff", "--quiet", "HEAD", "--"]);
+});
 
 function delegation(): Record<string, unknown> {
   return {
@@ -267,6 +287,7 @@ test("release gate verifies isolated Hermes config and exact packaged skills", a
       "        - onboarding_start",
       "        - onboarding_status",
       "        - wallet_get_context",
+      "        - wallet_get_tree",
       "        - wallet_get_policy",
       "        - wallet_plan_policy_update",
       "        - wallet_apply_policy_update",

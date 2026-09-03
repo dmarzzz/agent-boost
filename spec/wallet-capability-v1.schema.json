@@ -18,10 +18,11 @@
     "adapters",
     "readiness",
     "demo_reset",
-    "wallet_management"
+    "wallet_management",
+    "wallet_tree"
   ],
   "properties": {
-    "contract": {"const": "org.agentboost.wallet/1.4"},
+    "contract": {"const": "org.agentboost.wallet/1.5"},
     "chain_id": {"const": "eip155:11155111"},
     "network_name": {"const": "Sepolia"},
     "asset_type": {"const": "eip155:11155111/slip44:60"},
@@ -265,6 +266,30 @@
         "accepts_seed_or_password": {"const": false},
         "selection_requires_separate_reauthorization": {"const": true},
         "recovery_transfer_available": {"type": "boolean"}
+      }
+    },
+    "wallet_tree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available",
+        "hierarchy",
+        "account_short_names",
+        "active_balances_refreshed_live",
+        "inactive_public_balances_refreshed_live",
+        "inactive_private_balances",
+        "includes_addresses",
+        "implies_control"
+      ],
+      "properties": {
+        "available": {"const": true},
+        "hierarchy": {"const": "profile_container"},
+        "account_short_names": {"const": ["main", "private"]},
+        "active_balances_refreshed_live": {"const": true},
+        "inactive_public_balances_refreshed_live": {"const": true},
+        "inactive_private_balances": {"const": "last_known"},
+        "includes_addresses": {"const": false},
+        "implies_control": {"const": false}
       }
     }
   },

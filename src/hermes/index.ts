@@ -22,6 +22,7 @@ export const HERMES_NATIVE_TOOLS = [
   "onboarding_start",
   "onboarding_status",
   "wallet_get_context",
+  "wallet_get_tree",
   "wallet_get_policy",
   "wallet_plan_policy_update",
   "wallet_apply_policy_update",

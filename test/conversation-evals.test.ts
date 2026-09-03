@@ -94,10 +94,11 @@ const expectedToolTraces: Record<string, string[]> = {
   "setup-funding-qr": ["onboarding_start"],
   "setup-partial-funding": ["onboarding_status"],
   "setup-preparing-private-balance": ["onboarding_status"],
-  "setup-ready": ["onboarding_status", "capabilities"],
+  "setup-ready": ["onboarding_status", "capabilities", "wallet_get_tree"],
   "setup-failed": ["onboarding_status"],
   "start-new-demo-wallet": ["wallet_start_new_demo"],
   "advanced-setup-shows-live-policy": ["wallet_get_policy"],
+  "wallet-tree-without-identifiers": ["wallet_get_tree"],
   "ambiguous-amount-clarification": [],
   "confirmed-payment-with-emoji": [
     "capabilities",
@@ -263,7 +264,7 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
   return {
     async capabilities() {
       return {
-        contract: "org.agentboost.wallet/1.4",
+        contract: "org.agentboost.wallet/1.5",
         chain_id: "eip155:11155111",
         security: {
           default: {
@@ -303,6 +304,35 @@ function evalRuntime(scenario: Scenario): AgentBoostRuntime {
         balance_atomic: "100000000000000000",
         delegation: ready.delegation,
         security: { payment_execute: approval },
+      };
+    },
+    async walletTree() {
+      return {
+        version: 1,
+        chainId: 11_155_111,
+        network: "Sepolia",
+        observedAt: NOW,
+        profiles: [{
+          shortName: "agent-boost",
+          active: true,
+          setupPhase: "private_ready",
+          main: {
+            shortName: "main",
+            role: "main_funding_source",
+            balanceWei: "1500000000000000000",
+            status: "ready",
+            freshness: "live",
+          },
+          subwallets: [{
+            shortName: "private",
+            role: "private_payment_pocket",
+            balanceWei: "250000000000000000",
+            status: "ready",
+            freshness: "live",
+          }],
+        }],
+        archivedProfiles: 0,
+        relationship: { type: "profile_container", impliesControl: false },
       };
     },
     async walletPolicy() {

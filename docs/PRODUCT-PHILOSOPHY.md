@@ -27,6 +27,12 @@ Tools return the exact human-readable value the agent should present. The model
 does not convert wei, combine balances, infer readiness, or reconstruct a fact
 from raw fields. There is one canonical answer for each ordinary question.
 
+A multi-wallet overview follows the same rule. Deterministic code renders one
+canonical tree from the wallet registry, refreshes every visible public balance
+and the active private balance, and marks an inactive private balance as `last
+known`. A failed read becomes `unavailable`, never a plausible zero. Friendly
+profile names replace addresses and wallet IDs in the default presentation.
+
 The balance incident that shaped this rule was simple: the chain value was
 correct, but an agent reused old context and rendered roughly `68.899 ETH` as
 `0.068 ETH`. The RPC had not failed. The product had asked a language model to
@@ -86,6 +92,14 @@ Cross-chain defaults are semantic, not copied base units. The intended sane
 default is 10 sends of up to one chain-native token each: 1 ETH for an Ethereum
 wallet and, when Zcash execution ships, 1 ZEC for a Zcash wallet. Each adapter
 must own exact conversion and validation for its asset.
+
+### A folder is not a custody claim
+
+Visual hierarchy is powerful enough to create a false security model. Wallet
+profiles may be shown as folders containing sibling `main` and `private` views,
+but indentation never means that one account owns, controls, recovers, or can
+revoke another. The product states this in the rendered view and never totals
+balances that live in distinct spending contexts.
 
 ### Privacy is the default presentation
 

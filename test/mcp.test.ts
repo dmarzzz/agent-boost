@@ -74,6 +74,56 @@ function fakeRuntime(): AgentBoostRuntime {
         balance_atomic: "1500000000000000000",
       };
     },
+    async walletTree() {
+      return {
+        version: 1,
+        chainId: 11_155_111,
+        network: "Sepolia",
+        observedAt: new Date(0).toISOString(),
+        profiles: [
+          {
+            shortName: "agent-boost",
+            active: true,
+            setupPhase: "private_ready",
+            main: {
+              shortName: "main",
+              role: "main_funding_source",
+              balanceWei: "1500000000000000000",
+              status: "ready",
+              freshness: "live",
+            },
+            subwallets: [{
+              shortName: "private",
+              role: "private_payment_pocket",
+              balanceWei: "250000000000000000",
+              status: "ready",
+              freshness: "live",
+            }],
+          },
+          {
+            shortName: "travel",
+            active: false,
+            setupPhase: "private_ready",
+            main: {
+              shortName: "main",
+              role: "main_funding_source",
+              balanceWei: "750000000000000000",
+              status: "ready",
+              freshness: "live",
+            },
+            subwallets: [{
+              shortName: "private",
+              role: "private_payment_pocket",
+              balanceWei: "100000000000000000",
+              status: "ready",
+              freshness: "last_known",
+            }],
+          },
+        ],
+        archivedProfiles: 1,
+        relationship: { type: "profile_container", impliesControl: false },
+      };
+    },
     async walletPolicy() {
       return {
         ...setup.delegation,
@@ -365,6 +415,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
       "wallet_get_policy",
       "wallet_get_recovery_request",
       "wallet_get_request",
+      "wallet_get_tree",
       "wallet_list",
       "wallet_plan_policy_update",
       "wallet_plan_private_payment",
@@ -387,6 +438,11 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
     walletContextTool?.description ?? "",
     /without converting balance_atomic/u,
   );
+  const walletTreeTool = tools.tools.find(
+    (tool) => tool.name === "wallet_get_tree",
+  );
+  assert.match(walletTreeTool?.description ?? "", /all wallets/u);
+  assert.match(walletTreeTool?.description ?? "", /folders organize views only/u);
   const egressStatus = await client.callTool({ name: "egress_status", arguments: {} });
   assert.equal(
     (egressStatus.structuredContent as { data: { status: string } }).data.status,
@@ -493,6 +549,81 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   assert.doesNotMatch(
     walletText?.type === "text" ? walletText.text : "",
     /funding address|public \+|private balance|spendable total/u,
+  );
+
+  const walletTree = await client.callTool({
+    name: "wallet_get_tree",
+    arguments: {},
+  });
+  const walletTreeData = (walletTree.structuredContent as {
+    data: {
+      rendered: string;
+      addresses_included: boolean;
+      raw_atomic_values_included: boolean;
+      archived_profiles_hidden: number;
+      profiles: Array<{
+        short_name: string;
+        active: boolean;
+        accounts: Array<{
+          short_name: string;
+          balance_native: string;
+          freshness: string;
+        }>;
+      }>;
+      relationship: { implies_control: boolean };
+    };
+  }).data;
+  assert.equal(
+    walletTreeData.rendered,
+    [
+      "🗂 wallets/",
+      "|-- 💼 agent-boost/ [active]",
+      "|   |-- 🌐 main/      1.5 Sepolia ETH · live",
+      "|   `-- 🥷 private/   0.25 Sepolia ETH · live",
+      "`-- 💼 travel/",
+      "    |-- 🌐 main/      0.75 Sepolia ETH · live",
+      "    `-- 🥷 private/   0.1 Sepolia ETH · last known",
+      "",
+      "Folders organize wallet views; they do not imply custody or control.",
+    ].join("\n"),
+  );
+  assert.equal(walletTreeData.addresses_included, false);
+  assert.equal(walletTreeData.raw_atomic_values_included, false);
+  assert.equal(walletTreeData.archived_profiles_hidden, 1);
+  assert.equal(walletTreeData.relationship.implies_control, false);
+  assert.deepEqual(
+    walletTreeData.profiles.map((profile) => ({
+      short_name: profile.short_name,
+      active: profile.active,
+      accounts: profile.accounts.map(({ short_name, balance_native, freshness }) => ({
+        short_name,
+        balance_native,
+        freshness,
+      })),
+    })),
+    [
+      {
+        short_name: "agent-boost",
+        active: true,
+        accounts: [
+          { short_name: "main", balance_native: "1.5", freshness: "live" },
+          { short_name: "private", balance_native: "0.25", freshness: "live" },
+        ],
+      },
+      {
+        short_name: "travel",
+        active: false,
+        accounts: [
+          { short_name: "main", balance_native: "0.75", freshness: "live" },
+          { short_name: "private", balance_native: "0.1", freshness: "last_known" },
+        ],
+      },
+    ],
+  );
+  assert.doesNotMatch(JSON.stringify(walletTree), new RegExp(WALLET_ADDRESS, "u"));
+  assert.doesNotMatch(
+    JSON.stringify(walletTree),
+    /1500000000000000000|250000000000000000|750000000000000000|100000000000000000/u,
   );
 
   const policy = await client.callTool({ name: "wallet_get_policy", arguments: {} });

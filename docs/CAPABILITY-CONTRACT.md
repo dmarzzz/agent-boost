@@ -1,7 +1,7 @@
 # Wallet capability contract
 
 Agent Boost exposes a wallet-first MCP contract named
-`org.agentboost.wallet/1.4`. It is Sepolia-only.
+`org.agentboost.wallet/1.5`. It is Sepolia-only.
 
 The capability document is available through the read-only `capabilities`
 tool and the resource:
@@ -28,6 +28,9 @@ Actual authority is enforced from durable local state.
 - default maximum: 10 sends, `1` ETH per send, `10` ETH total;
 - conversational policy editing: count, per-send amount, total amount, expiry,
   and enabled state, with an exact preview and separate confirmation;
+- a deterministic address-free wallet tree using profile names, with live
+  public balances, a live active private balance, and clearly marked last-known
+  inactive private balances;
 - mainnet: unavailable;
 - Ethereum JSON-RPC egress: Tor for Agent Boost and Kohaku, no direct fallback;
 - covered public HTTPS egress: optional Shade Tree v4 explicit-fetch module,
@@ -194,6 +197,20 @@ ownership, signing authority, recovery, or revocation rights over them, and
 subaccount balances are not included in `balance_atomic`.
 The MCP boundary rejects the response if any other field whose name contains
 `balance` is introduced, including nested aggregate or private-pool balances.
+
+### `wallet_get_tree`
+
+No input. Returns one deterministic ASCII-style tree for every available wallet
+profile. Each profile folder contains sibling `main` and `private` views. Main
+balances are refreshed from Sepolia; the active private balance is refreshed
+from Kohaku; inactive private balances are explicitly labeled `last known`.
+Failed reads render `unavailable`, never a cached value presented as live or an
+invented zero.
+
+The public tree includes friendly profile names and decimal Sepolia ETH only.
+It excludes addresses, account IDs, wallet IDs, raw atomic values, secrets, and
+aggregate totals. Folder indentation is organizational and does not imply
+custody, ownership, recovery, revocation, or control.
 
 ### `wallet_start_new_demo`
 

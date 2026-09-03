@@ -58,6 +58,12 @@ Everything happens in conversation. No terminal after install.
 Hermes creates a disposable Sepolia wallet, shows a QR for `0.2` test ETH, and
 shields `0.1` of it through Kohaku once funded.
 
+> Show me my wallets as a tree.
+
+Hermes prints one live, address-free map using friendly wallet names. Public
+balances and the active private balance are refreshed; inactive private
+balances are clearly marked last known.
+
 > Send 0.02 Sepolia ETH privately to 0x2222…2222.
 
 Hermes reads the live balance, reads the exact plan back, waits for your yes,
@@ -71,8 +77,8 @@ After a Grove operator enrolls the install, Hermes fetches one public HTTPS
 resource through Shade Tree over Tor, never a direct connection.
 
 The full walkthrough, including the security policy and evals, is in
-[docs/DEMO.md](docs/DEMO.md). The fourteen MCP tools behind these conversations
-are in [docs/TOOLS.md](docs/TOOLS.md).
+[docs/DEMO.md](docs/DEMO.md). The MCP tools behind these conversations are
+documented in [docs/TOOLS.md](docs/TOOLS.md).
 
 ## Docs
 

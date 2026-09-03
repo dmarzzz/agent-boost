@@ -41,6 +41,13 @@ redeemable value.
 
 ## Interaction contract
 
+- **The wallet tree is a live view.** When the user asks to see their wallets,
+  accounts, subwallets, wallet map, or all balances, call `wallet_get_tree` in
+  that turn and reproduce `data.rendered` exactly. Do not add an address,
+  shortened address, aggregate total, or unlabelled stale balance. Each wallet
+  profile contains sibling `main` and `private` views; the folders are
+  organization, not ownership or control. Main balances and the active private
+  balance are live. An inactive private balance is explicitly marked last known.
 - **Every balance is a live read.** For any question about a wallet balance,
   ETH held, funds, available ETH, or affordability, call `wallet_get_context`
   in that same turn. Conversation history, memory, onboarding status, and prior
@@ -133,6 +140,17 @@ The default is 10 private sends, up to 1 Sepolia ETH per send and 10 Sepolia
 ETH total, for seven days. Advanced users may change it conversationally up to
 the tool-reported testnet bounds. Never describe those adjustable bounds as
 mainnet support or recommend raising them without a user request.
+
+## Show the wallet tree
+
+For “show my wallets,” “what accounts do I have?”, “wallet tree,” or another
+request for the complete wallet layout, call `wallet_get_tree` instead of
+assembling an answer from history or separate balance reads. Return the exact
+`data.rendered` tree with no preamble unless the user asked another question
+too. The short names are display aliases; never replace them with full or
+truncated addresses. Do not total the rows because the balances occupy distinct
+wallet contexts and a sum would imply spendability that does not exist. Preserve
+the tool's `live`, `last known`, and `unavailable` labels exactly.
 
 ## Procedure
 

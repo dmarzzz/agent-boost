@@ -17,6 +17,7 @@ import type {
   WalletProfileRecord,
   WalletReauthorizationPlan,
   WalletSelectionBinding,
+  WalletTreeSnapshot,
 } from "./contracts.js";
 import {
   MAX_POLICY_LIFETIME_LIMIT_WEI,
@@ -214,7 +215,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     const setup = state.onboarding;
     const egress = await this.#egress.status();
     return {
-      contract: "org.agentboost.wallet/1.4",
+      contract: "org.agentboost.wallet/1.5",
       chain_id: "eip155:11155111",
       network_name: "Sepolia",
       asset_type: "eip155:11155111/slip44:60",
@@ -323,6 +324,16 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         selection_requires_separate_reauthorization: true,
         recovery_transfer_available:
           this.#wallet.executeRecoveryTransfer !== undefined,
+      },
+      wallet_tree: {
+        available: true,
+        hierarchy: "profile_container",
+        account_short_names: ["main", "private"],
+        active_balances_refreshed_live: true,
+        inactive_public_balances_refreshed_live: true,
+        inactive_private_balances: "last_known",
+        includes_addresses: false,
+        implies_control: false,
       },
     };
   }
@@ -443,6 +454,159 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         status: (await this.#egress.status()).status,
         direct_fallback: false,
       },
+    };
+  }
+
+  walletTree(): Promise<WalletTreeSnapshot> {
+    return this.#withWalletOperation(() => this.#walletTreeUnlocked());
+  }
+
+  async #walletTreeUnlocked(): Promise<WalletTreeSnapshot> {
+    const before = await this.#store.read();
+    if (!before.wallet) throw new Error("WALLET_REGISTRY_MISSING");
+    const activeWalletId = before.wallet.activeWalletId;
+    const available = Object.values(before.wallet.profiles)
+      .filter((profile) => profile.status === "available")
+      .sort((left, right) => {
+        if (left.walletId === activeWalletId) return -1;
+        if (right.walletId === activeWalletId) return 1;
+        return left.name.localeCompare(right.name);
+      });
+
+    const publicSamples = new Map<string, {
+      setupId: string;
+      address: string;
+      balanceWei?: string;
+    }>();
+    await Promise.all(available.map(async (profile) => {
+      const onboarding = profile.walletId === activeWalletId
+        ? before.onboarding
+        : profile.onboarding;
+      if (!onboarding?.address) return;
+      const sample = { setupId: onboarding.setupId, address: onboarding.address };
+      try {
+        publicSamples.set(profile.walletId, {
+          ...sample,
+          balanceWei: (await this.#chain.getBalanceWei(onboarding.address)).toString(),
+        });
+      } catch {
+        publicSamples.set(profile.walletId, sample);
+      }
+    }));
+
+    const activeOnboarding = before.onboarding;
+    let activePrivateBalanceWei: string | undefined;
+    if (activeOnboarding?.phase === "private_ready") {
+      try {
+        activePrivateBalanceWei = (await this.#wallet.getPrivateBalanceWei()).toString();
+      } catch {
+        // The tree remains useful while marking this one balance unavailable.
+      }
+    }
+
+    const observedAt = new Date().toISOString();
+    const current = await this.#store.update((draft) => {
+      if (!draft.wallet) return;
+      for (const profile of Object.values(draft.wallet.profiles)) {
+        const onboarding = profile.walletId === draft.wallet.activeWalletId
+          ? draft.onboarding
+          : profile.onboarding;
+        const sample = publicSamples.get(profile.walletId);
+        if (
+          onboarding &&
+          sample?.balanceWei !== undefined &&
+          onboarding.setupId === sample.setupId &&
+          onboarding.address === sample.address &&
+          onboarding.publicBalanceWei !== sample.balanceWei
+        ) {
+          onboarding.publicBalanceWei = sample.balanceWei;
+          onboarding.revision += 1;
+          onboarding.updatedAt = observedAt;
+        }
+      }
+      if (
+        draft.wallet.activeWalletId === activeWalletId &&
+        draft.onboarding &&
+        activeOnboarding &&
+        draft.onboarding.setupId === activeOnboarding.setupId &&
+        activePrivateBalanceWei !== undefined &&
+        draft.onboarding.privateBalanceWei !== activePrivateBalanceWei
+      ) {
+        draft.onboarding.privateBalanceWei = activePrivateBalanceWei;
+        draft.onboarding.revision += 1;
+        draft.onboarding.updatedAt = observedAt;
+      }
+    });
+
+    const profiles = Object.values(current.wallet?.profiles ?? {})
+      .filter((profile) => profile.status === "available")
+      .sort((left, right) => {
+        if (left.walletId === activeWalletId) return -1;
+        if (right.walletId === activeWalletId) return 1;
+        return left.name.localeCompare(right.name);
+      })
+      .map((profile) => {
+        const active = profile.walletId === activeWalletId;
+        const onboarding = active ? current.onboarding : profile.onboarding;
+        const publicSample = publicSamples.get(profile.walletId);
+        const publicIsLive = Boolean(
+          onboarding?.address &&
+          publicSample?.balanceWei !== undefined &&
+          onboarding.setupId === publicSample.setupId &&
+          onboarding.address === publicSample.address,
+        );
+        const privateStatus = walletTreePrivateStatus(onboarding);
+        const privateIsLive = active &&
+          onboarding?.phase === "private_ready" &&
+          activePrivateBalanceWei !== undefined;
+        const privateIsLastKnown = !active && onboarding?.phase === "private_ready";
+        const privateBalanceWei = privateIsLive
+          ? activePrivateBalanceWei
+          : privateIsLastKnown
+            ? onboarding.privateBalanceWei
+            : undefined;
+        return {
+          shortName: profile.name,
+          active,
+          setupPhase: onboarding?.phase ?? "not_started",
+          main: {
+            shortName: "main" as const,
+            role: "main_funding_source" as const,
+            ...(publicIsLive && publicSample?.balanceWei !== undefined
+              ? { balanceWei: publicSample.balanceWei }
+              : {}),
+            status: onboarding?.address
+              ? publicIsLive ? "ready" as const : "unavailable" as const
+              : "not_created" as const,
+            freshness: publicIsLive ? "live" as const : "unavailable" as const,
+          },
+          subwallets: [{
+            shortName: "private" as const,
+            role: "private_payment_pocket" as const,
+            ...(privateBalanceWei !== undefined
+              ? { balanceWei: privateBalanceWei }
+              : {}),
+            status: privateIsLive || privateIsLastKnown
+              ? "ready" as const
+              : privateStatus,
+            freshness: privateIsLive
+              ? "live" as const
+              : privateIsLastKnown
+                ? "last_known" as const
+                : "unavailable" as const,
+          }],
+        };
+      });
+
+    return {
+      version: 1,
+      chainId: 11_155_111,
+      network: "Sepolia",
+      observedAt,
+      profiles,
+      archivedProfiles: Object.values(current.wallet?.profiles ?? {})
+        .filter((profile) => profile.status === "archived").length,
+      relationship: { type: "profile_container", impliesControl: false },
     };
   }
 
@@ -919,6 +1083,17 @@ function publicPaymentRequest(request: PaymentRequest): PaymentRequest {
   delete publicRequest.recipientBalanceBeforeWei;
   delete publicRequest.reconciliation;
   return publicRequest;
+}
+
+function walletTreePrivateStatus(
+  onboarding: OnboardingRecord | undefined,
+): "ready" | "preparing" | "not_created" | "unavailable" {
+  if (!onboarding || onboarding.phase === "not_started" || onboarding.phase === "creating_wallet") {
+    return "not_created";
+  }
+  if (onboarding.phase === "private_ready") return "unavailable";
+  if (onboarding.phase === "failed") return "unavailable";
+  return "preparing";
 }
 
 function publicRecoveryRequest(
