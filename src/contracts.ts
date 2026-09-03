@@ -11,6 +11,8 @@ export const MAX_POLICY_PAYMENTS = 100;
 export const MAX_POLICY_LIFETIME_LIMIT_WEI =
   MAX_POLICY_PAYMENT_LIMIT_WEI * BigInt(MAX_POLICY_PAYMENTS);
 export const MAX_POLICY_TTL_MS = 30 * 24 * 60 * 60_000;
+/** Conservative native balance held back so a regular ETH transfer can pay gas. */
+export const REGULAR_TRANSFER_GAS_RESERVE_WEI = 1_000_000_000_000_000n;
 
 export type PaymentApproval = "allow" | "confirm" | "deny";
 
@@ -215,6 +217,46 @@ export interface PaymentRequest {
   };
 }
 
+export interface RegularTransferPlan {
+  version: 1;
+  decisionId: string;
+  recipient: string;
+  amountWei: string;
+  mainBalanceSnapshotWei: string;
+  gasReserveWei: string;
+  authorization: WalletAuthorizationBinding;
+  intentDigest: string;
+  createdAt: string;
+  expiresAt: string;
+  decision: "allow" | "deny";
+  blockers: string[];
+  approval: {
+    action: PaymentApproval;
+    userConfirmationRequired: boolean;
+  };
+}
+
+export interface RegularTransferRequest {
+  version: 1;
+  requestId: string;
+  clientRequestId: string;
+  decisionId: string;
+  recipient: string;
+  amountWei: string;
+  gasReserveWei: string;
+  authorization: WalletAuthorizationBinding;
+  phase: Exclude<PaymentPhase, "planned">;
+  createdAt: string;
+  updatedAt: string;
+  transactionHash?: string;
+  confirmation?: PaymentRequest["confirmation"];
+  /** Internal reconciliation checkpoint. Omitted from MCP responses. */
+  recipientBalanceBeforeWei?: string;
+  /** Internal reconciliation bookkeeping. Omitted from MCP responses. */
+  reconciliation?: PaymentRequest["reconciliation"];
+  error?: PaymentRequest["error"];
+}
+
 export interface RecoveryTransferPlan {
   version: 1;
   decisionId: string;
@@ -332,6 +374,14 @@ export interface WalletAdapter {
   }): Promise<{
     transactionHash?: string;
     userOperationHash?: string;
+    confirmed?: boolean;
+  }>;
+  /** Send native Sepolia ETH directly from the selected main public account. */
+  executeRegularTransfer?(input: {
+    recipient: string;
+    amountWei: bigint;
+  }): Promise<{
+    transactionHash?: string;
     confirmed?: boolean;
   }>;
   /** Recover an exact amount through a fresh wallet-controlled account + tail call. */

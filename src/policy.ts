@@ -337,6 +337,8 @@ function paymentsUsedByAuthorization(
   if (!authorizationId) return 0;
   return Object.values(state.requests).filter(
     (request) => request.authorization.authorizationId === authorizationId,
+  ).length + Object.values(state.regularRequests).filter(
+    (request) => request.authorization.authorizationId === authorizationId,
   ).length;
 }
 

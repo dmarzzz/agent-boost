@@ -13,7 +13,7 @@ secret-bearing repository config.
 | `AGENT_BOOST_FUNDING_WEI` | `200000000000000000` | Requested initial funding |
 | `AGENT_BOOST_SHIELD_WEI` | `100000000000000000` | Tornado shield/note amount |
 | `AGENT_BOOST_PAYMENT_LIMIT_WEI` | `1000000000000000000` | Default per-send limit (1 Sepolia ETH) |
-| `AGENT_BOOST_MAX_PAYMENTS` | `10` | Default number of private sends |
+| `AGENT_BOOST_MAX_PAYMENTS` | `10` | Default number of sends shared by regular and private transfers |
 | `AGENT_BOOST_LIFETIME_LIMIT_WEI` | `10000000000000000000` | Default total send allowance (10 Sepolia ETH) |
 | `AGENT_BOOST_DELEGATION_TTL_MS` | `604800000` | Delegated execution lifetime (seven days) |
 | `AGENT_BOOST_OPEN_UI` | `false` | Optionally open the same-device fallback UI |

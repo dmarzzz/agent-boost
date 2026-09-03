@@ -145,6 +145,12 @@ test("installs a conflict-safe Hermes integration and both skills", async () => 
   assert.match(setupSkill, /exact tool-returned `data\.rendered` tree/u);
   assert.match(operationalSkill, /testnet_delegated/u);
   assert.match(operationalSkill, /wallet_plan_private_payment/u);
+  assert.match(operationalSkill, /wallet_plan_regular_transfer/u);
+  assert.match(operationalSkill, /wallet_execute_regular_transfer/u);
+  assert.match(
+    operationalSkill,
+    /Never route an explicit regular transfer through the private-payment tools/iu,
+  );
   assert.match(operationalSkill, /`user_confirmed: true`/u);
   assert.match(operationalSkill, /agent operates every tool/iu);
   assert.match(operationalSkill, /Never ask the user to type a tool name/iu);
@@ -402,6 +408,9 @@ test("uses native tool names and never encodes Hermes version prefixes", () => {
     "wallet_plan_policy_update",
     "wallet_apply_policy_update",
     "wallet_start_new_demo",
+    "wallet_plan_regular_transfer",
+    "wallet_execute_regular_transfer",
+    "wallet_get_regular_transfer_request",
     "wallet_plan_private_payment",
     "wallet_execute_private_payment",
     "wallet_get_request",

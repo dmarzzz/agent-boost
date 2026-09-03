@@ -71,6 +71,12 @@ then signs and submits within a user-visible, seven-day delegation. New wallets
 start with 10 sends of up to 1 Sepolia ETH each; say “change my wallet limits”
 to preview and approve different testnet guardrails.
 
+> Send a regular public transfer of 0.02 Sepolia ETH to 0x2222…2222.
+
+Hermes uses the selected main account, reserves gas, shows a public-transfer
+confirmation, and never substitutes the private route. Regular and private
+sends share the same testnet delegation envelope.
+
 > Fetch https://example.com/data.json through covered egress.
 
 After a Grove operator enrolls the install, Hermes fetches one public HTTPS

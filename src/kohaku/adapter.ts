@@ -302,6 +302,34 @@ export class KohakuWalletAdapter implements WalletAdapter {
     });
   }
 
+  executeRegularTransfer(input: {
+    recipient: string;
+    amountWei: bigint;
+  }): Promise<{ transactionHash?: string }> {
+    if (!ETH_ADDRESS_RE.test(input.recipient)) {
+      return Promise.reject(new Error("Transfer recipient must be an Ethereum address"));
+    }
+    if (input.amountWei <= 0n) {
+      return Promise.reject(new Error("Transfer amount must be positive"));
+    }
+
+    const walletName = this.#walletName;
+    return this.#serialized(async () => {
+      const result = await this.#runWalletCommand(walletName, "transfer", [
+        "--from",
+        this.#shieldFrom,
+        "--to",
+        input.recipient,
+        "--token",
+        "eth",
+        "--amount-wei",
+        input.amountWei.toString(),
+        "--broadcast",
+      ]);
+      return optionalTransactionHash(result.stdout);
+    });
+  }
+
   executeRecoveryTransfer(input: {
     recipient: string;
     amountWei: bigint;
@@ -548,6 +576,7 @@ function optionalTransactionHash(stdout: string): { transactionHash?: string } {
     "txHash",
     "bundleTxHash",
     "hash",
+    "hashes",
   ]);
   return transactionHash ? { transactionHash } : {};
 }
@@ -581,6 +610,12 @@ function findHashForKeys(
     const candidate = value[key];
     if (typeof candidate === "string" && TX_HASH_RE.test(candidate)) {
       return candidate;
+    }
+    if (Array.isArray(candidate)) {
+      const hash = candidate.find(
+        (entry): entry is string => typeof entry === "string" && TX_HASH_RE.test(entry),
+      );
+      if (hash) return hash;
     }
   }
   for (const candidate of Object.values(value)) {

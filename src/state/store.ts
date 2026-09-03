@@ -9,6 +9,8 @@ import type {
   PaymentPlan,
   PaymentRequest,
   PolicyUpdatePlan,
+  RegularTransferPlan,
+  RegularTransferRequest,
   RecoveryTransferPlan,
   RecoveryTransferRequest,
   WalletProfileOrigin,
@@ -28,6 +30,8 @@ export interface StateDocument {
   plans: Record<string, PaymentPlan>;
   policyPlans: Record<string, PolicyUpdatePlan>;
   requests: Record<string, PaymentRequest>;
+  regularPlans: Record<string, RegularTransferPlan>;
+  regularRequests: Record<string, RegularTransferRequest>;
   recoveryPlans: Record<string, RecoveryTransferPlan>;
   recoveryRequests: Record<string, RecoveryTransferRequest>;
   reauthorizationPlans: Record<string, WalletReauthorizationPlan>;
@@ -56,6 +60,8 @@ const EMPTY_STATE: StateDocument = {
   plans: {},
   policyPlans: {},
   requests: {},
+  regularPlans: {},
+  regularRequests: {},
   recoveryPlans: {},
   recoveryRequests: {},
   reauthorizationPlans: {},
@@ -179,6 +185,39 @@ const legacyPaymentRequestSchema = z.object({
   ...paymentRequestBase,
   authorization: authorizationSchema.optional(),
 }).strict();
+const regularTransferPlanSchema = z.object({
+  version: z.literal(1),
+  decisionId: idSchema,
+  recipient: addressSchema,
+  amountWei: atomicSchema,
+  mainBalanceSnapshotWei: atomicSchema,
+  gasReserveWei: atomicSchema,
+  authorization: authorizationSchema,
+  intentDigest: digestSchema,
+  createdAt: timestampSchema,
+  expiresAt: timestampSchema,
+  decision: z.enum(["allow", "deny"]),
+  blockers: z.array(idSchema),
+  approval: paymentApprovalSchema,
+}).strict();
+const regularTransferRequestSchema = z.object({
+  version: z.literal(1),
+  requestId: idSchema,
+  clientRequestId: idSchema,
+  decisionId: idSchema,
+  recipient: addressSchema,
+  amountWei: atomicSchema,
+  gasReserveWei: atomicSchema,
+  authorization: authorizationSchema,
+  phase: z.enum(["executing", "submitted", "confirmed", "failed", "indeterminate"]),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+  transactionHash: transactionHashSchema.optional(),
+  confirmation: confirmationSchema.optional(),
+  recipientBalanceBeforeWei: atomicSchema.optional(),
+  reconciliation: reconciliationSchema.optional(),
+  error: requestErrorSchema.optional(),
+}).strict();
 const policySnapshotSchema = delegationSchema.extend({
   paymentsUsed: z.number().int().safe().nonnegative(),
   paymentsRemaining: z.number().int().safe().nonnegative(),
@@ -272,6 +311,8 @@ const stateSchema = z.object({
   plans: z.record(z.string(), paymentPlanSchema),
   policyPlans: z.record(z.string(), policyPlanSchema),
   requests: z.record(z.string(), paymentRequestSchema),
+  regularPlans: z.record(z.string(), regularTransferPlanSchema),
+  regularRequests: z.record(z.string(), regularTransferRequestSchema),
   recoveryPlans: z.record(z.string(), recoveryPlanSchema),
   recoveryRequests: z.record(z.string(), recoveryRequestSchema),
   reauthorizationPlans: z.record(z.string(), reauthorizationPlanSchema),
@@ -303,6 +344,8 @@ function normalizeVersion2Value(value: unknown): unknown {
     "plans",
     "policyPlans",
     "requests",
+    "regularPlans",
+    "regularRequests",
     "recoveryPlans",
     "recoveryRequests",
     "reauthorizationPlans",
@@ -715,6 +758,8 @@ function migrateV1(
     plans: structuredClone(legacy.plans ?? {}) as Record<string, PaymentPlan>,
     policyPlans: structuredClone(legacy.policyPlans ?? {}) as Record<string, PolicyUpdatePlan>,
     requests: legacy.requests ?? {},
+    regularPlans: {},
+    regularRequests: {},
     recoveryPlans: {},
     recoveryRequests: {},
     reauthorizationPlans: {},
@@ -831,6 +876,8 @@ function hasWalletBoundState(state: StateDocument): boolean {
     Object.keys(state.plans).length ||
     Object.keys(state.policyPlans).length ||
     Object.keys(state.requests).length ||
+    Object.keys(state.regularPlans).length ||
+    Object.keys(state.regularRequests).length ||
     Object.keys(state.recoveryPlans).length ||
     Object.keys(state.recoveryRequests).length ||
     Object.keys(state.reauthorizationPlans).length
@@ -839,6 +886,7 @@ function hasWalletBoundState(state: StateDocument): boolean {
 
 function validateState(state: StateDocument): void {
   if (state.version !== 2 || !state.plans || !state.requests ||
+    !state.regularPlans || !state.regularRequests ||
     !state.policyPlans || !state.recoveryPlans || !state.recoveryRequests ||
     !state.reauthorizationPlans) {
     throw new Error("Unsupported or corrupt Agent Boost state document");
@@ -846,6 +894,7 @@ function validateState(state: StateDocument): void {
   if (!state.wallet) {
     if (state.onboarding || Object.keys(state.plans).length ||
       Object.keys(state.requests).length || Object.keys(state.recoveryPlans).length ||
+      Object.keys(state.regularPlans).length || Object.keys(state.regularRequests).length ||
       Object.keys(state.recoveryRequests).length ||
       Object.keys(state.reauthorizationPlans).length || Object.keys(state.policyPlans).length) {
       throw new Error("Wallet-bound state exists without a wallet registry");
@@ -890,6 +939,24 @@ function validateState(state: StateDocument): void {
     if (!plan || !sameAuthorizationBinding(plan.authorization, request.authorization) ||
       plan.recipient !== request.recipient || plan.amountWei !== request.amountWei) {
       throw new Error("Payment request plan reference is invalid");
+    }
+  }
+  for (const [decisionId, plan] of Object.entries(state.regularPlans)) {
+    if (decisionId !== plan.decisionId) {
+      throw new Error("Regular transfer plan map key is invalid");
+    }
+    validateAuthorization(plan);
+  }
+  for (const [requestId, request] of Object.entries(state.regularRequests)) {
+    if (requestId !== request.requestId) {
+      throw new Error("Regular transfer request map key is invalid");
+    }
+    validateAuthorization(request);
+    const plan = state.regularPlans[request.decisionId];
+    if (!plan || !sameAuthorizationBinding(plan.authorization, request.authorization) ||
+      plan.recipient !== request.recipient || plan.amountWei !== request.amountWei ||
+      plan.gasReserveWei !== request.gasReserveWei) {
+      throw new Error("Regular transfer request plan reference is invalid");
     }
   }
   const validateSelection = (value: { wallet: { walletId: string; walletName: string; selectionEpoch: number } }): void => {
@@ -958,6 +1025,8 @@ function countAuthorizationRequests(
 ): number {
   if (!authorizationId) return 0;
   return Object.values(state.requests).filter(
+    (request) => request.authorization.authorizationId === authorizationId,
+  ).length + Object.values(state.regularRequests).filter(
     (request) => request.authorization.authorizationId === authorizationId,
   ).length;
 }

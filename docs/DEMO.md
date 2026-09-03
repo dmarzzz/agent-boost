@@ -39,7 +39,7 @@ the configured private-payment path. Hermes also rechecks that
 
 ## 2. Inspect or change the wallet permission
 
-New wallets start with a sane default: up to 10 private sends, 1 Sepolia ETH
+New wallets start with a sane default: up to 10 sends shared by regular and private transfers, 1 Sepolia ETH
 per send, 10 Sepolia ETH total, and seven days. Ask Hermes naturally:
 
 > What are my wallet limits?

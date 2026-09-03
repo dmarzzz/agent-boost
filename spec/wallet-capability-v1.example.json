@@ -1,11 +1,12 @@
 {
-  "contract": "org.agentboost.wallet/1.5",
+  "contract": "org.agentboost.wallet/1.6",
   "chain_id": "eip155:11155111",
   "network_name": "Sepolia",
   "asset_type": "eip155:11155111/slip44:60",
   "funding_target_atomic": "200000000000000000",
   "privacy_protocol": "tornado",
   "private_payment_operation": "unshield_next_tail_call",
+  "regular_transfer_operation": "public_eth_transfer",
   "authority": {
     "mode": "testnet_delegated",
     "can_cause_signing": true,
@@ -107,7 +108,8 @@
     "managed_wallets_only": true,
     "accepts_seed_or_password": false,
     "selection_requires_separate_reauthorization": true,
-    "recovery_transfer_available": true
+    "recovery_transfer_available": true,
+    "regular_transfer_available": true
   },
   "wallet_tree": {
     "available": true,

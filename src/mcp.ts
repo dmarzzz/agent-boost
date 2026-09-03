@@ -12,6 +12,8 @@ import type {
   PolicyUpdatePlan,
   PolicyUpdateReceipt,
   PublicOnboardingSnapshot,
+  RegularTransferPlan,
+  RegularTransferRequest,
   WalletPolicySnapshot,
   RecoveryTransferPlan,
   RecoveryTransferRequest,
@@ -73,6 +75,17 @@ export interface AgentBoostRuntime {
     userConfirmed: boolean;
   }): Promise<PaymentRequest>;
   getRequest(requestId: string): Promise<PaymentRequest>;
+  planRegularTransfer(input: {
+    recipient: string;
+    amountWei: string;
+  }): Promise<RegularTransferPlan>;
+  getRegularTransferPlan(decisionId: string): Promise<RegularTransferPlan>;
+  executeRegularTransfer(input: {
+    decisionId: string;
+    clientRequestId: string;
+    userConfirmed: boolean;
+  }): Promise<RegularTransferRequest>;
+  getRegularTransferRequest(requestId: string): Promise<RegularTransferRequest>;
   planRecoveryTransfer(input: { recipient: string; amountWei: string }): Promise<RecoveryTransferPlan>;
   getRecoveryPlan(decisionId: string): Promise<RecoveryTransferPlan>;
   executeRecoveryTransfer(input: {
@@ -287,6 +300,62 @@ function buildPresentation(
   }
 
   if (
+    code === "REGULAR_TRANSFER_PLANNED" ||
+    code === "REGULAR_TRANSFER_DENIED" ||
+    code === "REGULAR_TRANSFER_CONFIRMATION_REQUIRED" ||
+    code === "REGULAR_TRANSFER_CANCELLED"
+  ) {
+    const plan = asRecord(data.plan);
+    const recipient = stringField(plan, "recipient") ?? "Unknown recipient";
+    const amountWei = stringField(plan, "amountWei");
+    const amount = amountWei ? `${formatEthWei(BigInt(amountWei))} Sepolia ETH` : "Unknown amount";
+    if (code === "REGULAR_TRANSFER_DENIED") {
+      return {
+        version: "1.0",
+        kind: "status",
+        title: "Regular transfer blocked",
+        state: "attention",
+        fields: paymentFields(amount, recipient),
+        next_action: "Explain the blocker before creating another transfer plan.",
+      };
+    }
+    if (code === "REGULAR_TRANSFER_CANCELLED") {
+      return {
+        version: "1.0",
+        kind: "status",
+        title: "Regular transfer cancelled",
+        state: "cancelled",
+        fields: paymentFields(amount, recipient),
+        next_action: "No transfer was sent.",
+      };
+    }
+    return {
+      version: "1.0",
+      kind: "confirmation",
+      title: "Confirm regular testnet transfer",
+      state: "pending",
+      fields: paymentFields(amount, recipient),
+      notice: {
+        tone: "warning",
+        text: "This is a public Sepolia transfer from the main account, not a private payment.",
+      },
+      next_action: code === "REGULAR_TRANSFER_CONFIRMATION_REQUIRED"
+        ? "Show the receipt and wait for explicit approval."
+        : "Request approval through the client’s native confirmation surface.",
+      ...(code === "REGULAR_TRANSFER_CONFIRMATION_REQUIRED"
+        ? {}
+        : {
+            interaction: {
+              kind: "confirmation" as const,
+              transport: "mcp_elicitation" as const,
+              approve_label: "Approve",
+              decline_label: "Cancel",
+            },
+          }),
+    };
+  }
+
+  if (
     code === "PAYMENT_PLANNED" ||
     code === "PAYMENT_DENIED" ||
     code === "PAYMENT_CONFIRMATION_REQUIRED" ||
@@ -403,6 +472,34 @@ function buildPresentation(
     };
   }
 
+  if (code === "REGULAR_TRANSFER_REQUEST" || code === "REGULAR_TRANSFER_STATUS") {
+    const request = asRecord(data.request);
+    const phase = stringField(request, "phase") ?? outcome;
+    const recipient = stringField(request, "recipient") ?? "Unknown recipient";
+    const amountWei = stringField(request, "amountWei");
+    const amount = amountWei ? `${formatEthWei(BigInt(amountWei))} Sepolia ETH` : "Unknown amount";
+    const confirmed = phase === "confirmed";
+    const failed = phase === "failed";
+    return {
+      version: "1.0",
+      kind: "receipt",
+      title: confirmed ? "Regular transfer sent" : failed ? "Regular transfer not sent" : "Regular transfer unresolved",
+      state: confirmed ? "complete" : "attention",
+      fields: paymentFields(amount, recipient),
+      notice: {
+        tone: confirmed ? "info" : "warning",
+        text: confirmed
+          ? "Confirmed publicly on Sepolia."
+          : failed
+            ? "The transfer failed and was not retried."
+            : "The result is unresolved. Retrying could send it twice.",
+      },
+      next_action: confirmed || failed
+        ? "No further action is required."
+        : "Check this exact request again; do not create a replacement.",
+    };
+  }
+
   if (code === "WALLET_TREE") {
     const profiles = Array.isArray(data.profiles) ? data.profiles.length : 0;
     return {
@@ -444,6 +541,18 @@ function paymentConfirmationMessage(plan: PaymentPlan): string {
     `To: ${plan.recipient}`,
     "Network: Sepolia testnet — no monetary value",
     "Visibility: on-chain activity remains visible",
+  ].join("\n");
+}
+
+function regularTransferConfirmationMessage(plan: RegularTransferPlan): string {
+  return [
+    "Confirm regular testnet transfer",
+    "",
+    `Amount: ${formatEthWei(BigInt(plan.amountWei))} Sepolia ETH`,
+    `To: ${plan.recipient}`,
+    "From: selected main public account",
+    "Network: Sepolia testnet — no monetary value",
+    "Privacy: regular public transfer; sender, recipient, amount, and activity are on-chain",
   ].join("\n");
 }
 
@@ -568,7 +677,7 @@ function compactToolText(structured: Record<string, unknown>): string {
         : covers
           ? ` The main account numerically covers the requested ${requested} Sepolia ETH.`
           : ` The requested ${requested} Sepolia ETH exceeds the main account balance.`;
-    return `Single main-account read complete (${phase}). If the user asked for wallets plural, all balances, accounts, subwallets, a wallet map, or a wallet tree, do not answer from this result: call wallet_get_tree now. Otherwise quote exactly: Main account balance: ${amount} Sepolia ETH.${comparison} Do not recalculate this amount from balance_atomic, compare it with conversation history, or reuse a prior balance. “Main” means the funding source; it has no control over subaccounts. Never use this balance alone to claim a private payment can be sent; exact private-payment spendability requires a recipient and wallet_plan_private_payment. Do not reveal the address or raw atomic value unless asked.`;
+    return `Single main-account read complete (${phase}). If the user asked for wallets plural, all balances, accounts, subwallets, a wallet map, or a wallet tree, do not answer from this result: call wallet_get_tree now. Otherwise quote exactly: Main account balance: ${amount} Sepolia ETH.${comparison} Do not recalculate this amount from balance_atomic, compare it with conversation history, or reuse a prior balance. “Main” means the funding source; it has no control over subaccounts. This read alone never authorizes a send: wallet_plan_regular_transfer validates a regular main-account transfer and gas reserve, while wallet_plan_private_payment validates private spendability. Do not reveal the address or raw atomic value unless asked.`;
   }
 
   if (code === "WALLET_TREE") {
@@ -580,7 +689,7 @@ function compactToolText(structured: Record<string, unknown>): string {
 
   if (code === "WALLET_POLICY") {
     const policy = asRecord(data.policy);
-    return `Current private-payment permission: ${formatPolicyText(policy)}. This is permission only; the main account and private payment pocket remain separate.`;
+    return `Current shared transfer permission: ${formatPolicyText(policy)}. Regular and private sends share this envelope; the main account and private payment pocket remain separate.`;
   }
 
   if (code === "POLICY_UPDATE_PLANNED" || code === "POLICY_UPDATE_DENIED") {
@@ -601,6 +710,44 @@ function compactToolText(structured: Record<string, unknown>): string {
     const plan = asRecord(data.plan);
     const proposed = asRecord(plan.proposed);
     return `PREVIEW ONLY — NOT APPLIED. Wallet policy confirmation is still required: ${formatPolicyText(proposed)}. Do not say updated, applied, successful, or use a success checkmark. Show the permission preview, then end this turn. After a new user message confirms it, call wallet_apply_policy_update with user_confirmed true and omit decision_id so Agent Boost binds the latest preview safely. Do not plan again unless the user changes a setting.`;
+  }
+
+  if (code === "REGULAR_TRANSFER_PLANNED" || code === "REGULAR_TRANSFER_DENIED") {
+    const plan = asRecord(data.plan);
+    const recipient = stringField(plan, "recipient") ?? "unknown recipient";
+    const amountWei = stringField(plan, "amountWei");
+    const amount = amountWei ? formatEthWei(BigInt(amountWei)) : "unknown";
+    const approval = asRecord(plan.approval);
+    const confirmationRequired = approval.userConfirmationRequired === true;
+    if (code === "REGULAR_TRANSFER_DENIED") {
+      return `Regular transfer blocked for ${amount} Sepolia ETH from the main public account to ${recipient}.${formatBlockers(plan)} Explain the blocker concisely; do not switch to a private-payment tool and do not show internal IDs.`;
+    }
+    return confirmationRequired
+      ? `Regular public transfer ready for native approval: ${amount} Sepolia ETH from the selected main account to ${recipient}. Call wallet_execute_regular_transfer with the exact decision ID from org.agentboost/model-context and omit user_confirmed. Never substitute wallet_execute_private_payment.`
+      : `Regular public transfer approved by the active local policy: ${amount} Sepolia ETH from the selected main account to ${recipient}. Execute it with wallet_execute_regular_transfer and the exact decision ID from org.agentboost/model-context.`;
+  }
+
+  if (code === "REGULAR_TRANSFER_CONFIRMATION_REQUIRED") {
+    return "Native confirmation is unavailable. Show the structured regular-transfer receipt, wait for explicit approval, then call wallet_execute_regular_transfer with user_confirmed: true for that same plan.";
+  }
+
+  if (code === "REGULAR_TRANSFER_CANCELLED") {
+    return "Regular transfer cancelled. Nothing was sent. Do not retry without a new user request.";
+  }
+
+  if (code === "REGULAR_TRANSFER_REQUEST" || code === "REGULAR_TRANSFER_STATUS") {
+    const request = asRecord(data.request);
+    const phase = stringField(request, "phase") ?? outcome;
+    const recipient = stringField(request, "recipient") ?? "the recipient";
+    const amountWei = stringField(request, "amountWei");
+    const amount = amountWei ? formatEthWei(BigInt(amountWei)) : "unknown";
+    if (phase === "confirmed") {
+      return `Regular public transfer confirmed: ${amount} Sepolia ETH from the main account to ${recipient}. Keep the receipt concise.`;
+    }
+    if (phase === "failed") {
+      return `Regular public transfer failed: ${amount} Sepolia ETH to ${recipient}. Do not retry without a new user request.`;
+    }
+    return `Regular public transfer is not confirmed (${phase}). Call wallet_get_regular_transfer_request with the exact requestId from structuredContent or org.agentboost/model-context. Never infer success from balances and never retry execution with a new ID.`;
   }
 
   if (code === "PAYMENT_PLANNED" || code === "PAYMENT_DENIED") {
@@ -948,6 +1095,15 @@ function requestOutcome(request: Pick<PaymentRequest, "phase">): Outcome {
 }
 
 function publicPaymentRequest(request: PaymentRequest): Record<string, unknown> {
+  const publicRequest: Record<string, unknown> = { ...request };
+  delete publicRequest.recipientBalanceBeforeWei;
+  delete publicRequest.reconciliation;
+  return publicRequest;
+}
+
+function publicRegularTransferRequest(
+  request: RegularTransferRequest,
+): Record<string, unknown> {
   const publicRequest: Record<string, unknown> = { ...request };
   delete publicRequest.recipientBalanceBeforeWei;
   delete publicRequest.reconciliation;
@@ -1310,7 +1466,7 @@ export async function createMcpServer(
     {
       title: "Refresh live wallet balance",
       description:
-        "SINGLE-ACCOUNT TOOL: Use this for the current main-account balance, ETH held there, or affordability. Never use it for wallets plural, all balances, accounts, subwallets, a wallet map, or a wallet tree; call wallet_get_tree instead and do not call this first. For a main-balance question, call in the same turn even when conversation history already contains a balance. When the user names an amount in an affordability question, pass it as amount_native so Agent Boost performs the numeric comparison. History, memory, onboarding state, and prior tool results are not current-balance sources. Use the preformatted decimal amount in the returned text without converting balance_atomic. The default response contains only the main-account balance. Main means the account can fund subaccounts; it does not control, own, recover, or revoke them. Never claim a private payment is affordable from the main balance: exact spendability requires a recipient and wallet_plan_private_payment. Returns no seed, key, password, or raw note material.",
+        "SINGLE-ACCOUNT TOOL: Use this for the current main-account balance, ETH held there, or affordability. Never use it for wallets plural, all balances, accounts, subwallets, a wallet map, or a wallet tree; call wallet_get_tree instead and do not call this first. For a main-balance question, call in the same turn even when conversation history already contains a balance. When the user names an amount in an affordability question, pass it as amount_native so Agent Boost performs the numeric comparison. History, memory, onboarding state, and prior tool results are not current-balance sources. Use the preformatted decimal amount in the returned text without converting balance_atomic. The default response contains only the main-account balance. Main means the account can fund subaccounts; it does not control, own, recover, or revoke them. This read does not authorize a send: wallet_plan_regular_transfer validates a regular main-account transfer and gas reserve, while wallet_plan_private_payment validates private spendability. Returns no seed, key, password, or raw note material.",
       inputSchema: z.object({
         amount_native: z.string().regex(
           /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/,
@@ -1633,7 +1789,7 @@ export async function createMcpServer(
     {
       title: "Read the wallet permission",
       description:
-        "Read the current private-payment policy without exposing an address or balance. Use this whenever the user asks what Hermes may send, how many sends remain, whether the permission is enabled, or when it expires. The agent translates the result into ordinary native-token units; never ask the user for atomic units or configuration files.",
+        "Read the shared regular/private transfer policy without exposing an address or balance. Use this whenever the user asks what Hermes may send, how many sends remain, whether the permission is enabled, or when it expires. Regular and private transfers consume the same count and lifetime envelope. The agent translates the result into ordinary native-token units; never ask the user for atomic units or configuration files.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -1652,7 +1808,7 @@ export async function createMcpServer(
     {
       title: "Preview a requested wallet permission change—not a confirmation",
       description:
-        "REQUEST-TURN TOOL ONLY. Call this when the user asks for new private-payment limits. Never call it when the current user message is yes, approve, ✅, or another confirmation of a preview already displayed; wallet_apply_policy_update is the confirmation-turn tool. Inputs use ordinary native-token decimals, never wei. Any subset may change. If max_payments or per_payment_limit_native changes and lifetime_limit_native is omitted, the total becomes their product. Expired permissions renew for the default seven days unless a duration is supplied. Planning changes nothing. Show one plain-English permission card and request ordinary confirmation.",
+        "REQUEST-TURN TOOL ONLY. Call this when the user asks for new transfer limits. The count and lifetime are shared by regular and private sends. Never call it when the current user message is yes, approve, ✅, or another confirmation of a preview already displayed; wallet_apply_policy_update is the confirmation-turn tool. Inputs use ordinary native-token decimals, never wei. Any subset may change. If max_payments or per_payment_limit_native changes and lifetime_limit_native is omitted, the total becomes their product. Expired permissions renew for the default seven days unless a duration is supplied. Planning changes nothing. Show one plain-English permission card and request ordinary confirmation.",
       inputSchema: z.object({
         max_payments: z.number().int().positive().max(100).optional(),
         per_payment_limit_native: z.string().regex(
@@ -1756,6 +1912,128 @@ export async function createMcpServer(
             requires_new_user_confirmation: false,
           }),
         );
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_plan_regular_transfer",
+    {
+      title: "Plan a regular public Sepolia transfer",
+      description:
+        "Use this only when the user asks for a regular, public, non-private, or main-account ETH transfer. It prepares one exact native Sepolia ETH transfer from the selected main public account. Pass amount_native as ordinary ETH, never wei. Planning refreshes the main balance, reserves gas, applies the shared delegated transfer limits, and never broadcasts. Never substitute the private-payment planner for an explicit regular transfer.",
+      inputSchema: z.object({
+        recipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+        amount_native: z.string().regex(
+          /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/,
+        ),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ recipient, amount_native }) => {
+      try {
+        const plan = await runtime.planRegularTransfer({
+          recipient,
+          amountWei: parseEthToWei(amount_native),
+        });
+        return result(envelope(
+          digest,
+          plan.decision === "allow" ? "ready" : "blocked",
+          plan.decision === "allow"
+            ? "REGULAR_TRANSFER_PLANNED"
+            : "REGULAR_TRANSFER_DENIED",
+          { plan },
+          plan.decision === "allow"
+            ? { mode: "never", safeWithSameArguments: false }
+            : { mode: "refresh_plan", safeWithSameArguments: true },
+        ));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_execute_regular_transfer",
+    {
+      title: "Execute a regular public Sepolia transfer",
+      description:
+        "Execute one unexpired regular-transfer decision from the selected main account. Under the default confirm policy, call immediately after planning and omit user_confirmed so the client presents native approval. If native confirmation is unavailable, show the exact receipt, wait for explicit approval, then call again with user_confirmed=true. This is public on-chain activity and never falls back to a private payment. Never ask the user for IDs or tool syntax.",
+      inputSchema: z.object({
+        decision_id: z.string().startsWith("rwd_"),
+        client_request_id: z.string().min(8).max(200).optional().describe(
+          "Optional stable idempotency key. Omit to derive one from decision_id.",
+        ),
+        user_confirmed: z.boolean().optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async ({ decision_id, client_request_id, user_confirmed }) => {
+      try {
+        const plan = await runtime.getRegularTransferPlan(decision_id);
+        let confirmed = false;
+        if (plan.approval.action === "confirm") {
+          const confirmation = await observeConfirmation(
+            regularTransferConfirmationMessage(plan),
+            user_confirmed,
+          );
+          if (!confirmation.accepted) {
+            return result(envelope(
+              digest,
+              "blocked",
+              confirmation.reason
+                ? "REGULAR_TRANSFER_CANCELLED"
+                : "REGULAR_TRANSFER_CONFIRMATION_REQUIRED",
+              {
+                plan,
+                confirmation_mode: confirmation.mode,
+                ...(confirmation.reason ? { reason: confirmation.reason } : {}),
+              },
+              { mode: "never", safeWithSameArguments: true },
+            ));
+          }
+          confirmed = true;
+        }
+        const request = await runtime.executeRegularTransfer({
+          decisionId: decision_id,
+          clientRequestId: client_request_id ?? `hermes:${decision_id}`,
+          userConfirmed: confirmed,
+        });
+        return result(envelope(
+          digest,
+          requestOutcome(request),
+          "REGULAR_TRANSFER_REQUEST",
+          { request: publicRegularTransferRequest(request) },
+          request.phase === "executing" || request.phase === "submitted"
+            ? { mode: "wait", safeWithSameArguments: true, afterMs: 3_000 }
+            : { mode: "never", safeWithSameArguments: false },
+        ));
+      } catch (error) {
+        return domainError(digest, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "wallet_get_regular_transfer_request",
+    {
+      title: "Read regular-transfer request status",
+      description:
+        "Read durable redacted state for one regular main-account transfer. submitted is not confirmed; indeterminate must not be retried with a new request ID.",
+      inputSchema: z.object({ request_id: z.string().startsWith("rreq_") }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ request_id }) => {
+      try {
+        const request = await runtime.getRegularTransferRequest(request_id);
+        return result(envelope(
+          digest,
+          requestOutcome(request),
+          "REGULAR_TRANSFER_STATUS",
+          { request: publicRegularTransferRequest(request) },
+        ));
       } catch (error) {
         return domainError(digest, error);
       }

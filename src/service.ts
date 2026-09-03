@@ -11,6 +11,8 @@ import type {
   PolicyUpdatePlan,
   PolicyUpdateReceipt,
   PublicOnboardingSnapshot,
+  RegularTransferPlan,
+  RegularTransferRequest,
   RecoveryTransferPlan,
   RecoveryTransferRequest,
   WalletAdapter,
@@ -30,6 +32,7 @@ import type { AgentBoostRuntime } from "./mcp.js";
 import { OnboardingController } from "./onboarding.js";
 import { PaymentController } from "./payment.js";
 import { WalletPolicyController } from "./policy.js";
+import { RegularTransferController } from "./regular-transfer.js";
 import { RecoveryTransferController } from "./recovery.js";
 import { SepoliaRpcClient } from "./rpc/index.js";
 import {
@@ -81,6 +84,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   readonly #chain: ChainClient;
   readonly #onboarding: OnboardingController;
   readonly #payments: PaymentController;
+  readonly #regularTransfers: RegularTransferController;
   readonly #policy: WalletPolicyController;
   readonly #recovery: RecoveryTransferController;
   readonly #ui: OnboardingUiServer;
@@ -146,6 +150,14 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       executionLimitWei: MAX_POLICY_PAYMENT_LIMIT_WEI,
       paymentApproval: config.security.effective["payment.execute"],
     });
+    this.#regularTransfers = new RegularTransferController({
+      store: this.#store,
+      wallet: this.#wallet,
+      chain: this.#chain,
+      executeEnabled: config.executeEnabled,
+      executionLimitWei: MAX_POLICY_PAYMENT_LIMIT_WEI,
+      paymentApproval: config.security.effective["payment.execute"],
+    });
     this.#policy = new WalletPolicyController({
       store: this.#store,
       defaultTtlMs: config.delegationTtlMs,
@@ -182,6 +194,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       }
       await this.#rpcProxy?.start();
       await this.#egress.start();
+      await this.#regularTransfers.recoverInterruptedRequests();
       await this.#payments.recoverInterruptedRequests();
       await this.#recovery.recoverInterruptedRequests();
       await this.#onboarding.resume();
@@ -201,6 +214,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     await Promise.allSettled([
       this.#onboarding.stop(),
       this.#payments.stop(),
+      this.#regularTransfers.stop(),
       this.#recovery.stop(),
       this.#ui.stop(),
       this.#egress.stop(),
@@ -215,13 +229,14 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     const setup = state.onboarding;
     const egress = await this.#egress.status();
     return {
-      contract: "org.agentboost.wallet/1.5",
+      contract: "org.agentboost.wallet/1.6",
       chain_id: "eip155:11155111",
       network_name: "Sepolia",
       asset_type: "eip155:11155111/slip44:60",
       funding_target_atomic: this.#config.fundingTargetWei.toString(),
       privacy_protocol: "tornado",
       private_payment_operation: "unshield_next_tail_call",
+      regular_transfer_operation: "public_eth_transfer",
       authority: {
         mode: "testnet_delegated",
         can_cause_signing: true,
@@ -324,6 +339,8 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         selection_requires_separate_reauthorization: true,
         recovery_transfer_available:
           this.#wallet.executeRecoveryTransfer !== undefined,
+        regular_transfer_available:
+          this.#wallet.executeRegularTransfer !== undefined,
       },
       wallet_tree: {
         available: true,
@@ -633,6 +650,13 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return this.#withWalletOperation(() => this.#payments.plan(input));
   }
 
+  planRegularTransfer(input: {
+    recipient: string;
+    amountWei: string;
+  }): Promise<RegularTransferPlan> {
+    return this.#withWalletOperation(() => this.#regularTransfers.plan(input));
+  }
+
   walletPolicy() {
     return this.#policy.get();
   }
@@ -666,6 +690,10 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return this.#payments.getPlan(decisionId);
   }
 
+  getRegularTransferPlan(decisionId: string): Promise<RegularTransferPlan> {
+    return this.#regularTransfers.getPlan(decisionId);
+  }
+
   executePrivatePayment(input: {
     decisionId: string;
     clientRequestId: string;
@@ -676,8 +704,22 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     );
   }
 
+  executeRegularTransfer(input: {
+    decisionId: string;
+    clientRequestId: string;
+    userConfirmed: boolean;
+  }): Promise<RegularTransferRequest> {
+    return this.#withWalletOperation(() =>
+      this.#regularTransfers.execute(input).then(publicRegularTransferRequest)
+    );
+  }
+
   getRequest(requestId: string): Promise<PaymentRequest> {
     return this.#payments.getRequest(requestId).then(publicPaymentRequest);
+  }
+
+  getRegularTransferRequest(requestId: string): Promise<RegularTransferRequest> {
+    return this.#regularTransfers.getRequest(requestId).then(publicRegularTransferRequest);
   }
 
   async listWallets(): Promise<Record<string, unknown>> {
@@ -885,6 +927,8 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     const paymentsUsed = profile.authorizationId
       ? Object.values(state.requests).filter(
         (request) => request.authorization.authorizationId === profile.authorizationId,
+      ).length + Object.values(state.regularRequests).filter(
+        (request) => request.authorization.authorizationId === profile.authorizationId,
       ).length
       : 0;
     const currentPolicy = {
@@ -1007,6 +1051,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       state_path: this.#store.path,
       onboarding: state.onboarding,
       requests: Object.values(state.requests),
+      regular_requests: Object.values(state.regularRequests),
       rpc_route: {
         mode: "tor",
         scope: "ethereum_json_rpc",
@@ -1032,6 +1077,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   async #startNewDemo(): Promise<NewDemoResult> {
     await this.#onboarding.stop();
     await this.#payments.stop();
+    await this.#regularTransfers.stop();
     await this.#recovery.stop();
     const previous = await this.#store.read();
     const previousWalletName = previous.wallet?.activeName ?? this.#config.kohakuWalletName;
@@ -1044,11 +1090,13 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     } catch (error) {
       this.#wallet.selectWallet?.(previousWalletName);
       this.#payments.resetForNewDemo();
+      this.#regularTransfers.resetForWalletSelection();
       this.#recovery.resetForWalletSelection();
       await this.#onboarding.resume().catch(() => undefined);
       throw error;
     }
     this.#payments.resetForNewDemo();
+    this.#regularTransfers.resetForWalletSelection();
     this.#recovery.resetForWalletSelection();
     const started = await this.#startOnboardingUnlocked();
     return {
@@ -1073,16 +1121,27 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   async #stopWalletWork(): Promise<void> {
     await this.#onboarding.stop();
     await this.#payments.stop();
+    await this.#regularTransfers.stop();
     await this.#recovery.stop();
   }
 
   #resetWalletControllers(): void {
     this.#payments.resetForNewDemo();
+    this.#regularTransfers.resetForWalletSelection();
     this.#recovery.resetForWalletSelection();
   }
 }
 
 function publicPaymentRequest(request: PaymentRequest): PaymentRequest {
+  const publicRequest = { ...request };
+  delete publicRequest.recipientBalanceBeforeWei;
+  delete publicRequest.reconciliation;
+  return publicRequest;
+}
+
+function publicRegularTransferRequest(
+  request: RegularTransferRequest,
+): RegularTransferRequest {
   const publicRequest = { ...request };
   delete publicRequest.recipientBalanceBeforeWei;
   delete publicRequest.reconciliation;
@@ -1147,6 +1206,8 @@ function walletAuthorizationStatus(
     return "expired";
   }
   const requestsUsed = Object.values(state.requests).filter(
+    (request) => request.authorization.authorizationId === profile.authorizationId,
+  ).length + Object.values(state.regularRequests).filter(
     (request) => request.authorization.authorizationId === profile.authorizationId,
   ).length;
   if (
@@ -1271,6 +1332,7 @@ export async function readLocalStatus(
     state_path: store.path,
     onboarding: state.onboarding,
     requests: Object.values(state.requests),
+    regular_requests: Object.values(state.regularRequests),
   };
 }
 

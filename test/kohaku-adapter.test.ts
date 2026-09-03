@@ -379,6 +379,45 @@ describe("KohakuWalletAdapter", () => {
     );
   });
 
+  it("executes a regular ETH transfer from the selected main account", async () => {
+    const runner = new FakeRunner((invocation) => {
+      assert.equal(command(invocation), "transfer");
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({ hashes: [TX_HASH] }),
+        stderr: "",
+      };
+    });
+    const { adapter, passwordFile } = await fixture(runner);
+
+    assert.deepEqual(
+      await adapter.executeRegularTransfer({
+        recipient: RECIPIENT,
+        amountWei: 66_000_000_000_000_000_000n,
+      }),
+      { transactionHash: TX_HASH },
+    );
+
+    const transfer = runner.calls[0]!;
+    assert.deepEqual(
+      transfer.args,
+      [
+        "transfer",
+        "--wallet", "agent-boost",
+        "--password", passwordFile,
+        "--dataDir", transfer.args[6]!,
+        "--non-interactive",
+        "--from", "0",
+        "--to", RECIPIENT,
+        "--token", "eth",
+        "--amount-wei", "66000000000000000000",
+        "--broadcast",
+      ],
+    );
+    assert.equal(transfer.env?.RPC_URL, "https://sepolia.example.invalid/rpc-token");
+    assert.equal(transfer.args.includes("--without-tor"), false);
+  });
+
   it("rejects invalid recipients and payment values before running Kohaku", async () => {
     const runner = new FakeRunner(() => ({
       exitCode: 0,
@@ -401,6 +440,14 @@ describe("KohakuWalletAdapter", () => {
         amountWei: 100_000_000_000_000_000n,
       }),
       /smaller than the Tornado withdrawal/,
+    );
+    await assert.rejects(
+      adapter.executeRegularTransfer({ recipient: "not-an-address", amountWei: 1n }),
+      /Ethereum address/,
+    );
+    await assert.rejects(
+      adapter.executeRegularTransfer({ recipient: RECIPIENT, amountWei: 0n }),
+      /positive/,
     );
     assert.equal(runner.calls.length, 0);
   });
