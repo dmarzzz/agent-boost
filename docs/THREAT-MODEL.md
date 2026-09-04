@@ -1,8 +1,8 @@
 # Threat model
 
 Agent Boost is an unaudited Sepolia demonstration. Its goal is to reduce secret
-exposure in an agent tool interface and constrain one testnet payment—not to
-provide a production custody boundary or guaranteed anonymity.
+exposure in an agent tool interface and constrain bounded testnet payments—not
+to provide a production custody boundary or guaranteed anonymity.
 
 ## Protected data
 
@@ -24,8 +24,9 @@ correct decision-making, not secrets.
 2. Wallet commands are a fixed allowlist with validated fields and no shell.
 3. Mainnet and non-Sepolia RPC endpoints are rejected.
 4. Payment terms cannot change between plan and execution.
-5. A payment requires explicit verbal confirmation and stays within a one-use,
-   expiring amount delegation.
+5. Under the default policy, a payment requires explicit verbal confirmation
+   and stays within the active count, per-send, lifetime-amount, and expiry
+   limits.
 6. Stable client IDs prevent ordinary retries from double-executing.
 7. Uncertain side effects fail safe and do not restore payment authority.
 8. The onboarding UI is local, read-only, and exposes only the public funding
