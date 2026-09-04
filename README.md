@@ -12,28 +12,35 @@
 [![license][license-badge]][license-url]
 
 **[Install](#install)** · [Demo](docs/DEMO.md) · [Tools](docs/TOOLS.md) ·
-[Philosophy](docs/PRODUCT-PHILOSOPHY.md) · [Docs](docs/README.md) ·
-[Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+[Architecture](docs/ARCHITECTURE.md) · [Privacy](docs/PRIVACY.md) ·
+[Security](SECURITY.md) · [Docs](docs/README.md)
 
-Agent Boost is a local sidecar that gives a Hermes agent private money, a
-private identity, and anonymous egress without ever handing it a key.
+Agent Boost is a local privacy sidecar for Hermes. It gives an agent tightly
+scoped private capabilities while deterministic software—not the model—owns
+live facts, policy, approval, secrets, and side effects.
 
-- **Private payment and identity**: stealth Ethereum addresses and balances
-  through Kohaku, and shielded Zcash through Zallet; the agent sees addresses
-  and balances, never keys.
-- **Anonymous egress**: public HTTPS reads through a Shade Tree, or a grove of
-  them, over Tor with no direct fallback.
-- **Private inference**: sensitive subproblems sent to an attested confidential
-  model, with a receipt the sidecar verifies.
+The public preview centers on a shielded Sepolia wallet and explicitly scoped
+Shade Tree egress. Private inference is a separate experimental lane, not a
+blanket-private Hermes session.
 
-> [!WARNING]
-> Unaudited research software. Sepolia-only, disposable test funds. Never send
-> mainnet assets, real value, or a wallet you care about.
+> [!CAUTION]
+> Unaudited research software. The wallet is Sepolia-only and intended for
+> disposable test funds. Never send mainnet assets, real value, or a wallet you
+> care about.
+
+## What it adds
+
+| Private payment and identity | Covered egress | Private inference |
+| --- | --- | --- |
+| Fresh Ethereum accounts and shielded test payments through Kohaku. Hermes sees the address, balance, and status—never the keys. | Explicit public HTTPS reads through a Shade Tree over Tor. The route is bounded, independently enrolled, and has no direct fallback. | An experimental opt-in path for discrete subproblems sent to attested confidential compute, with a verified response receipt. |
+
+These are independent lanes. Enabling one does not silently reroute the others.
 
 ## Install
 
-macOS (Apple silicon or Intel) or Ubuntu 24.04 ARM64, with Node.js 22+ and a
-working Hermes. No system Tor needed.
+Supported on macOS (Apple silicon or Intel) and Ubuntu 24.04 ARM64. You need
+Git, Node.js 22+, npm, and a working Hermes install. You do **not** need a
+system Tor installation.
 
 ```console
 git clone https://github.com/dmarzzz/agent-boost.git
@@ -46,46 +53,74 @@ Restart Hermes once, then tell it:
 > Set up Agent Boost for me.
 
 The installer pins and verifies Kohaku and the Shade Tree client, installs
-under `~/.local`, and wires the Hermes profile. Details, paths, and pins are in
-[docs/INSTALL.md](docs/INSTALL.md).
+under `~/.local`, and wires the active Hermes profile. After that, ordinary use
+happens in conversation—no tool names, IDs, atomic units, or terminal commands
+required. See [the installation guide](docs/INSTALL.md) for platforms, paths,
+and dependency pins.
 
-## Use it
+## Talk to it
 
-Everything happens in conversation. No terminal after install.
+| Say this to Hermes | What Agent Boost does |
+| --- | --- |
+| **“Set up Agent Boost for me.”** | Creates a disposable wallet, shows a funding QR for the exact remaining amount, and shields `0.1` Sepolia ETH once funded. |
+| **“Send 0.02 Sepolia ETH privately to `0x2222…2222`.”** | Refreshes live state, checks funds and policy, shows the exact plan, waits for approval, then submits once. |
+| **“Fetch `https://example.com/data.json` through covered egress.”** | After Grove enrollment, reads one public HTTPS resource through Shade Tree over Tor—never by a direct fallback. |
 
-> Set up Agent Boost for me.
+Plans do not sign or submit. Execution rechecks the live balance and policy,
+and an uncertain result stays uncertain rather than becoming an unsafe retry.
+The [full demo](docs/DEMO.md) walks through setup, permissions, payment, egress,
+and the conversation evals.
 
-Hermes creates a disposable Sepolia wallet, shows a QR for `0.2` test ETH, and
-shields `0.1` of it through Kohaku once funded.
+## The model is not the security boundary
 
-> Send 0.02 Sepolia ETH privately to 0x2222…2222.
+<p align="center">
+  <img src="assets/agent-boost-boundary.svg" width="100%" alt="Hermes sends intent to the local Agent Boost sidecar, where code enforces live facts, policy, approval, and redaction before using one of three scoped privacy paths">
+</p>
 
-Hermes reads the live balance, reads the exact plan back, waits for your yes,
-then signs and submits within a user-visible, seven-day delegation. New wallets
-start with 10 sends of up to 1 Sepolia ETH each; say “change my wallet limits”
-to preview and approve different testnet guardrails.
+Hermes handles language and intent. Agent Boost handles the parts that must be
+deterministic:
 
-> Fetch https://example.com/data.json through covered egress.
+- live balance and readiness reads instead of remembered chat context;
+- immutable plans, bounded permissions, explicit approval, and idempotency;
+- redacted tool results that exclude keys, passwords, notes, proofs, and raw
+  signed transactions;
+- fail-closed Tor and Shade Tree routes, with no quiet direct-network retry.
 
-After a Grove operator enrolls the install, Hermes fetches one public HTTPS
-resource through Shade Tree over Tor, never a direct connection.
+That split is the core product rule: stronger models can make the experience
+better, but they do not make balances, permissions, privacy, or payments
+correct. Read the [product philosophy](docs/PRODUCT-PHILOSOPHY.md) and
+[architecture](docs/ARCHITECTURE.md) for the detailed contract.
 
-The full walkthrough, including the security policy and evals, is in
-[docs/DEMO.md](docs/DEMO.md). The fourteen MCP tools behind these conversations
-are in [docs/TOOLS.md](docs/TOOLS.md).
+## Privacy, precisely
+
+Agent Boost improves privacy; it does not promise anonymity.
+
+- Initial funding and later testnet activity remain public on Sepolia. Shielding
+  reduces direct linkability, but timing, amounts, and a small anonymity set can
+  still correlate activity.
+- Wallet JSON-RPC uses Tor with remote DNS and no direct fallback. The RPC
+  provider still sees methods, addresses, payloads, and timing.
+- Covered egress applies only to the explicit HTTPS request. It does not
+  blanket-route Hermes, its model provider, Matrix, or the browser.
+- Hermes and Agent Boost currently run as the same OS user. Keeping secrets out
+  of the model conversation is useful, but it is not a hardware custody
+  boundary against a locally privileged process.
+
+The exact claims and non-claims live in [Privacy](docs/PRIVACY.md) and the
+[threat model](docs/THREAT-MODEL.md).
 
 ## Docs
 
-| Doc | What it covers |
+| Read | For |
 | --- | --- |
-| [Product philosophy](docs/PRODUCT-PHILOSOPHY.md) | Weak-model-safe correctness and the definition of shipped |
-| [Tools](docs/TOOLS.md) | The MCP tools in call order, with inputs and returns |
-| [Architecture](docs/ARCHITECTURE.md) | Components, loopback surfaces, hardening |
-| [Threat model](docs/THREAT-MODEL.md) | Protected data, goals, non-goals, attacks |
-| [Privacy claims and limits](docs/PRIVACY.md) | What is and is not private |
-| [Capability contract](docs/CAPABILITY-CONTRACT.md) | The wallet and egress contracts |
+| [Install](docs/INSTALL.md) | Supported hosts, installed paths, pins, and enrollment |
+| [Demo](docs/DEMO.md) | The complete participant flow and conversation evals |
+| [Tools](docs/TOOLS.md) | MCP tools in call order, with inputs and returns |
+| [Architecture](docs/ARCHITECTURE.md) | Components, state machines, and hardening |
+| [Capability contract](docs/CAPABILITY-CONTRACT.md) | Machine-readable guarantees and result envelopes |
+| [Covered egress](docs/COVERED-EGRESS.md) | Shade Tree scope, limits, and privacy boundary |
 | [Configuration](docs/CONFIGURATION.md) | Environment variables and defaults |
-| [All docs](docs/README.md) | Index |
+| [All docs](docs/README.md) | Documentation index |
 
 ## Development
 

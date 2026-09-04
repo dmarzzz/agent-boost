@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="600" viewBox="0 0 1440 600" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Boost trust boundary</title>
+  <desc id="desc">Hermes sends user intent to the local Agent Boost sidecar, which enforces live facts, policy, approval, and redaction before using private payment, covered egress, or private inference paths. Signing material never enters the model conversation.</desc>
+  <defs>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0V28" fill="none" stroke="#182111" stroke-opacity=".07"/>
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#11180c" flood-opacity=".15"/>
+    </filter>
+  </defs>
+
+  <rect width="1440" height="600" rx="34" fill="#f1f1df"/>
+  <rect width="1440" height="600" rx="34" fill="url(#grid)"/>
+
+  <text x="64" y="66" fill="#536047" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700" letter-spacing="3">THE TRUST BOUNDARY</text>
+  <text x="1376" y="66" text-anchor="end" fill="#536047" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">LOCAL · BOUNDED · FAIL-CLOSED</text>
+
+  <g transform="translate(64 154)">
+    <rect width="236" height="268" rx="24" fill="#fbfbef" stroke="#c8cdb9" stroke-width="2"/>
+    <circle cx="118" cy="78" r="38" fill="#17210f"/>
+    <circle cx="105" cy="78" r="4" fill="#e8ff6a"/>
+    <circle cx="118" cy="78" r="4" fill="#e8ff6a"/>
+    <circle cx="131" cy="78" r="4" fill="#e8ff6a"/>
+    <path d="M118 40V23" stroke="#17210f" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="118" cy="19" r="5" fill="#17210f"/>
+    <text x="118" y="145" text-anchor="middle" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="25" font-weight="750">Hermes</text>
+    <text x="118" y="180" text-anchor="middle" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17">language · intent</text>
+    <text x="118" y="207" text-anchor="middle" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17">user approval</text>
+    <rect x="70" y="231" width="96" height="4" rx="2" fill="#b9ff1d"/>
+  </g>
+
+  <path d="M320 288H378" fill="none" stroke="#536047" stroke-width="3"/>
+  <path d="M378 280L390 288L378 296Z" fill="#536047"/>
+
+  <g transform="translate(400 112)" filter="url(#shadow)">
+    <rect width="520" height="352" rx="30" fill="#11180c"/>
+    <circle cx="42" cy="42" r="10" fill="#b9ff1d"/>
+    <text x="66" y="48" fill="#b9ff1d" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="700" letter-spacing="2">AGENT BOOST · LOCAL SIDECAR</text>
+
+    <text x="40" y="116" fill="#f1f1df" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="760">The model plans.</text>
+    <text x="40" y="158" fill="#f1f1df" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="760">Code enforces.</text>
+
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="700" letter-spacing="1">
+      <rect x="40" y="202" width="202" height="45" rx="10" fill="#202b18" stroke="#536047"/>
+      <text x="60" y="231" fill="#dfe9d5">LIVE FACTS</text>
+      <circle cx="218" cy="224" r="5" fill="#b9ff1d"/>
+
+      <rect x="258" y="202" width="222" height="45" rx="10" fill="#202b18" stroke="#536047"/>
+      <text x="278" y="231" fill="#dfe9d5">POLICY + LIMITS</text>
+      <circle cx="456" cy="224" r="5" fill="#b9ff1d"/>
+
+      <rect x="40" y="261" width="202" height="45" rx="10" fill="#202b18" stroke="#536047"/>
+      <text x="60" y="290" fill="#dfe9d5">APPROVAL</text>
+      <circle cx="218" cy="283" r="5" fill="#b9ff1d"/>
+
+      <rect x="258" y="261" width="222" height="45" rx="10" fill="#202b18" stroke="#536047"/>
+      <text x="278" y="290" fill="#dfe9d5">REDACTION</text>
+      <circle cx="456" cy="283" r="5" fill="#b9ff1d"/>
+    </g>
+  </g>
+
+  <g fill="none" stroke="#536047" stroke-width="3">
+    <path d="M942 210H978"/>
+    <path d="M942 288H978"/>
+    <path d="M942 366H978"/>
+  </g>
+  <g fill="#536047">
+    <path d="M978 202L990 210L978 218Z"/>
+    <path d="M978 280L990 288L978 296Z"/>
+    <path d="M978 358L990 366L978 374Z"/>
+  </g>
+
+  <g transform="translate(996 136)">
+    <rect width="380" height="126" rx="20" fill="#fbfbef" stroke="#c8cdb9" stroke-width="2"/>
+    <rect width="9" height="126" rx="4.5" fill="#b9ff1d"/>
+    <circle cx="55" cy="63" r="25" fill="#17210f"/>
+    <path d="M43 63H67M55 51V75" stroke="#b9ff1d" stroke-width="3" stroke-linecap="round"/>
+    <text x="96" y="53" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="21" font-weight="750">Private payment</text>
+    <text x="96" y="82" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Kohaku → Sepolia testnet</text>
+  </g>
+
+  <g transform="translate(996 278)">
+    <rect width="380" height="126" rx="20" fill="#fbfbef" stroke="#c8cdb9" stroke-width="2"/>
+    <rect width="9" height="126" rx="4.5" fill="#b9ff1d"/>
+    <circle cx="55" cy="63" r="25" fill="#17210f"/>
+    <circle cx="55" cy="63" r="13" fill="none" stroke="#b9ff1d" stroke-width="2"/>
+    <path d="M42 63H68M55 50C49 57 49 69 55 76M55 50C61 57 61 69 55 76" fill="none" stroke="#b9ff1d" stroke-width="2"/>
+    <text x="96" y="53" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="21" font-weight="750">Covered egress</text>
+    <text x="96" y="82" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Shade Tree → public HTTPS</text>
+  </g>
+
+  <g transform="translate(996 420)">
+    <rect width="380" height="126" rx="20" fill="#fbfbef" stroke="#c8cdb9" stroke-width="2"/>
+    <rect width="9" height="126" rx="4.5" fill="#b9ff1d"/>
+    <circle cx="55" cy="63" r="25" fill="#17210f"/>
+    <path d="M55 46L59 58L71 63L59 68L55 80L51 68L39 63L51 58Z" fill="#b9ff1d"/>
+    <text x="96" y="53" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="21" font-weight="750">Private inference</text>
+    <text x="96" y="82" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Experimental · attested compute</text>
+  </g>
+
+  <rect x="64" y="510" width="856" height="52" rx="14" fill="#dff5a3"/>
+  <circle cx="92" cy="536" r="7" fill="#17210f"/>
+  <text x="113" y="542" fill="#17210f" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="700">SIGNING MATERIAL NEVER ENTERS THE MODEL CONVERSATION</text>
+</svg>
