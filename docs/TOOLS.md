@@ -54,7 +54,7 @@ public archive ID and a new QR, never a path or a secret.
 | `wallet_get_request` | `request_id` | one redacted request state |
 | `wallet_start_new_demo` | `user_confirmed` | archive ID, new setup, new QR |
 
-## Anonymous egress
+## Covered egress
 
 After a Grove operator enrolls the installation, `egress_fetch` sends one
 explicit public HTTPS GET or HEAD through the authenticated loopback Shade Tree
