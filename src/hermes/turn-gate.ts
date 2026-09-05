@@ -3770,37 +3770,76 @@ function savedWalletLoadReference(
   if (!match) return undefined;
   const action = (match[1] ?? "").toLowerCase();
   const tail = (match[2] ?? "").trim();
+  // Selecting/loading already makes the named profile active. Treat common
+  // restatements of that effect as request syntax, not as part of the friendly
+  // name. Without this, `load wallet agent-boost and make it active` was pinned
+  // to the impossible literal name `agent-boost and make it active`, even when
+  // the wallet tree had just returned the exact `agent-boost` label.
+  const actionableTail = tail.replace(
+    /(?:(?:\s*[,;:]\s*|\s+)and\s+)(?:(?:make|set)\s+(?:it|that|this)(?:\s+as)?\s+(?:the\s+)?(?:active|current|selected)(?:\s+(?:wallet|profile|account))?|(?:activate|load|open|select|use|switch\s+to)\s+(?:it|that|this))(?:\s+(?:please|now))*\s*$/iu,
+    "",
+  ).trimEnd();
+  const quotedName = String.raw`["'\u2018\u201c]?[a-z0-9][a-z0-9._-]{0,63}["'\u2019\u201d]?`;
+  const exactFriendlyName = (value: string | undefined): string | undefined => {
+    if (value === undefined) return undefined;
+    const candidate = value.trim();
+    const pairs = new Map([
+      ['"', '"'],
+      ["'", "'"],
+      ["\u2018", "\u2019"],
+      ["\u201c", "\u201d"],
+    ]);
+    const closing = pairs.get(candidate[0] ?? "");
+    const unquoted = closing && candidate.endsWith(closing)
+      ? candidate.slice(1, -1)
+      : candidate;
+    return /^[a-z0-9][a-z0-9._-]{0,63}$/iu.test(unquoted)
+      ? unquoted
+      : undefined;
+  };
   // A natural wrapper around an exact friendly name is stronger than the
   // generic wording inside that wrapper. Pin only the name so a weak model
   // cannot turn `my saved wallet named agent-boost` into a literal profile
   // lookup for that whole sentence fragment. Parse this before trimming
   // politeness so friendly names such as `now` and `please` remain valid when
   // the user explicitly introduces them with `named` or `called`.
-  const explicitlyNamed = tail.match(
-    /^(?:(?:my|the|a|an)\s+)?(?:(?:saved|existing|previous|old|previously\s+set\s+up)\s+)*(?:wallet|profile|account)\s+(?:(?:named|called)|with\s+(?:the\s+)?name(?:\s+of)?)\s+([a-z0-9][a-z0-9._-]{0,63})(?:(?:\s*[,;:]\s*|\s+)(?:please|now))*(?:\s*[,;:]?)?$/iu,
+  const explicitlyNamed = actionableTail.match(
+    new RegExp(
+      `^(?:(?:my|the|a|an)\\s+)?(?:(?:saved|existing|previous|old|previously\\s+set\\s+up)\\s+)*(?:wallet|profile|account)\\s+(?:(?:named|called)(?:\\s+exactly)?|with\\s+(?:the\\s+)?name(?:\\s+of)?)\\s+(${quotedName})(?:(?:\\s*[,;:]\\s*|\\s+)(?:please|now))*(?:\\s*[,;:]?)?$`,
+      "iu",
+    ),
   );
-  if (explicitlyNamed?.[1] !== undefined) {
-    return { kind: "specific", reference: explicitlyNamed[1] };
+  const explicitName = exactFriendlyName(explicitlyNamed?.[1]);
+  if (explicitName !== undefined) {
+    return { kind: "specific", reference: explicitName };
   }
   // Request politeness is not part of a saved profile's friendly name. Trim
   // whitespace- or punctuation-delimited suffixes while preserving names such
   // as `please-wallet`, `travel_now`, and `travel.wallet` exactly.
-  const reference = tail.replace(
+  const reference = actionableTail.replace(
     /(?:(?:\s*[,;:]\s*|\s+)(?:please|now))+(?:\s*[,;:]?)?$/iu,
     "",
   ).trimEnd();
   const positionallyNamed = reference.match(
-    /^(?:(?:my|the|a|an)\s+)?(?:(?:saved|existing)\s+)?(?:wallet|profile|account)\s+([a-z0-9][a-z0-9._-]{0,63})$/iu,
+    new RegExp(
+      `^(?:(?:my|the|a|an)\\s+)?(?:(?:saved|existing)\\s+)?(?:wallet|profile|account)\\s+(${quotedName})$`,
+      "iu",
+    ),
   );
-  if (positionallyNamed?.[1] !== undefined) {
-    return { kind: "specific", reference: positionallyNamed[1] };
+  const positionalName = exactFriendlyName(positionallyNamed?.[1]);
+  if (positionalName !== undefined) {
+    return { kind: "specific", reference: positionalName };
   }
   if (/^(?:(?:my|the)\s+)?agent[ -]boost\s+(?:wallet|profile|account)$/iu.test(reference)) {
     return { kind: "specific", reference: "agent-boost" };
   }
   const postfixedName = reference.match(
-    /^(?:(?:my|the)\s+)?([a-z0-9][a-z0-9._-]{0,63})\s+(?:wallet|profile|account)$/iu,
+    new RegExp(
+      `^(?:(?:my|the)\\s+)?(${quotedName})\\s+(?:wallet|profile|account)$`,
+      "iu",
+    ),
   );
+  const postfixFriendlyName = exactFriendlyName(postfixedName?.[1]);
   const genericPostfixedNames = new Set([
     "a",
     "an",
@@ -3815,10 +3854,10 @@ function savedWalletLoadReference(
     "the",
   ]);
   if (
-    postfixedName?.[1] !== undefined &&
-    !genericPostfixedNames.has(postfixedName[1].toLowerCase())
+    postfixFriendlyName !== undefined &&
+    !genericPostfixedNames.has(postfixFriendlyName.toLowerCase())
   ) {
-    return { kind: "specific", reference: postfixedName[1] };
+    return { kind: "specific", reference: postfixFriendlyName };
   }
   const normalizedTail = reference.toLowerCase();
   const ambiguousSimpleTargets = new Set([
@@ -3836,8 +3875,10 @@ function savedWalletLoadReference(
     .trim();
   const exactSimpleLifecycle = ["load", "select", "switch to", "use"].includes(action) &&
     (simpleLifecyclePrefix === "" || simpleLifecyclePrefix === "please") &&
-    /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(normalizedTail) &&
-    !ambiguousSimpleTargets.has(normalizedTail);
+    exactFriendlyName(reference) !== undefined &&
+    !ambiguousSimpleTargets.has(
+      exactFriendlyName(reference)?.toLowerCase() ?? normalizedTail,
+    );
   const hasWalletCue = /\b(?:wallets?|profiles?|accounts?|saved|existing|previous|previously|old)\b|[a-z0-9][_-][a-z0-9]/u
     .test(normalizedTail);
   if (
@@ -3846,7 +3887,10 @@ function savedWalletLoadReference(
     return undefined;
   }
   if (/[a-z0-9][_-][a-z0-9]/u.test(normalizedTail)) {
-    return { kind: "specific", reference };
+    return {
+      kind: "specific",
+      reference: exactFriendlyName(reference) ?? reference,
+    };
   }
   const genericWords = new Set([
     "a",

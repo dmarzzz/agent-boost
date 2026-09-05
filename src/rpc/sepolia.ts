@@ -10,6 +10,18 @@ const HEX_QUANTITY_RE = /^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$/;
 const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 const ABI_ADDRESS_TOPIC_RE = /^0x0{24}[0-9a-fA-F]{40}$/;
 const USER_OPERATION_EVENT_DATA_RE = /^0x[0-9a-fA-F]{256}$/;
+/** Public Sepolia RPCs commonly cap eth_getLogs at 50,000 blocks. */
+const USER_OPERATION_LOG_BLOCKS_PER_RANGE = 50_000n;
+/** Keep fallback batches below the local RPC proxy's 100-request ceiling. */
+const USER_OPERATION_LOG_BATCH_SIZE = 20;
+/**
+ * Bound work even if an RPC returns a syntactically valid hostile height.
+ * This still scans every Sepolia block through 51,199,999 (well beyond the
+ * current chain) while limiting one lookup to 1,024 bounded ranges.
+ */
+const USER_OPERATION_LOG_MAX_RANGES = 1_024;
+const USER_OPERATION_LOG_MAX_BLOCK =
+  BigInt(USER_OPERATION_LOG_MAX_RANGES) * USER_OPERATION_LOG_BLOCKS_PER_RANGE - 1n;
 
 /** Canonical singleton used by Kohaku's pinned ERC-4337 EntryPoint v0.8 path. */
 const ENTRY_POINT_V08_ADDRESS =
@@ -114,30 +126,45 @@ export class SepoliaRpcClient implements ChainClient {
     const expectedSenderTopic = expectedSender === undefined
       ? undefined
       : `0x${"0".repeat(24)}${expectedSender.slice(2).toLowerCase()}`;
-    const result = await this.#request("eth_getLogs", [
-      {
-        address: ENTRY_POINT_V08_ADDRESS,
-        fromBlock: "earliest",
-        toBlock: "latest",
-        topics: [USER_OPERATION_EVENT_TOPIC, normalizedHash],
-      },
-    ]);
-    if (!Array.isArray(result)) {
-      throw new Error("Sepolia RPC eth_getLogs returned an invalid log list");
+    const latestBlock = parseHexQuantity(
+      await this.#request("eth_blockNumber", []),
+      "eth_blockNumber",
+    );
+    if (latestBlock > USER_OPERATION_LOG_MAX_BLOCK) {
+      throw new Error("Sepolia RPC block height exceeds the receipt scan safety bound");
+    }
+    const ranges = descendingBlockRanges(latestBlock);
+    const newest = ranges.next();
+    if (newest.done) {
+      throw new Error("Sepolia RPC receipt scan produced no block ranges");
     }
 
-    const canonicalLogs: Record<string, unknown>[] = [];
-    for (const value of result) {
-      if (typeof value !== "object" || value === null || Array.isArray(value)) {
-        throw new Error("Sepolia RPC eth_getLogs returned an invalid UserOperation log");
+    // A newly submitted UserOperation should be in the newest range. Keep that
+    // common path to one log request, then scan older non-overlapping ranges in
+    // bounded batches so recovery also works after a long offline interval.
+    let canonicalLogs = canonicalUserOperationLogs(
+      await this.#request("eth_getLogs", [
+        userOperationLogFilter(newest.value, normalizedHash),
+      ]),
+    );
+    let batchSupportedForScan = true;
+    while (canonicalLogs.length === 0) {
+      const batch: Array<{ method: string; params: readonly unknown[] }> = [];
+      for (let index = 0; index < USER_OPERATION_LOG_BATCH_SIZE; index += 1) {
+        const range = ranges.next();
+        if (range.done) break;
+        batch.push({
+          method: "eth_getLogs",
+          params: [userOperationLogFilter(range.value, normalizedHash)],
+        });
       }
-      const log = value as Record<string, unknown>;
-      if (log.removed !== undefined && typeof log.removed !== "boolean") {
-        throw new Error("Sepolia RPC eth_getLogs returned an invalid UserOperation log");
-      }
-      // A removed log is not evidence of canonical inclusion after a reorg.
-      if (log.removed === true) continue;
-      canonicalLogs.push(log);
+      if (batch.length === 0) break;
+      const result = await this.#canonicalLogsFromRequests(
+        batch,
+        batchSupportedForScan,
+      );
+      canonicalLogs = result.logs;
+      batchSupportedForScan = result.batchSupported;
     }
     if (canonicalLogs.length === 0) return { status: "pending" };
     if (canonicalLogs.length !== 1) {
@@ -203,8 +230,116 @@ export class SepoliaRpcClient implements ChainClient {
     };
   }
 
+  async #canonicalLogsFromRequests(
+    requests: readonly { method: string; params: readonly unknown[] }[],
+    batchSupported: boolean,
+  ): Promise<{
+    logs: Record<string, unknown>[];
+    batchSupported: boolean;
+  }> {
+    if (batchSupported) {
+      let results: unknown[];
+      try {
+        results = await this.#requestBatch(requests);
+      } catch {
+        // Batch support is only an optimization. Downgrade this receipt scan,
+        // not the client: a later lookup must retry after a transient failure.
+        return {
+          logs: await this.#canonicalLogsSequential(requests),
+          batchSupported: false,
+        };
+      }
+      // Keep evidence validation outside the transport fallback catch. Invalid
+      // or ambiguous logs fail closed instead of being retried sequentially.
+      return {
+        logs: results.flatMap(canonicalUserOperationLogs),
+        batchSupported: true,
+      };
+    }
+    return {
+      logs: await this.#canonicalLogsSequential(requests),
+      batchSupported: false,
+    };
+  }
+
+  async #canonicalLogsSequential(
+    requests: readonly { method: string; params: readonly unknown[] }[],
+  ): Promise<Record<string, unknown>[]> {
+    for (const request of requests) {
+      const logs = canonicalUserOperationLogs(
+        await this.#request(request.method, request.params),
+      );
+      // Once an exact-hash range contains canonical evidence, older ranges
+      // cannot change that receipt and need not delay terminal reconciliation.
+      if (logs.length > 0) return logs;
+    }
+    return [];
+  }
+
+  async #requestBatch(
+    requests: readonly { method: string; params: readonly unknown[] }[],
+  ): Promise<unknown[]> {
+    if (requests.length === 0) return [];
+    const payload = requests.map((request) => ({
+      jsonrpc: "2.0" as const,
+      id: this.#nextId++,
+      method: request.method,
+      params: request.params,
+    }));
+    const response = await this.#post(payload);
+    if (!Array.isArray(response) || response.length !== payload.length) {
+      throw new Error("Sepolia RPC returned an invalid batch response");
+    }
+    const expectedIds = new Set(payload.map((request) => request.id));
+    const responses = new Map<number, JsonRpcResponse>();
+    for (const value of response) {
+      if (
+        typeof value !== "object" || value === null || Array.isArray(value)
+      ) {
+        throw new Error("Sepolia RPC returned an invalid batch response");
+      }
+      const item = value as JsonRpcResponse;
+      if (
+        item.jsonrpc !== "2.0" || typeof item.id !== "number" ||
+        !expectedIds.has(item.id) || responses.has(item.id)
+      ) {
+        throw new Error("Sepolia RPC returned an invalid or mismatched batch response");
+      }
+      if (item.error !== undefined) {
+        throw new Error("Sepolia RPC batch returned an error");
+      }
+      if (!("result" in item)) {
+        throw new Error("Sepolia RPC batch returned no result");
+      }
+      responses.set(item.id, item);
+    }
+    return payload.map((request) => responses.get(request.id)!.result);
+  }
+
   async #request(method: string, params: readonly unknown[]): Promise<unknown> {
     const id = this.#nextId++;
+    const payload = await this.#post({ jsonrpc: "2.0", id, method, params });
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      Array.isArray(payload)
+    ) {
+      throw new Error("Sepolia RPC returned an invalid or mismatched response");
+    }
+    const response = payload as JsonRpcResponse;
+    if (response.jsonrpc !== "2.0" || response.id !== id) {
+      throw new Error("Sepolia RPC returned an invalid or mismatched response");
+    }
+    if (response.error !== undefined) {
+      throw new Error(`Sepolia RPC ${method} returned an error`);
+    }
+    if (!("result" in response)) {
+      throw new Error(`Sepolia RPC ${method} returned no result`);
+    }
+    return response.result;
+  }
+
+  async #post(body: unknown): Promise<unknown> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
     timer.unref();
@@ -216,7 +351,7 @@ export class SepoliaRpcClient implements ChainClient {
           accept: "application/json",
           "content-type": "application/json",
         },
-        body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
     } catch {
@@ -233,28 +368,66 @@ export class SepoliaRpcClient implements ChainClient {
       throw new Error(`Sepolia RPC returned HTTP ${response.status.toString()}`);
     }
 
-    let payload: JsonRpcResponse;
+    let payload: unknown;
     try {
-      payload = (await response.json()) as JsonRpcResponse;
+      payload = await response.json();
     } catch {
       throw new Error("Sepolia RPC returned invalid JSON");
     }
-    if (
-      typeof payload !== "object" ||
-      payload === null ||
-      payload.jsonrpc !== "2.0" ||
-      payload.id !== id
-    ) {
-      throw new Error("Sepolia RPC returned an invalid or mismatched response");
-    }
-    if (payload.error !== undefined) {
-      throw new Error(`Sepolia RPC ${method} returned an error`);
-    }
-    if (!("result" in payload)) {
-      throw new Error(`Sepolia RPC ${method} returned no result`);
-    }
-    return payload.result;
+    return payload;
   }
+}
+
+interface BlockRange {
+  fromBlock: bigint;
+  toBlock: bigint;
+}
+
+function* descendingBlockRanges(latestBlock: bigint): Generator<BlockRange> {
+  if (latestBlock < 0n || latestBlock > USER_OPERATION_LOG_MAX_BLOCK) {
+    throw new Error("Sepolia RPC block height exceeds the receipt scan safety bound");
+  }
+  let toBlock = latestBlock;
+  for (let count = 0; count < USER_OPERATION_LOG_MAX_RANGES; count += 1) {
+    const fromBlock = toBlock + 1n > USER_OPERATION_LOG_BLOCKS_PER_RANGE
+      ? toBlock + 1n - USER_OPERATION_LOG_BLOCKS_PER_RANGE
+      : 0n;
+    yield { fromBlock, toBlock };
+    if (fromBlock === 0n) return;
+    toBlock = fromBlock - 1n;
+  }
+  throw new Error("Sepolia RPC receipt scan exceeded its range safety bound");
+}
+
+function userOperationLogFilter(
+  range: BlockRange,
+  normalizedHash: string,
+): Record<string, unknown> {
+  return {
+    address: ENTRY_POINT_V08_ADDRESS,
+    fromBlock: hexQuantity(range.fromBlock),
+    toBlock: hexQuantity(range.toBlock),
+    topics: [USER_OPERATION_EVENT_TOPIC, normalizedHash],
+  };
+}
+
+function canonicalUserOperationLogs(result: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(result)) {
+    throw new Error("Sepolia RPC eth_getLogs returned an invalid log list");
+  }
+  const canonicalLogs: Record<string, unknown>[] = [];
+  for (const value of result) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error("Sepolia RPC eth_getLogs returned an invalid UserOperation log");
+    }
+    const log = value as Record<string, unknown>;
+    if (log.removed !== undefined && typeof log.removed !== "boolean") {
+      throw new Error("Sepolia RPC eth_getLogs returned an invalid UserOperation log");
+    }
+    // A removed log is not evidence of canonical inclusion after a reorg.
+    if (log.removed !== true) canonicalLogs.push(log);
+  }
+  return canonicalLogs;
 }
 
 function parseHttpsRpcUrl(raw: string): string {
@@ -275,4 +448,9 @@ function parseHexQuantity(value: unknown, method: string): bigint {
     throw new Error(`Sepolia RPC ${method} returned an invalid hex quantity`);
   }
   return BigInt(value);
+}
+
+function hexQuantity(value: bigint): string {
+  if (value < 0n) throw new Error("Sepolia RPC block range cannot be negative");
+  return `0x${value.toString(16)}`;
 }

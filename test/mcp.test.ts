@@ -5826,6 +5826,298 @@ test("saved-wallet load rejects ambiguous human wording with a friendly recovery
   }
 });
 
+test("saved-wallet names round-trip from list and tree with exact-match precedence", async (t) => {
+  const runtime = fakeRuntime();
+  const walletNames = [
+    "current-wallet",
+    "agent-boost",
+    "agent-boost-eac63c72e6a7a0d2",
+  ] as const;
+  runtime.listWallets = async () => ({
+    active_wallet_id: "wallet_current_1234",
+    wallets: walletNames.map((name, index) => ({
+      wallet_id: `wallet_round_trip_${index}`,
+      name,
+      status: "available",
+      active: index === 0,
+      selection_epoch: 1,
+      authorization_status: index === 0 ? "active" : "inactive",
+    })),
+    unregistered_local_wallets: [],
+    local_inventory_status: "ready",
+    counts: {
+      registered: walletNames.length,
+      available: walletNames.length,
+      archived: 0,
+      unregistered_local: 0,
+      adoptable_local: 0,
+    },
+  });
+  const baseTree = await runtime.walletTree();
+  const profileTemplate = baseTree.profiles[0]!;
+  const profilePolicy = profileTemplate.policy!;
+  runtime.walletTree = async () => ({
+    ...baseTree,
+    profiles: walletNames.map((shortName, index) => ({
+      ...profileTemplate,
+      shortName,
+      active: index === 0,
+      policy: {
+        ...profilePolicy,
+        freshness: index === 0 ? "current" as const : "last_known" as const,
+      },
+    })),
+  });
+  runtime.selectWallet = async ({ walletId }) => {
+    const index = Number(walletId.replace("wallet_round_trip_", ""));
+    return {
+      wallet: {
+        wallet_id: walletId,
+        name: walletNames[index],
+        selection_epoch: 1,
+      },
+      changed: false,
+      setup_phase: "private_ready",
+      authorization_required: false,
+      authorization_status: "active",
+    };
+  };
+
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client(
+    { name: "wallet-name-round-trip-test", version: "1.0.0" },
+  ));
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+
+  const list = await client.callTool({
+    name: "wallet_list_saved_profiles",
+    arguments: {},
+  });
+  const listedNames = ((list.structuredContent as {
+    data: { wallets: Array<{ name: string; status: string }> };
+  }).data.wallets)
+    .filter((wallet) => wallet.status === "available")
+    .map((wallet) => wallet.name);
+  const tree = await client.callTool({ name: "wallet_get_tree", arguments: {} });
+  const treeNames = ((tree.structuredContent as {
+    data: { profiles: Array<{ short_name: string }> };
+  }).data.profiles).map((profile) => profile.short_name);
+  assert.deepEqual(listedNames, [...walletNames]);
+  assert.deepEqual(treeNames, listedNames);
+
+  const resolvedName = (response: CallToolResult): string | undefined => {
+    const structured = response.structuredContent as {
+      code: string;
+      data: {
+        wallet_name?: string;
+        wallet?: { name?: string };
+      };
+    };
+    return structured.data.wallet_name ?? structured.data.wallet?.name;
+  };
+  for (const name of treeNames) {
+    const response = await client.callTool({
+      name: "wallet_preview_saved_profile_load",
+      arguments: { wallet_name: name },
+    });
+    assert.equal(resolvedName(response), name, name);
+  }
+
+  for (const reference of [
+    "agent-boost",
+    "AGENT-BOOST",
+    "\"agent-boost\"",
+    "\u201cagent-boost\u201d",
+    "\uFF41\uFF47\uFF45\uFF4E\uFF54\uFF0D\uFF42\uFF4F\uFF4F\uFF53\uFF54",
+    "my saved wallet agent-boost",
+  ]) {
+    const response = await client.callTool({
+      name: "wallet_preview_saved_profile_load",
+      arguments: { wallet_name: reference },
+    });
+    assert.equal(resolvedName(response), "agent-boost", reference);
+  }
+
+  const longExact = await client.callTool({
+    name: "wallet_preview_saved_profile_load",
+    arguments: { wallet_name: "agent-boost-eac63c72e6a7a0d2" },
+  });
+  assert.equal(resolvedName(longExact), "agent-boost-eac63c72e6a7a0d2");
+
+  const normalized = await client.callTool({
+    name: "wallet_preview_saved_profile_load",
+    arguments: { wallet_name: "agent boost" },
+  });
+  assert.equal(resolvedName(normalized), "agent-boost");
+
+  for (const reference of ["agent", "missing-wallet", "agent-boost-extra"]) {
+    const missing = await client.callTool({
+      name: "wallet_preview_saved_profile_load",
+      arguments: { wallet_name: reference },
+    });
+    assert.equal(
+      (missing.structuredContent as { code: string }).code,
+      "WALLET_PROFILE_NOT_FOUND",
+      reference,
+    );
+  }
+});
+
+test("saved-wallet normalized references fail closed when truly ambiguous", async (t) => {
+  const runtime = fakeRuntime();
+  const baseListWallets = runtime.listWallets.bind(runtime);
+  runtime.listWallets = async () => {
+    const listing = await baseListWallets();
+    return {
+      ...listing,
+      wallets: [
+        ...(Array.isArray(listing.wallets) ? listing.wallets : []),
+        {
+          wallet_id: "wallet_ambiguous_hyphen_1234",
+          name: "agent_boost",
+          status: "available",
+          active: false,
+          selection_epoch: 1,
+          authorization_status: "inactive",
+        },
+        {
+          wallet_id: "wallet_uppercase_vault_1234",
+          name: "Vault",
+          status: "available",
+          active: false,
+          selection_epoch: 1,
+          authorization_status: "inactive",
+        },
+        {
+          wallet_id: "wallet_lowercase_vault_1234",
+          name: "vault",
+          status: "available",
+          active: false,
+          selection_epoch: 1,
+          authorization_status: "inactive",
+        },
+      ],
+    };
+  };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client(
+    { name: "wallet-normalized-ambiguity-test", version: "1.0.0" },
+  ));
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+
+  const exact = await client.callTool({
+    name: "wallet_preview_saved_profile_load",
+    arguments: { wallet_name: "agent-boost" },
+  });
+  assert.equal(
+    (exact.structuredContent as { code: string }).code,
+    "WALLET_SELECTED",
+  );
+  const ambiguous = await client.callTool({
+    name: "wallet_preview_saved_profile_load",
+    arguments: { wallet_name: "agent boost" },
+  });
+  assert.equal(
+    (ambiguous.structuredContent as { code: string }).code,
+    "WALLET_PROFILE_AMBIGUOUS",
+  );
+  assert.deepEqual(
+    (ambiguous.structuredContent as {
+      data: { matching_wallet_names: string[] };
+    }).data.matching_wallet_names,
+    ["agent-boost", "agent_boost"],
+  );
+
+  for (const exactName of ["Vault", "vault"]) {
+    const exactCase = await client.callTool({
+      name: "wallet_preview_saved_profile_load",
+      arguments: { wallet_name: exactName },
+    });
+    assert.equal(
+      (exactCase.structuredContent as { code: string }).code,
+      "WALLET_SELECT_CONFIRMATION_REQUIRED",
+      exactName,
+    );
+    assert.equal(
+      (exactCase.structuredContent as { data: { wallet_name: string } })
+        .data.wallet_name,
+      exactName,
+    );
+  }
+
+  for (const normalizedReference of ["VAULT", "\"Vault\"", "\uFF36\uFF41\uFF55\uFF4C\uFF54"]) {
+    const normalizedAmbiguity = await client.callTool({
+      name: "wallet_preview_saved_profile_load",
+      arguments: { wallet_name: normalizedReference },
+    });
+    assert.equal(
+      (normalizedAmbiguity.structuredContent as { code: string }).code,
+      "WALLET_PROFILE_AMBIGUOUS",
+      normalizedReference,
+    );
+    assert.deepEqual(
+      (normalizedAmbiguity.structuredContent as {
+        data: { matching_wallet_names: string[] };
+      }).data.matching_wallet_names,
+      ["Vault", "vault"],
+    );
+  }
+
+  const equivalentAliases = await client.callTool({
+    name: "wallet_select",
+    arguments: {
+      wallet_name: "SAVED-WALLET",
+      name: "saved-wallet",
+    },
+  });
+  assert.equal(
+    (equivalentAliases.structuredContent as { code: string }).code,
+    "WALLET_SELECT_CONFIRMATION_REQUIRED",
+  );
+  assert.equal(
+    (equivalentAliases.structuredContent as { data: { wallet_name: string } })
+      .data.wallet_name,
+    "saved-wallet",
+  );
+
+  const conflictingExactAliases = await client.callTool({
+    name: "wallet_select",
+    arguments: { wallet_name: "Vault", name: "vault" },
+  });
+  assert.equal(
+    (conflictingExactAliases.structuredContent as { code: string }).code,
+    "WALLET_PROFILE_REFERENCE_CONFLICT",
+  );
+
+  const conflictingMissingAliases = await client.callTool({
+    name: "wallet_select",
+    arguments: { wallet_name: "missing-one", name: "missing-two" },
+  });
+  assert.equal(
+    (conflictingMissingAliases.structuredContent as { code: string }).code,
+    "WALLET_PROFILE_REFERENCE_CONFLICT",
+  );
+
+  const ambiguousAlias = await client.callTool({
+    name: "wallet_select",
+    arguments: { wallet_name: "VAULT", name: "vault" },
+  });
+  assert.equal(
+    (ambiguousAlias.structuredContent as { code: string }).code,
+    "WALLET_PROFILE_AMBIGUOUS",
+  );
+});
+
 test("saved-wallet load resolves generic wording in one read-only call or asks with friendly names", async (t) => {
   const callPreview = async (
     runtime: AgentBoostRuntime,

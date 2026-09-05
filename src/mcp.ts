@@ -3559,13 +3559,6 @@ function resolveWalletReference(
 ): { walletId: string; walletName: string; active: boolean } {
   const nameReferences = [input.wallet_name, input.name]
     .filter((value): value is string => value !== undefined);
-  if (new Set(nameReferences).size > 1) {
-    throw new AgentBoostRequestError(
-      "WALLET_PROFILE_REFERENCE_CONFLICT",
-      "More than one different saved-wallet name was supplied. Use one friendly name.",
-    );
-  }
-  const nameReference = nameReferences[0];
   const wallets = (Array.isArray(listing.wallets) ? listing.wallets : []).flatMap((value) => {
     const wallet = asRecord(value);
     const walletId = stringField(wallet, "wallet_id");
@@ -3574,9 +3567,18 @@ function resolveWalletReference(
       ? [{ walletId, walletName, active: wallet.active === true }]
       : [];
   });
-  const compatibleWithName = (
-    wallet: { walletId: string; walletName: string; active: boolean },
-  ): boolean => nameReference === undefined || wallet.walletName === nameReference;
+  if (
+    new Set(nameReferences.map(normalizedSavedWalletLiteral)).size > 1
+  ) {
+    throw walletProfileReferenceConflict();
+  }
+  const namedWallets = nameReferences.map((reference) =>
+    resolveFriendlyWalletReference(wallets, reference)
+  );
+  if (new Set(namedWallets.map((wallet) => wallet.walletId)).size > 1) {
+    throw walletProfileReferenceConflict();
+  }
+  const namedWallet = namedWallets[0];
 
   // `wallet_id` is a backward-compatible union of an internal ID and a
   // friendly name. Prefer an exact internal-ID match, then fall back to the
@@ -3584,35 +3586,43 @@ function resolveWalletReference(
   // may legitimately begin with it.
   if (input.wallet_id !== undefined) {
     const rawIdMatches = wallets.filter((wallet) => wallet.walletId === input.wallet_id);
-    const idMatches = rawIdMatches.filter(compatibleWithName);
-    if (rawIdMatches.length > 0 && idMatches.length === 0) {
+    if (rawIdMatches.length > 1) {
+      throw ambiguousWalletProfileReference(rawIdMatches);
+    }
+    const idWallet = rawIdMatches[0] ??
+      resolveFriendlyWalletReference(wallets, input.wallet_id);
+    if (namedWallet && namedWallet.walletId !== idWallet.walletId) {
       throw walletProfileReferenceConflict();
     }
-    if (idMatches.length === 1) return idMatches[0]!;
-    if (idMatches.length > 1) throw ambiguousWalletProfileReference(idMatches);
-    const rawFriendlyMatches = wallets.filter((wallet) => wallet.walletName === input.wallet_id);
-    const friendlyMatches = rawFriendlyMatches.filter(compatibleWithName);
-    if (rawFriendlyMatches.length > 0 && friendlyMatches.length === 0) {
-      throw walletProfileReferenceConflict();
-    }
-    if (friendlyMatches.length === 1) return friendlyMatches[0]!;
-    if (friendlyMatches.length > 1) throw ambiguousWalletProfileReference(friendlyMatches);
-    throw walletProfileNotFound();
+    return idWallet;
   }
 
-  const matches = wallets.filter(compatibleWithName);
-  if (matches.length === 1) return matches[0]!;
-  if (matches.length > 1) throw ambiguousWalletProfileReference(matches);
-  if (nameReference === undefined) throw walletProfileNotFound();
+  if (namedWallet) return namedWallet;
+  throw walletProfileNotFound();
+}
 
-  const caseFolded = nameReference.trim().toLowerCase();
-  const caseMatches = wallets.filter(
-    (wallet) => wallet.walletName.toLowerCase() === caseFolded,
+function resolveFriendlyWalletReference(
+  wallets: Array<{ walletId: string; walletName: string; active: boolean }>,
+  reference: string,
+): { walletId: string; walletName: string; active: boolean } {
+  const rawExactMatches = wallets.filter(
+    (wallet) => wallet.walletName === reference,
   );
-  if (caseMatches.length === 1) return caseMatches[0]!;
-  if (caseMatches.length > 1) throw ambiguousWalletProfileReference(caseMatches);
+  if (rawExactMatches.length === 1) return rawExactMatches[0]!;
+  if (rawExactMatches.length > 1) {
+    throw ambiguousWalletProfileReference(rawExactMatches);
+  }
 
-  const referenceKeys = humanWalletReferenceKeys(nameReference);
+  const normalizedLiteral = normalizedSavedWalletLiteral(reference);
+  const normalizedLiteralMatches = wallets.filter(
+    (wallet) => normalizedSavedWalletLiteral(wallet.walletName) === normalizedLiteral,
+  );
+  if (normalizedLiteralMatches.length === 1) return normalizedLiteralMatches[0]!;
+  if (normalizedLiteralMatches.length > 1) {
+    throw ambiguousWalletProfileReference(normalizedLiteralMatches);
+  }
+
+  const referenceKeys = humanWalletReferenceKeys(reference, true);
   const normalizedMatches = wallets.filter((wallet) => {
     const walletKeys = humanWalletReferenceKeys(wallet.walletName);
     return [...referenceKeys].some((key) => walletKeys.has(key));
@@ -3622,6 +3632,21 @@ function resolveWalletReference(
     throw ambiguousWalletProfileReference(normalizedMatches);
   }
   throw walletProfileNotFound();
+}
+
+function normalizedSavedWalletLiteral(reference: string): string {
+  const normalized = reference.normalize("NFKC").trim();
+  const quotePairs = new Map([
+    ['"', '"'],
+    ["'", "'"],
+    ["\u2018", "\u2019"],
+    ["\u201c", "\u201d"],
+  ]);
+  const closing = quotePairs.get(normalized[0] ?? "");
+  const unquoted = closing && normalized.endsWith(closing)
+    ? normalized.slice(1, -1).trim()
+    : normalized;
+  return unquoted.toLowerCase();
 }
 
 function walletProfileReferenceConflict(): AgentBoostRequestError {
@@ -3778,11 +3803,16 @@ function resolveSavedWalletLoadPreviewReference(
   }
 }
 
-function humanWalletReferenceKeys(reference: string): Set<string> {
+function humanWalletReferenceKeys(
+  reference: string,
+  naturalWrapper = false,
+): Set<string> {
   const tokens = reference
+    .normalize("NFKC")
     .trim()
     .toLowerCase()
     .split(/[\s_-]+/u)
+    .map((token) => token.replace(/^["'\u2018\u201c]+|["'\u2019\u201d]+$/gu, ""))
     .filter(Boolean);
   const variants: string[][] = [];
   const queue: string[][] = [tokens];
@@ -3794,6 +3824,13 @@ function humanWalletReferenceKeys(reference: string): Set<string> {
     seen.add(key);
     variants.push(variant);
     if (variant[0] === "my" || variant[0] === "the") queue.push(variant.slice(1));
+    if (
+      naturalWrapper &&
+      ["saved", "existing", "previous", "old"].includes(variant[0] ?? "") &&
+      ["wallet", "profile", "account"].includes(variant[1] ?? "")
+    ) {
+      queue.push(variant.slice(2));
+    }
     if (["wallet", "profile", "account"].includes(variant.at(-1) ?? "")) {
       queue.push(variant.slice(0, -1));
     }
@@ -3802,6 +3839,12 @@ function humanWalletReferenceKeys(reference: string): Set<string> {
       (variant[1] === "called" || variant[1] === "named")
     ) {
       queue.push(variant.slice(2));
+    }
+    if (
+      naturalWrapper &&
+      ["wallet", "profile", "account"].includes(variant[0] ?? "")
+    ) {
+      queue.push(variant.slice(1));
     }
     if (variant[0] === "called" || variant[0] === "named") {
       queue.push(variant.slice(1));
