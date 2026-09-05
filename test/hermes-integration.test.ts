@@ -1214,6 +1214,60 @@ test("migrates a prior managed executable path without leaving duplicate hooks o
   );
 });
 
+test("migrates the exact prior managed MCP timeout", async () => {
+  const fixture = await createFixture();
+  const executablePath = await realpath(fixture.executablePath);
+  const previousServer = createHermesServerConfig(executablePath) as {
+    timeout: number;
+  };
+  previousServer.timeout = 180;
+  await writeFile(
+    fixture.configPath,
+    `mcp_servers:\n  agent-boost: ${JSON.stringify(previousServer)}\n`,
+    { mode: 0o600 },
+  );
+
+  const result = await installHermesIntegration({
+    executablePath: fixture.executablePath,
+    runCommand: successfulRunner(fixture.configPath, []),
+  });
+  const config = parse(await readFile(fixture.configPath, "utf8")) as {
+    mcp_servers: Record<string, { timeout: number }>;
+  };
+
+  assert.equal(result.configChanged, true);
+  assert.equal(config.mcp_servers["agent-boost"]?.timeout, 360);
+  assert.deepEqual(
+    config.mcp_servers["agent-boost"],
+    createHermesServerConfig(result.executablePath),
+  );
+});
+
+test("refuses to replace customized MCP timeouts", async (t) => {
+  for (const timeout of [179, 181]) {
+    await t.test(String(timeout), async () => {
+      const fixture = await createFixture();
+      const server = createHermesServerConfig(
+        await realpath(fixture.executablePath),
+      ) as { timeout: number };
+      server.timeout = timeout;
+      const original = `mcp_servers:\n  agent-boost: ${JSON.stringify(server)}\n`;
+      await writeFile(fixture.configPath, original, { mode: 0o600 });
+
+      await assert.rejects(
+        installHermesIntegration({
+          executablePath: fixture.executablePath,
+          runCommand: successfulRunner(fixture.configPath, []),
+        }),
+        (error: unknown) =>
+          error instanceof HermesInstallError &&
+          error.code === "MCP_SERVER_CONFLICT",
+      );
+      assert.equal(await readFile(fixture.configPath, "utf8"), original);
+    });
+  }
+});
+
 test("upgrades every legacy Hermes tool name from the full prior allowlist", async () => {
   const legacyUpgrades: ReadonlyArray<readonly [string, readonly string[]]> = [
     ["wallet_get_saved_profiles", ["wallet_list_saved_profiles"]],

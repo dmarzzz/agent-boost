@@ -23,6 +23,7 @@ export const HERMES_SERVER_NAME = "agent-boost";
 // result. Keep the bridge bounded, but leave enough room for that first-run
 // path so Hermes does not abandon an operation that completed successfully.
 export const HERMES_MCP_TIMEOUT_SECONDS = 360;
+const HERMES_LEGACY_MCP_TIMEOUT_SECONDS = 180;
 export const HERMES_MCP_DISCOVERY_TIMEOUT_SECONDS = 60;
 export const HERMES_TURN_GATE_PRE_MATCHER = ".*";
 export const HERMES_TURN_GATE_POST_MATCHER =
@@ -1293,10 +1294,16 @@ function isSafeAgentBoostUpgrade(existing: unknown, desired: unknown): boolean {
   ) {
     return false;
   }
+  const normalizedTimeout =
+    existing.timeout === HERMES_LEGACY_MCP_TIMEOUT_SECONDS &&
+    desired.timeout === HERMES_MCP_TIMEOUT_SECONDS
+      ? desired.timeout
+      : existing.timeout;
   return deepEqual(
     {
       ...existing,
       command: desired.command,
+      timeout: normalizedTimeout,
       tools: { ...existingTools, include: desiredInclude },
     },
     desired,
