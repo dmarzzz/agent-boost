@@ -3117,10 +3117,11 @@ function routedTransferDirective(
     return {
       action: "block",
       message:
-        "The private-balance policy request is missing one exact child target or " +
-        "a concrete setting, or it requested an unsupported bulk change. No Agent " +
-        "Boost tool may be called yet. Ask only for the missing friendly name, " +
-        "parent wallet, or setting; do not invent a target or apply a bulk change.",
+        "The private-balance policy request is missing one exact child target, a " +
+        "concrete setting, or an explicit read/change instruction, or it requested " +
+        "an unsupported bulk change. No Agent Boost tool may be called yet. Ask only " +
+        "for the missing friendly name, parent wallet, setting, or instruction; do " +
+        "not invent a target or apply a bulk change.",
     };
   }
   if (routed.tool === "$clarify_wallet_graph_create") {
@@ -3136,9 +3137,10 @@ function routedTransferDirective(
     return {
       action: "block",
       message:
-        "The user asked to change a wallet policy but did not specify a setting. " +
-        "No Agent Boost tool may be called yet. Ask which send count, per-send limit, " +
-        "total limit, expiry, or enabled state they want to change.",
+        "The wallet-policy request did not specify a setting together with an " +
+        "explicit instruction to read or change it. No Agent Boost tool may be " +
+        "called yet. Ask for the missing instruction or which send count, per-send " +
+        "limit, total limit, expiry, or enabled state they want to change.",
     };
   }
   if (tool !== routed.tool) {
@@ -4202,13 +4204,17 @@ function privateBalancePolicyTargetArguments(
   const reservedChildNames = new Set([
     "a",
     "an",
+    "allow",
     "change",
     "check",
     "current",
+    "disable",
     "edit",
+    "enable",
     "get",
     "modify",
     "my",
+    "permit",
     "read",
     "set",
     "show",
@@ -4476,6 +4482,156 @@ function hasExplicitPrivateBalancePolicyScope(
   return new RegExp(`\\b${wallet}\\s*\\/\\s*${child}\\b`, "iu").test(compact);
 }
 
+function privateBalancePolicySignalText(
+  normalized: string,
+  target: StableBinding | undefined,
+): string {
+  const childCue =
+    "(?:private[- ]balance|private\\s+(?:pocket|subwallet)|shielded\\s+(?:balance|pocket)|pocket|child)";
+  const policyCue = "(?:polic(?:y|ies)|permission|limits?|guardrails?)";
+  const friendlyName = "[a-z0-9][a-z0-9._-]{0,63}";
+  let actionText = normalized
+    .replace(
+      /\b(?:wallet[- ]controlled\s+)?public[- ]change(?:[- ]+(?:accounts?|wallets?|balances?|funds?))?\b/gu,
+      " ",
+    )
+    .replace(
+      new RegExp(
+        `\\b(${childCue}\\s+(?:named|called)\\s+)${friendlyName}(?![a-z0-9._-])`,
+        "gu",
+      ),
+      "$1friendly-name",
+    )
+    .replace(
+      new RegExp(
+        `\\b(${policyCue}\\s+(?:for|of|on)\\s+(?:(?:my|the)\\s+)?)${friendlyName}(?=\\s+${childCue}\\b)`,
+        "gu",
+      ),
+      "$1friendly-name",
+    )
+    .replace(
+      new RegExp(
+        `\\b(${policyCue}\\s+(?:for|of|on)\\s+(?:(?:my|the)\\s+)?)${friendlyName}\\s*\\/\\s*${friendlyName}(?![a-z0-9._-])`,
+        "gu",
+      ),
+      "$1friendly-wallet/friendly-name",
+    )
+    .replace(
+      new RegExp(
+        `(?<![a-z0-9._-])${friendlyName}\\s*\\/\\s*${friendlyName}(?=(?:['’]s)?\\s+${policyCue}\\b)`,
+        "gu",
+      ),
+      "friendly-wallet/friendly-name",
+    );
+
+  const childName = typeof target?.private_balance_name === "string"
+    ? target.private_balance_name.toLowerCase()
+    : undefined;
+  if (childName) {
+    const child = regularExpressionLiteral(childName);
+    actionText = actionText
+      .replace(
+        new RegExp(
+          `(\\b${childCue}\\s+(?:(?:named|called)\\s+)?)${child}(?![a-z0-9._-])`,
+          "gu",
+        ),
+        "$1friendly-name",
+      )
+      .replace(
+        new RegExp(
+          `(\\b${policyCue}\\s+(?:for|of|on)\\s+(?:(?:my|the)\\s+)?)${child}(?=\\s+(?:under|inside|within|in)\\b)`,
+          "gu",
+        ),
+        "$1friendly-name",
+      )
+      .replace(
+        new RegExp(
+          `(\\b(?:change|update|edit|set|modify|allow|permit|enable|disable|show|list|display|view|get|check|read)\\b[^.!?]{0,64}?)${child}(?=\\s+${childCue}\\b)`,
+          "gu",
+        ),
+        "$1friendly-name",
+      );
+  }
+
+  const walletName = typeof target?.wallet_name === "string"
+    ? target.wallet_name.toLowerCase()
+    : undefined;
+  if (walletName) {
+    const wallet = regularExpressionLiteral(walletName);
+    const parentCue = "(?:under|inside|within|in|for|of|on)";
+    actionText = actionText
+      .replace(
+        new RegExp(
+          `(\\b${parentCue}\\s+(?:(?:my|the)\\s+)?(?:wallet|profile)\\s+)${wallet}(?![a-z0-9._-])`,
+          "gu",
+        ),
+        "$1friendly-wallet",
+      )
+      .replace(
+        new RegExp(
+          `(\\b${parentCue}\\s+(?:(?:my|the)\\s+)?)${wallet}(?=\\s+(?:wallet|profile)\\b)`,
+          "gu",
+        ),
+        "$1friendly-wallet",
+      )
+      .replace(
+        new RegExp(
+          `(\\b(?:under|inside|within|in|for)\\s+(?:(?:my|the)\\s+)?)${wallet}(?=\\s+(?:to|with|and)\\b|$)`,
+          "gu",
+        ),
+        "$1friendly-wallet",
+      );
+  }
+  return actionText;
+}
+
+function walletPolicySignalText(
+  normalized: string,
+  walletName: string | undefined,
+): string {
+  if (!walletName) return normalized;
+  const wallet = regularExpressionLiteral(walletName.toLowerCase());
+  const actionCue = "(?:change|update|edit|set|modify|show|view|get|check)";
+  const walletCue = "(?:wallet|profile)";
+  const policyCue = "(?:polic(?:y|ies)|permission|limits?|guardrails?)";
+  return normalized
+    .replace(
+      new RegExp(
+        `(\\b${actionCue}\\s+(?:(?:my|the)\\s+)?${walletCue}\\s+)${wallet}(?=(?:['’]s)?\\s+${policyCue}\\b)`,
+        "gu",
+      ),
+      "$1friendly-wallet",
+    )
+    .replace(
+      new RegExp(
+        `(\\b${actionCue}\\s+(?:(?:my|the)\\s+)?${walletCue}\\s+)${wallet}(?=\\s+(?:to|with)\\b)`,
+        "gu",
+      ),
+      "$1friendly-wallet",
+    )
+    .replace(
+      new RegExp(
+        `(\\b${actionCue}\\s+(?:(?:my|the)\\s+)?)${wallet}(?=\\s+${walletCue}(?:['’]s)?\\s+${policyCue}\\b)`,
+        "gu",
+      ),
+      "$1friendly-wallet",
+    )
+    .replace(
+      new RegExp(
+        `(\\b${actionCue}\\s+(?:(?:my|the)\\s+)?)${wallet}(?=(?:['’]s)?\\s+${policyCue}\\b)`,
+        "gu",
+      ),
+      "$1friendly-wallet",
+    )
+    .replace(
+      new RegExp(
+        `(\\b${policyCue}\\s+(?:for|of|on)\\s+(?:(?:my|the)\\s+)?(?:${walletCue}\\s+)?)${wallet}(?=(?:['’]s)?(?:\\s+${walletCue})?\\b)`,
+        "gu",
+      ),
+      "$1friendly-wallet",
+    );
+}
+
 function normalizedPolicyAmount(value: string | undefined): string | undefined {
   return value === undefined ? undefined : value.startsWith(".") ? `0${value}` : value;
 }
@@ -4540,7 +4696,11 @@ function walletPolicySettings(message: string): StableBinding {
 function privateBalancePolicyArguments(message: string): StableBinding | undefined {
   const target = privateBalancePolicyTargetArguments(message);
   if (!target) return undefined;
-  const binding: StableBinding = { ...target, ...walletPolicySettings(message) };
+  const signalText = privateBalancePolicySignalText(
+    compactNaturalRequest(message).toLowerCase(),
+    target,
+  );
+  const binding: StableBinding = { ...target, ...walletPolicySettings(signalText) };
   return Object.keys(binding).some((key) =>
     key !== "wallet_name" && key !== "private_balance_name"
   )
@@ -4577,9 +4737,13 @@ function walletPolicyTarget(message: string): string | undefined {
 
 function walletPolicyArguments(message: string): StableBinding | undefined {
   const walletName = walletPolicyTarget(message);
+  const signalText = walletPolicySignalText(
+    compactNaturalRequest(message).toLowerCase(),
+    walletName,
+  );
   const binding: StableBinding = {
     ...(walletName === undefined ? {} : { wallet_name: walletName }),
-    ...walletPolicySettings(message),
+    ...walletPolicySettings(signalText),
   };
   return Object.keys(binding).some((key) => key !== "wallet_name") ? binding : undefined;
 }
@@ -4890,9 +5054,18 @@ function routingContext(message: unknown): string | undefined {
   const privateBalancePolicy = privateBalanceIntent &&
     /\b(?:polic(?:y|ies)|permission|limits?|guardrails?|per[- ]send|sends?|payments?|expir(?:e|es|y)|enabl(?:e|ed)|disabl(?:e|ed))\b/u
       .test(normalized);
+  const privateBalancePolicyActionText = privateBalancePolicySignalText(
+    normalized,
+    parsedPrivateBalancePolicyTarget,
+  );
+  const parsedPrivateBalancePolicySettings = walletPolicySettings(
+    privateBalancePolicyActionText,
+  );
+  const hasPrivateBalancePolicySettings =
+    Object.keys(parsedPrivateBalancePolicySettings).length > 0;
   const privateBalancePolicyMutation = privateBalancePolicy &&
     /\b(?:change|update|edit|set|modify|allow|permit|enable|disable)\b/u
-      .test(normalized);
+      .test(privateBalancePolicyActionText);
   const privateBalancePolicyRead = privateBalancePolicy &&
     /\b(?:show|list|display|view|get|check|what\s+(?:is|are)|what's|current|read)\b/u
       .test(normalized);
@@ -4988,6 +5161,9 @@ function routingContext(message: unknown): string | undefined {
     return "Agent Boost routing for the actual user request: call wallet_get_private_balance_policy directly for the named child pocket and optional parent wallet. Do not substitute the parent wallet policy or update anything." +
       ` Use exactly these routed arguments: ${JSON.stringify(argumentsJson)}.`;
   }
+  if (privateBalancePolicy && hasPrivateBalancePolicySettings) {
+    return "Agent Boost routing for the actual user request: ask one concise clarification for which private balance policy should change. The request includes policy-shaped settings but no syntactically distinct instruction to read or change a policy. Do not call any Agent Boost tool in this turn.";
+  }
 
   const privateBalanceFunding = privateBalanceIntent &&
     /\b(?:fund|funding|top[- ]?up|deposit|rebalance|move)\b/u.test(normalized);
@@ -5034,15 +5210,25 @@ function routingContext(message: unknown): string | undefined {
   ) {
     return "Agent Boost routing for the actual user request: call wallet_get_tree directly and return its rendered wallet tree exactly. Do not call saved-wallet inventory, context, or setup first.";
   }
+  const parsedWalletPolicyTarget = walletPolicyTarget(message);
+  const walletPolicyActionText = walletPolicySignalText(
+    normalized,
+    parsedWalletPolicyTarget,
+  );
+  const parsedWalletPolicySettings = walletPolicySettings(walletPolicyActionText);
+  const hasWalletPolicySettings = Object.keys(parsedWalletPolicySettings).length > 0;
+  const hasWalletPolicyScope = parsedWalletPolicyTarget !== undefined ||
+    /\b(?:wallet|profile)\b[^.!?]{0,48}\bpolic(?:y|ies)\b|\bpolic(?:y|ies)\b[^.!?]{0,48}\b(?:wallet|profile)\b/u
+      .test(normalized);
   const walletLimitMutation =
     /\b(?:change|update|edit|set|modify)\b[^.!?]{0,48}\b(?:wallet|permission|limits?|guardrails?)\b[^.!?]{0,64}\b(?:sends?|payments?|per[- ]send|limits?|expir(?:e|es|y))\b/u
-      .test(normalized) ||
+      .test(walletPolicyActionText) ||
     /\b(?:allow|permit)\b[^.!?]{0,64}\b(?:sends?|payments?)\b[^.!?]{0,48}\b(?:wallet|sepolia|eth)\b/u
-      .test(normalized);
+      .test(walletPolicyActionText);
   if (
     walletLimitMutation ||
     /\b(?:change|update|edit|set|modify)\b[^.!?]{0,48}\bpolic(?:y|ies)\b|\bpolic(?:y|ies)\b[^.!?]{0,48}\b(?:change|update|edit|set|modify)\b/u
-      .test(normalized)
+      .test(walletPolicyActionText)
   ) {
     const argumentsJson = walletPolicyArguments(message);
     if (!argumentsJson) {
@@ -5052,10 +5238,14 @@ function routingContext(message: unknown): string | undefined {
       `${JSON.stringify(argumentsJson)}. Return the preview and end tool use for this assistant turn.`;
   }
   if (/\b(?:show|view|get|check|what is|what's|current)\b[^.!?]{0,48}\bpolic(?:y|ies)\b|\bpolic(?:y|ies)\b[^.!?]{0,32}\b(?:status|settings?|rules?)\b/u.test(normalized)) {
-    const walletName = walletPolicyTarget(message);
     return "Agent Boost routing for the actual user request: call wallet_get_policy directly" +
-      (walletName ? ` with exactly these routed arguments: ${JSON.stringify({ wallet_name: walletName })}` : " with no arguments") +
+      (parsedWalletPolicyTarget
+        ? ` with exactly these routed arguments: ${JSON.stringify({ wallet_name: parsedWalletPolicyTarget })}`
+        : " with no arguments") +
       ". Do not update the policy unless the user explicitly requested a change.";
+  }
+  if (hasWalletPolicyScope && hasWalletPolicySettings) {
+    return "Agent Boost routing for the actual user request: ask one concise clarification for the wallet-policy setting request. The message includes policy-shaped settings but no syntactically distinct instruction to read or change a policy. Do not call any Agent Boost tool in this turn.";
   }
   return undefined;
 }

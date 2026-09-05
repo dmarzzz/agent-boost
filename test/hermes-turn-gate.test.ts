@@ -2291,6 +2291,22 @@ test("pre-LLM routing context selects exact canonical tools for explicit intents
       "wallet_get_tree",
     ],
     [
+      "Show me my wallet tree with every saved wallet, private balance, public change balance, and policy. Use friendly names only—no addresses or internal IDs.",
+      "wallet_get_tree",
+    ],
+    [
+      "Show me my wallet tree—with every saved wallet, private balance, public-change balance, and policy; friendly names only, please!",
+      "wallet_get_tree",
+    ],
+    [
+      "Display the whole wallet hierarchy (saved wallets, private balances, public change balances, and policies)—no IDs.",
+      "wallet_get_tree",
+    ],
+    [
+      "List all wallets, private balances, public change balances, and policies.",
+      "wallet_get_tree",
+    ],
+    [
       "Display every wallet and private balance with readiness and policies.",
       "wallet_get_tree",
     ],
@@ -2320,11 +2336,19 @@ test("pre-LLM routing context selects exact canonical tools for explicit intents
       "ask one concise clarification for which private balance policy",
     ],
     [
+      "Show my tree and change every private balance policy to 2 sends.",
+      "ask one concise clarification for which private balance policy",
+    ],
+    [
       "Show private-balance policies.",
       "ask one concise clarification for which private balance policy",
     ],
     [
       "show the current policy for private balance named and",
+      "wallet_get_private_balance_policy",
+    ],
+    [
+      "Show the policy for private balance named change.",
       "wallet_get_private_balance_policy",
     ],
     ["list my saved wallets", "wallet_list_saved_profiles"],
@@ -2408,6 +2432,729 @@ test("pre-LLM routing context selects exact canonical tools for explicit intents
     assert.match(genericLoad.context, /\{"wallet_name":"my Old Wallet"\}/u);
     assert.match(genericLoad.context, /exactly once/u);
     assert.match(genericLoad.context, /do not call wallet_list_saved_profiles first/u);
+  }
+});
+
+test("policy routing distinguishes verb-like friendly names from actions", async (t) => {
+  const stateDirectory = await temporaryState(t);
+  const options = { stateDirectory, now: () => NOW };
+  const verbLikeNames = [
+    "change",
+    "enable",
+    "disable",
+    "update",
+    "edit",
+    "set",
+    "modify",
+    "allow",
+    "permit",
+  ];
+
+  for (const [nameIndex, name] of verbLikeNames.entries()) {
+    for (const [cueIndex, cue] of ["named", "called"].entries()) {
+      const route = await handleHermesTurnGatePayload(preLlm({
+        session: `verb-name-read-${nameIndex}-${cueIndex}`,
+        turn: "turn-1",
+        userMessage: `Show the policy for private balance ${cue} ${name}.`,
+      }), options);
+      assert.ok("context" in route, name);
+      if ("context" in route) {
+        assert.match(route.context, /wallet_get_private_balance_policy/u, name);
+        assert.match(
+          route.context,
+          new RegExp(`"private_balance_name":"${name}"`, "u"),
+          name,
+        );
+        assert.doesNotMatch(
+          route.context,
+          /wallet_preview_private_balance_policy_update/u,
+          name,
+        );
+      }
+    }
+
+    const mutationSession = `verb-name-mutation-${nameIndex}`;
+    const mutation = await handleHermesTurnGatePayload(preLlm({
+      session: mutationSession,
+      turn: "turn-1",
+      userMessage:
+        `Change the policy for private balance named ${name} to 2 sends.`,
+    }), options);
+    assert.ok("context" in mutation, name);
+    if ("context" in mutation) {
+      assert.match(
+        mutation.context,
+        /wallet_preview_private_balance_policy_update/u,
+        name,
+      );
+      assert.match(
+        mutation.context,
+        new RegExp(`"private_balance_name":"${name}"`, "u"),
+        name,
+      );
+      assert.match(mutation.context, /"max_payments":2/u, name);
+    }
+    assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+      session: mutationSession,
+      turn: "turn-1",
+      tool: "wallet_preview_private_balance_policy_update",
+      input: {},
+    }), options), {
+      action: "modify",
+      args: { private_balance_name: name, max_payments: 2 },
+    }, name);
+
+    const leadingActionSession = `verb-leading-action-${nameIndex}`;
+    const action = name[0]!.toUpperCase() + name.slice(1);
+    const leadingActionArguments = {
+      private_balance_name: name,
+      max_payments: 3,
+      ...(name === "enable"
+        ? { enabled: true }
+        : name === "disable"
+        ? { enabled: false }
+        : {}),
+    };
+    const leadingAction = await handleHermesTurnGatePayload(preLlm({
+      session: leadingActionSession,
+      turn: "turn-1",
+      userMessage:
+        `${action} the policy for private balance named ${name} to 3 sends.`,
+    }), options);
+    assert.ok("context" in leadingAction, name);
+    if ("context" in leadingAction) {
+      assert.match(
+        leadingAction.context,
+        /wallet_preview_private_balance_policy_update/u,
+        name,
+      );
+      assert.ok(
+        leadingAction.context.includes(JSON.stringify(leadingActionArguments)),
+        leadingAction.context,
+      );
+    }
+    assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+      session: leadingActionSession,
+      turn: "turn-1",
+      tool: "wallet_preview_private_balance_policy_update",
+      input: {},
+    }), options), {
+      action: "modify",
+      args: leadingActionArguments,
+    }, name);
+  }
+
+  const explicitStateMutations = [
+    {
+      message:
+        "Change the policy for private balance named enable to disabled, 2 sends.",
+      arguments: {
+        private_balance_name: "enable",
+        max_payments: 2,
+        enabled: false,
+      },
+    },
+    {
+      message:
+        "Enable the policy for private balance named enable with 2 sends.",
+      arguments: {
+        private_balance_name: "enable",
+        max_payments: 2,
+        enabled: true,
+      },
+    },
+    {
+      message:
+        "Disable the policy for private balance called disable with 2 sends.",
+      arguments: {
+        private_balance_name: "disable",
+        max_payments: 2,
+        enabled: false,
+      },
+    },
+    {
+      message: "Change alpha/enable policy to 2 sends.",
+      arguments: {
+        wallet_name: "alpha",
+        private_balance_name: "enable",
+        max_payments: 2,
+      },
+    },
+  ];
+  for (const [index, fixture] of explicitStateMutations.entries()) {
+    const session = `verb-name-explicit-state-${index}`;
+    const route = await handleHermesTurnGatePayload(preLlm({
+      session,
+      turn: "turn-1",
+      userMessage: fixture.message,
+    }), options);
+    assert.ok("context" in route, fixture.message);
+    if ("context" in route) {
+      assert.match(
+        route.context,
+        /wallet_preview_private_balance_policy_update/u,
+        fixture.message,
+      );
+      assert.ok(
+        route.context.includes(JSON.stringify(fixture.arguments)),
+        route.context,
+      );
+    }
+    assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+      session,
+      turn: "turn-1",
+      tool: "wallet_preview_private_balance_policy_update",
+      input: {},
+    }), options), {
+      action: "modify",
+      args: fixture.arguments,
+    }, fixture.message);
+  }
+
+  const exactGrammarReads = [
+    {
+      message: "Show policy for alpha/enable.",
+      wallet: "alpha",
+      child: "enable",
+    },
+    {
+      message: "Show update/modify policy.",
+      wallet: "update",
+      child: "modify",
+    },
+    {
+      message: "Show the policy for permit under wallet alpha.",
+      wallet: "alpha",
+      child: "permit",
+    },
+    {
+      message: "Show private balance named allow under wallet alpha policy.",
+      wallet: "alpha",
+      child: "allow",
+    },
+  ];
+  for (const [index, fixture] of exactGrammarReads.entries()) {
+    const route = await handleHermesTurnGatePayload(preLlm({
+      session: `verb-name-exact-grammar-${index}`,
+      turn: "turn-1",
+      userMessage: fixture.message,
+    }), options);
+    assert.ok("context" in route, fixture.message);
+    if ("context" in route) {
+      assert.match(
+        route.context,
+        /wallet_get_private_balance_policy/u,
+        fixture.message,
+      );
+      assert.ok(route.context.includes(JSON.stringify({
+        wallet_name: fixture.wallet,
+        private_balance_name: fixture.child,
+      })), route.context);
+    }
+  }
+});
+
+test("implicit private-balance names cannot double as policy actions", async (t) => {
+  const stateDirectory = await temporaryState(t);
+  const options = { stateDirectory, now: () => NOW };
+
+  for (const [fixtureIndex, fixture] of [
+    {
+      message: "Policy for enable private balance to 2 sends.",
+      privateBalanceName: "enable",
+    },
+    {
+      message: "Policy for cash private balance is 2 sends.",
+      privateBalanceName: "cash",
+    },
+  ].entries()) {
+    for (const [bridgeIndex, bridge] of [false, true].entries()) {
+      const session =
+        `implicit-child-declarative-${fixtureIndex}-${bridgeIndex}`;
+      const route = await handleHermesTurnGatePayload(preLlm({
+        session,
+        turn: "turn-1",
+        userMessage: fixture.message,
+      }), options);
+      assert.ok("context" in route, fixture.message);
+      if ("context" in route) {
+        assert.match(
+          route.context,
+          /ask one concise clarification for which private balance policy/u,
+          fixture.message,
+        );
+        assert.match(route.context, /no syntactically distinct instruction/u);
+        assert.doesNotMatch(
+          route.context,
+          /wallet_preview_private_balance_policy_update directly/u,
+        );
+      }
+      const invocation = bridge
+        ? preTool({
+          session,
+          turn: "turn-1",
+          tool: "tool_call",
+          input: {
+            name:
+              "mcp__agent_boost__wallet_preview_private_balance_policy_update",
+            arguments: {
+              private_balance_name: fixture.privateBalanceName,
+              max_payments: 2,
+            },
+          },
+        })
+        : preTool({
+          session,
+          turn: "turn-1",
+          tool: "wallet_preview_private_balance_policy_update",
+          input: {
+            private_balance_name: fixture.privateBalanceName,
+            max_payments: 2,
+          },
+        });
+      const blocked = await handleHermesTurnGatePayload(invocation, options);
+      assert.equal(isBlocked(blocked), true, fixture.message);
+      if (isBlocked(blocked)) {
+        assert.match(blocked.message, /No Agent Boost tool may be called yet/u);
+      }
+    }
+  }
+
+  for (const [index, name] of [
+    "enable",
+    "disable",
+    "allow",
+    "permit",
+  ].entries()) {
+    for (const [shapeIndex, userMessage] of [
+      `${name[0]!.toUpperCase() + name.slice(1)} private balance policy to 2 sends.`,
+      `Show policy for ${name} private balance.`,
+    ].entries()) {
+      const session = `implicit-child-ambiguous-${index}-${shapeIndex}`;
+      const route = await handleHermesTurnGatePayload(preLlm({
+        session,
+        turn: "turn-1",
+        userMessage,
+      }), options);
+      assert.ok("context" in route, userMessage);
+      if ("context" in route) {
+        assert.match(
+          route.context,
+          /ask one concise clarification for which private balance policy/u,
+          userMessage,
+        );
+        assert.doesNotMatch(
+          route.context,
+          /wallet_preview_private_balance_policy_update directly/u,
+          userMessage,
+        );
+      }
+      assert.equal(isBlocked(await handleHermesTurnGatePayload(preTool({
+        session,
+        turn: "turn-1",
+        tool: "wallet_preview_private_balance_policy_update",
+        input: { private_balance_name: name, max_payments: 2 },
+      }), options)), true, userMessage);
+    }
+  }
+
+  const distinctActions = [
+    {
+      message: "Enable cash private balance policy with 2 sends.",
+      arguments: {
+        private_balance_name: "cash",
+        max_payments: 2,
+        enabled: true,
+      },
+    },
+    {
+      message: "Disable cash private balance policy with 2 sends.",
+      arguments: {
+        private_balance_name: "cash",
+        max_payments: 2,
+        enabled: false,
+      },
+    },
+    {
+      message: "Change policy for cash private balance to 2 sends.",
+      arguments: { private_balance_name: "cash", max_payments: 2 },
+    },
+  ];
+  for (const [index, fixture] of distinctActions.entries()) {
+    const session = `implicit-child-distinct-${index}`;
+    const route = await handleHermesTurnGatePayload(preLlm({
+      session,
+      turn: "turn-1",
+      userMessage: fixture.message,
+    }), options);
+    assert.ok("context" in route, fixture.message);
+    if ("context" in route) {
+      assert.match(
+        route.context,
+        /wallet_preview_private_balance_policy_update/u,
+        fixture.message,
+      );
+      assert.ok(
+        route.context.includes(JSON.stringify(fixture.arguments)),
+        route.context,
+      );
+    }
+    assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+      session,
+      turn: "turn-1",
+      tool: "wallet_preview_private_balance_policy_update",
+      input: {},
+    }), options), {
+      action: "modify",
+      args: fixture.arguments,
+    }, fixture.message);
+  }
+});
+
+test("wallet policy settings ignore verb-like parent wallet names", async (t) => {
+  const stateDirectory = await temporaryState(t);
+  const options = { stateDirectory, now: () => NOW };
+  const fixtures = [
+    {
+      message: "Set wallet enable policy to 2 sends.",
+      arguments: { wallet_name: "enable", max_payments: 2 },
+    },
+    {
+      message: "Set wallet disable policy to 2 sends.",
+      arguments: { wallet_name: "disable", max_payments: 2 },
+    },
+    {
+      message: "Set wallet enable policy to disabled, 2 sends.",
+      arguments: { wallet_name: "enable", max_payments: 2, enabled: false },
+    },
+    {
+      message: "Set the policy for wallet enable to 2 sends.",
+      arguments: { wallet_name: "enable", max_payments: 2 },
+    },
+  ];
+
+  for (const [index, fixture] of fixtures.entries()) {
+    const session = `wallet-verb-name-${index}`;
+    const route = await handleHermesTurnGatePayload(preLlm({
+      session,
+      turn: "turn-1",
+      userMessage: fixture.message,
+    }), options);
+    assert.ok("context" in route, fixture.message);
+    if ("context" in route) {
+      assert.match(route.context, /wallet_plan_policy_update/u, fixture.message);
+      assert.ok(
+        route.context.includes(JSON.stringify(fixture.arguments)),
+        route.context,
+      );
+    }
+    assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+      session,
+      turn: "turn-1",
+      tool: "wallet_plan_policy_update",
+      input: {},
+    }), options), {
+      action: "modify",
+      args: fixture.arguments,
+    }, fixture.message);
+  }
+});
+
+test("top-level wallet policy routing distinguishes action-like names from actions", async (t) => {
+  const stateDirectory = await temporaryState(t);
+  const options = { stateDirectory, now: () => NOW };
+  const actionLikeNames = ["change", "update", "edit", "set", "modify"];
+
+  for (const [nameIndex, name] of actionLikeNames.entries()) {
+    for (const [readIndex, userMessage] of [
+      `Show wallet ${name} policy.`,
+      `Show policy for wallet ${name}.`,
+    ].entries()) {
+      const session = `wallet-action-name-read-${nameIndex}-${readIndex}`;
+      const route = await handleHermesTurnGatePayload(preLlm({
+        session,
+        turn: "turn-1",
+        userMessage,
+      }), options);
+      assert.ok("context" in route, userMessage);
+      if ("context" in route) {
+        assert.match(route.context, /wallet_get_policy/u, userMessage);
+        assert.doesNotMatch(route.context, /wallet_plan_policy_update/u, userMessage);
+        assert.ok(
+          route.context.includes(JSON.stringify({ wallet_name: name })),
+          route.context,
+        );
+      }
+      assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+        session,
+        turn: "turn-1",
+        tool: "wallet_get_policy",
+        input: {},
+      }), options), {
+        action: "modify",
+        args: { wallet_name: name },
+      }, userMessage);
+    }
+
+    const declarativeMessage = `Policy for wallet ${name} is 2 sends.`;
+    for (const [bridgeIndex, bridge] of [false, true].entries()) {
+      const session =
+        `wallet-action-name-no-verb-${nameIndex}-${bridgeIndex}`;
+      const declarative = await handleHermesTurnGatePayload(preLlm({
+        session,
+        turn: "turn-1",
+        userMessage: declarativeMessage,
+      }), options);
+      assert.ok("context" in declarative, declarativeMessage);
+      if ("context" in declarative) {
+        assert.match(
+          declarative.context,
+          /ask one concise clarification for the wallet-policy setting request/u,
+          declarativeMessage,
+        );
+        assert.match(
+          declarative.context,
+          /no syntactically distinct instruction/u,
+          declarativeMessage,
+        );
+        assert.doesNotMatch(
+          declarative.context,
+          /call wallet_plan_policy_update directly/u,
+          declarativeMessage,
+        );
+      }
+      const invocation = bridge
+        ? preTool({
+          session,
+          turn: "turn-1",
+          tool: "tool_call",
+          input: {
+            name: "mcp__agent_boost__wallet_plan_policy_update",
+            arguments: { wallet_name: name, max_payments: 2 },
+          },
+        })
+        : preTool({
+          session,
+          turn: "turn-1",
+          tool: "wallet_plan_policy_update",
+          input: { wallet_name: name, max_payments: 2 },
+        });
+      const blocked = await handleHermesTurnGatePayload(invocation, options);
+      assert.equal(isBlocked(blocked), true, declarativeMessage);
+      if (isBlocked(blocked)) {
+        assert.match(blocked.message, /No Agent Boost tool may be called yet/u);
+      }
+    }
+
+    const mutationSession = `wallet-action-name-mutation-${nameIndex}`;
+    const mutationArguments = { wallet_name: name, max_payments: 2 };
+    const mutation = await handleHermesTurnGatePayload(preLlm({
+      session: mutationSession,
+      turn: "turn-1",
+      userMessage: `Set wallet ${name} policy to 2 sends.`,
+    }), options);
+    assert.ok("context" in mutation, name);
+    if ("context" in mutation) {
+      assert.match(mutation.context, /wallet_plan_policy_update/u, name);
+      assert.ok(
+        mutation.context.includes(JSON.stringify(mutationArguments)),
+        mutation.context,
+      );
+    }
+    assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+      session: mutationSession,
+      turn: "turn-1",
+      tool: "wallet_plan_policy_update",
+      input: {},
+    }), options), {
+      action: "modify",
+      args: mutationArguments,
+    }, name);
+  }
+});
+
+test("private-balance policy settings ignore parent wallet names in every accepted parent clause", async (t) => {
+  const stateDirectory = await temporaryState(t);
+  const options = { stateDirectory, now: () => NOW };
+  const prepositions = ["under", "inside", "within", "in", "for", "of", "on"];
+  const fixtures: Array<{
+    message: string;
+    arguments: Record<string, string | number | boolean>;
+  }> = [];
+
+  for (const preposition of prepositions) {
+    for (const parentClause of [
+      `${preposition} wallet enabled`,
+      `${preposition} enabled wallet`,
+    ]) {
+      fixtures.push({
+        message:
+          `Change cash private balance policy to 2 sends ${parentClause}.`,
+        arguments: {
+          wallet_name: "enabled",
+          private_balance_name: "cash",
+          max_payments: 2,
+        },
+      });
+    }
+  }
+
+  for (
+    const parentName of [
+      "change",
+      "enable",
+      "disable",
+      "update",
+      "edit",
+      "set",
+      "modify",
+      "allow",
+      "permit",
+    ]
+  ) {
+    fixtures.push({
+      message:
+        `Change cash private balance policy to 3 sends under wallet ${parentName}.`,
+      arguments: {
+        wallet_name: parentName,
+        private_balance_name: "cash",
+        max_payments: 3,
+      },
+    });
+  }
+
+  fixtures.push(
+    {
+      message:
+        "Change cash private balance policy to 2 sends for 7days.",
+      arguments: {
+        wallet_name: "7days",
+        private_balance_name: "cash",
+        max_payments: 2,
+      },
+    },
+    {
+      message:
+        "Change cash private balance policy to 2 sends in 2hours.",
+      arguments: {
+        wallet_name: "2hours",
+        private_balance_name: "cash",
+        max_payments: 2,
+      },
+    },
+    {
+      message:
+        "Change cash private balance policy to 2 sends for 7 days.",
+      arguments: {
+        private_balance_name: "cash",
+        max_payments: 2,
+        expires_in_hours: 168,
+      },
+    },
+    {
+      message:
+        "Change cash private balance policy to enabled, 4 sends for wallet disabled.",
+      arguments: {
+        wallet_name: "disabled",
+        private_balance_name: "cash",
+        max_payments: 4,
+        enabled: true,
+      },
+    },
+    {
+      message:
+        "Change cash private balance policy to disabled, 5 sends for enabled wallet.",
+      arguments: {
+        wallet_name: "enabled",
+        private_balance_name: "cash",
+        max_payments: 5,
+        enabled: false,
+      },
+    },
+  );
+
+  for (const [index, fixture] of fixtures.entries()) {
+    const session = `private-parent-name-${index}`;
+    const route = await handleHermesTurnGatePayload(preLlm({
+      session,
+      turn: "turn-1",
+      userMessage: fixture.message,
+    }), options);
+    assert.ok("context" in route, fixture.message);
+    if ("context" in route) {
+      assert.match(
+        route.context,
+        /wallet_preview_private_balance_policy_update/u,
+        fixture.message,
+      );
+      assert.ok(
+        route.context.includes(JSON.stringify(fixture.arguments)),
+        route.context,
+      );
+    }
+    assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+      session,
+      turn: "turn-1",
+      tool: "wallet_preview_private_balance_policy_update",
+      input: {},
+    }), options), {
+      action: "modify",
+      args: fixture.arguments,
+    }, fixture.message);
+  }
+});
+
+test("public-change noun variants never erase real policy mutations", async (t) => {
+  const stateDirectory = await temporaryState(t);
+  const options = { stateDirectory, now: () => NOW };
+  const treeReads = [
+    "Show my wallet tree with every wallet, private balance, public change, and policy.",
+    "List all wallets, private balances, public-change funds, and policies.",
+    "Display the whole wallet hierarchy with private balances, wallet-controlled public change accounts, and policies.",
+    "Show every wallet, private balance, wallet controlled public-change wallet, and policy.",
+  ];
+  for (const [index, userMessage] of treeReads.entries()) {
+    const route = await handleHermesTurnGatePayload(preLlm({
+      session: `public-change-noun-read-${index}`,
+      turn: "turn-1",
+      userMessage,
+    }), options);
+    assert.ok("context" in route, userMessage);
+    if ("context" in route) {
+      assert.match(route.context, /call wallet_get_tree directly/u, userMessage);
+      assert.doesNotMatch(route.context, /ask one concise clarification/u);
+    }
+  }
+
+  const aggregateMutation = await handleHermesTurnGatePayload(preLlm({
+    session: "public-change-noun-aggregate-mutation",
+    turn: "turn-1",
+    userMessage:
+      "Change every private balance policy to 2 sends and show wallet-controlled public change funds.",
+  }), options);
+  assert.ok("context" in aggregateMutation);
+  if ("context" in aggregateMutation) {
+    assert.match(
+      aggregateMutation.context,
+      /ask one concise clarification for which private balance policy/u,
+    );
+    assert.doesNotMatch(aggregateMutation.context, /call wallet_get_tree directly/u);
+  }
+
+  const namedMutation = await handleHermesTurnGatePayload(preLlm({
+    session: "public-change-noun-named-mutation",
+    turn: "turn-1",
+    userMessage:
+      "Update the policy for private balance named enable to 3 sends and show public-change balance.",
+  }), options);
+  assert.ok("context" in namedMutation);
+  if ("context" in namedMutation) {
+    assert.match(
+      namedMutation.context,
+      /wallet_preview_private_balance_policy_update/u,
+    );
+    assert.match(namedMutation.context, /"private_balance_name":"enable"/u);
+    assert.match(namedMutation.context, /"max_payments":3/u);
   }
 });
 
@@ -4248,7 +4995,19 @@ test("natural wallet graph requests pin the exact tool and arguments directly an
       arguments: {},
     },
     {
+      message:
+        "Show me my wallet tree with every saved wallet, private balance, public change balance, and policy. Use friendly names only—no addresses or internal IDs.",
+      tool: "wallet_get_tree",
+      arguments: {},
+    },
+    {
       message: "List all wallets and every private balance with their policies.",
+      tool: "wallet_get_tree",
+      arguments: {},
+    },
+    {
+      message:
+        "List all wallets, private balances, public change balances, and policies.",
       tool: "wallet_get_tree",
       arguments: {},
     },
@@ -4266,6 +5025,16 @@ test("natural wallet graph requests pin the exact tool and arguments directly an
       message: "Show private balance named show policy.",
       tool: "wallet_get_private_balance_policy",
       arguments: { private_balance_name: "show" },
+    },
+    {
+      message: "Show the policy for private balance named change.",
+      tool: "wallet_get_private_balance_policy",
+      arguments: { private_balance_name: "change" },
+    },
+    {
+      message: "Change the policy for private balance named change to 2 sends.",
+      tool: "wallet_preview_private_balance_policy_update",
+      arguments: { private_balance_name: "change", max_payments: 2 },
     },
     {
       message: "In my wallet tree, show cash private balance policy under alpha.",
@@ -5352,6 +6121,8 @@ test("aggregate or nameless private-balance policy requests fail closed for clar
   const fixtures = [
     "Change every private balance policy to 2 sends.",
     "Update all private balance policies to 2 sends.",
+    "Show my tree and change every private balance policy to 2 sends.",
+    "Show my wallet tree and public change balance; change every private balance policy to 2 sends.",
     "Show private-balance policies.",
     "Change the policy for my travel private balance.",
     "Change another private balance policy to 2 sends.",
