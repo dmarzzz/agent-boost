@@ -576,6 +576,7 @@ function assertApprovedCallPlan(callData, sender, expected) {
       );
     }
     const remainder = calls.slice(directCount);
+    let privateChange;
     if (remainder.length === 2) {
       const change = remainder[0];
       if (
@@ -585,6 +586,7 @@ function assertApprovedCallPlan(callData, sender, expected) {
       ) {
         throw new Error("private change call changed");
       }
+      privateChange = change;
     }
     const tail = remainder.at(-1);
     if (
@@ -607,7 +609,18 @@ function assertApprovedCallPlan(callData, sender, expected) {
     ) {
       throw new Error("paymaster fee reserve exceeds the approved cap");
     }
-    return actualFeeReserveWei;
+    // A value CALL back to the same 7702 sender is balance-neutral. Still cap
+    // sponsorship so the post-withdrawal balance can fund it and the tail.
+    const largestRequiredBalanceWei = privateChange !== undefined &&
+        privateChange.value > tail.value
+      ? privateChange.value
+      : tail.value;
+    const safeSponsorshipFeeWei =
+      expected.withdrawalAmountWei - largestRequiredBalanceWei;
+    if (safeSponsorshipFeeWei <= 0n) {
+      throw new Error("paymaster sponsorship leaves insufficient call balance");
+    }
+    return safeSponsorshipFeeWei;
   } catch (error) {
     throw new Error(
       "Agent Boost rejected UserOperation callData that changed after the approved dry run",
@@ -620,7 +633,7 @@ function assertApprovedPaymasterData(
   paymasterData,
   sender,
   expected,
-  actualFeeReserveWei,
+  safeSponsorshipFeeWei,
   approvedMaxFeeReserveWei,
 ) {
   try {
@@ -652,7 +665,7 @@ function assertApprovedPaymasterData(
       recipient.toLowerCase() !== sender ||
       relayer.toLowerCase() !== SEPOLIA_TORNADO_PAYMASTER ||
       fee <= 0n ||
-      fee > actualFeeReserveWei ||
+      fee > safeSponsorshipFeeWei ||
       fee > approvedMaxFeeReserveWei ||
       refund !== 0n
     ) {
@@ -900,7 +913,7 @@ async function journalActualPrivateSend(input, init) {
     exactUserOperation,
     journalConfig.expectedCallPlan.gasFloors,
   );
-  const actualFeeReserveWei = assertApprovedCallPlan(
+  const safeSponsorshipFeeWei = assertApprovedCallPlan(
     exactUserOperation.callData,
     journalConfig.expectedSender,
     journalConfig.expectedCallPlan,
@@ -909,7 +922,7 @@ async function journalActualPrivateSend(input, init) {
     exactUserOperation.paymasterData,
     journalConfig.expectedSender,
     journalConfig.expectedCallPlan.sponsor,
-    actualFeeReserveWei,
+    safeSponsorshipFeeWei,
     journalConfig.expectedCallPlan.maxFeeReserveWei,
   );
   const hash = userOperationHash(exactUserOperation);

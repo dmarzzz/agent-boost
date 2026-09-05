@@ -267,6 +267,23 @@ function userOperationFromPreparation(
   return preparation.privateOperation.withdrawals[0]!.userOperation;
 }
 
+function withPrivateSponsorshipFee(
+  preparationStdout: string,
+  feeWei: bigint,
+): string {
+  const preparation = JSON.parse(preparationStdout) as {
+    privateOperation: { withdrawals: Array<{
+      userOperation: ReturnType<typeof serializedUserOperation>;
+    }> };
+  };
+  const withdrawal = preparation.privateOperation.withdrawals[0]!;
+  withdrawal.userOperation = alterPaymasterSponsorship(
+    withdrawal.userOperation,
+    { feeWei },
+  );
+  return JSON.stringify(preparation);
+}
+
 function alterLastPreparedCall(
   operation: ReturnType<typeof serializedUserOperation>,
   replacement: Partial<TestAccountCall>,
@@ -483,7 +500,14 @@ function callPlanFromPreparation(preparationStdout: string) {
   }
   const tailCall = calls.at(-1)!;
   const withdrawalAmountWei = BigInt(preparation.amountWei);
-  const availableFeeReserveWei = withdrawalAmountWei - tailCall.value;
+  const remainder = calls.slice(directWithdrawals.length);
+  const privateChange = remainder.length === 2 ? remainder[0] : undefined;
+  const largestRequiredBalanceWei = privateChange !== undefined &&
+      privateChange.value > tailCall.value
+    ? privateChange.value
+    : tailCall.value;
+  const availableFeeReserveWei =
+    withdrawalAmountWei - largestRequiredBalanceWei;
   const maxFeeReserveWei = availableFeeReserveWei <
       MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI
     ? availableFeeReserveWei
@@ -2399,7 +2423,7 @@ describe("KohakuWalletAdapter", () => {
       ["zero-fee", { feeWei: 0n }],
       [
         "fee",
-        { feeWei: ESTIMATED_PRIVATE_FEE_WEI * 23n / 20n + 1n },
+        { feeWei: MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI + 1n },
       ],
     ];
     for (const [label, replacement] of cases) {
@@ -2443,6 +2467,253 @@ describe("KohakuWalletAdapter", () => {
         assert.equal(runner.calls[0]?.args.includes("--broadcast"), false);
       });
     }
+  });
+
+  it("accepts the live-shaped exact sponsorship above its padded quote", async () => {
+    const withdrawalAmountWei = DEFAULT_SHIELD_WEI * 2n;
+    const estimatedFeeWei = 3_060_177_241_472_373n;
+    const paddedFeeWei = estimatedFeeWei * 23n / 20n;
+    const sponsorshipFeeWei = 4_187_287_536_056_460n;
+    assert.ok(sponsorshipFeeWei > paddedFeeWei);
+    assert.ok(sponsorshipFeeWei < MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI);
+    const preparation = withPrivateSponsorshipFee(
+      privateRebalancePreparation(withdrawalAmountWei, estimatedFeeWei),
+      sponsorshipFeeWei,
+    );
+    let beforeBroadcastCalls = 0;
+    let broadcastCalls = 0;
+    const runner = new FakeRunner(async (invocation) => {
+      if (command(invocation) === "next-fresh-address") {
+        return { exitCode: 0, stdout: ADDRESS, stderr: "" };
+      }
+      assert.equal(command(invocation), "unshield");
+      if (!invocation.args.includes("--broadcast")) {
+        return {
+          exitCode: 0,
+          stdout:
+            "Merkle tree for 1525 leaves took 700ms\n" + preparation,
+          stderr: "",
+        };
+      }
+      broadcastCalls += 1;
+      const userOperationHash = await writeBroadcastJournal(
+        invocation,
+        preparation,
+      );
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({ userOperationHash }),
+        stderr: "",
+      };
+    });
+    const { adapter } = await fixture(runner);
+
+    const result = await adapter.executePrivateRebalance({
+      sourceWalletName: "source-pocket",
+      sourceExecutorAddress: ADDRESS,
+      withdrawalAmountWei,
+      preparedDepositCall: DEPOSIT_CALL,
+      broadcastRequestId: "req-live-shaped-sponsored-fee",
+      beforeBroadcast: async () => {
+        beforeBroadcastCalls += 1;
+      },
+    });
+
+    assert.match(result.userOperationHash ?? "", /^0x[0-9a-f]{64}$/u);
+    assert.equal(beforeBroadcastCalls, 1);
+    assert.equal(broadcastCalls, 1);
+    assert.deepEqual(
+      runner.calls.map(command),
+      ["next-fresh-address", "unshield", "unshield"],
+    );
+  });
+
+  it("bounds sponsorship by the largest required call balance", async () => {
+    const paddedFeeWei = ESTIMATED_PRIVATE_FEE_WEI * 23n / 20n;
+    const tinyTailWei = 1n;
+    const selfChangeCeilingWei = paddedFeeWei + tinyTailWei;
+    const atCeiling = withPrivateSponsorshipFee(
+      privatePaymentPreparation(RECIPIENT, tinyTailWei),
+      selfChangeCeilingWei,
+    );
+    let acceptedBeforeBroadcastCalls = 0;
+    const acceptedRunner = new FakeRunner(() => ({
+      exitCode: 0,
+      stdout: atCeiling,
+      stderr: "",
+    }));
+    const acceptedFixture = await fixture(acceptedRunner);
+    await assert.rejects(
+      acceptedFixture.adapter.executePrivatePayment({
+        recipient: RECIPIENT,
+        amountWei: tinyTailWei,
+        broadcastRequestId: "req-self-change-fee-at-ceiling",
+        beforeBroadcast: async () => {
+          acceptedBeforeBroadcastCalls += 1;
+          throw new Error("PREPARATION_ACCEPTED_AT_SAFE_CEILING");
+        },
+      }),
+      /PREPARATION_ACCEPTED_AT_SAFE_CEILING/u,
+    );
+    assert.equal(acceptedBeforeBroadcastCalls, 1);
+    assert.equal(acceptedRunner.calls.length, 1);
+
+    const overSelfChangeCeiling = withPrivateSponsorshipFee(
+      privatePaymentPreparation(RECIPIENT, tinyTailWei),
+      selfChangeCeilingWei + 1n,
+    );
+    const overSelfChangeRunner = new FakeRunner(() => ({
+      exitCode: 0,
+      stdout: overSelfChangeCeiling,
+      stderr: "",
+    }));
+    const overSelfChangeFixture = await fixture(overSelfChangeRunner);
+    await assert.rejects(
+      overSelfChangeFixture.adapter.executePrivatePayment({
+        recipient: RECIPIENT,
+        amountWei: tinyTailWei,
+        broadcastRequestId: "req-self-change-fee-over-ceiling",
+        beforeBroadcast: CHECKPOINT_BROADCAST,
+      }),
+      /sponsorship fee exceeded its safe cap/u,
+    );
+    assert.equal(overSelfChangeRunner.calls.length, 1);
+
+    const noChangeTailWei = DEFAULT_SHIELD_WEI - paddedFeeWei;
+    const noChangePreparation = privatePreparation({
+      withdrawalAmountWei: DEFAULT_SHIELD_WEI,
+      calls: [{ target: RECIPIENT, data: "0x", value: noChangeTailWei }],
+    });
+    const noChangeRunner = new FakeRunner(() => ({
+      exitCode: 0,
+      stdout: withPrivateSponsorshipFee(
+        noChangePreparation,
+        paddedFeeWei + 1n,
+      ),
+      stderr: "",
+    }));
+    const noChangeFixture = await fixture(noChangeRunner);
+    await assert.rejects(
+      noChangeFixture.adapter.executePrivatePayment({
+        recipient: RECIPIENT,
+        amountWei: noChangeTailWei,
+        broadcastRequestId: "req-no-change-fee-over-ceiling",
+        beforeBroadcast: CHECKPOINT_BROADCAST,
+      }),
+      /sponsorship fee exceeded its safe cap/u,
+    );
+    assert.equal(noChangeRunner.calls.length, 1);
+  });
+
+  it("accepts exact tail-dominant, no-change, and global sponsorship ceilings", async (t) => {
+    const paddedFeeWei = ESTIMATED_PRIVATE_FEE_WEI * 23n / 20n;
+    const tailDominantCeilingWei = 5_000_000_000_000_000n;
+    const tailDominantAmountWei = DEFAULT_SHIELD_WEI -
+      tailDominantCeilingWei;
+    const tailDominantChangeWei = DEFAULT_SHIELD_WEI -
+      tailDominantAmountWei - paddedFeeWei;
+    assert.ok(tailDominantAmountWei > tailDominantChangeWei);
+    assert.ok(
+      tailDominantCeilingWei < MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI,
+    );
+    const noChangeAmountWei = DEFAULT_SHIELD_WEI - paddedFeeWei;
+    const cases = [
+      {
+        label: "tail-dominant structural",
+        amountWei: tailDominantAmountWei,
+        feeWei: tailDominantCeilingWei,
+        preparation: privatePaymentPreparation(
+          RECIPIENT,
+          tailDominantAmountWei,
+        ),
+      },
+      {
+        label: "no-change structural",
+        amountWei: noChangeAmountWei,
+        feeWei: paddedFeeWei,
+        preparation: privatePreparation({
+          withdrawalAmountWei: DEFAULT_SHIELD_WEI,
+          calls: [{
+            target: RECIPIENT,
+            data: "0x",
+            value: noChangeAmountWei,
+          }],
+        }),
+      },
+      {
+        label: "global cap",
+        amountWei: 20_000_000_000_000_000n,
+        feeWei: MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI,
+        preparation: privatePaymentPreparation(),
+      },
+    ] as const;
+
+    for (const scenario of cases) {
+      await t.test(scenario.label, async () => {
+        const preparation = withPrivateSponsorshipFee(
+          scenario.preparation,
+          scenario.feeWei,
+        );
+        let beforeBroadcastCalls = 0;
+        const runner = new FakeRunner(() => ({
+          exitCode: 0,
+          stdout: preparation,
+          stderr: "",
+        }));
+        const { adapter } = await fixture(runner);
+
+        await assert.rejects(
+          adapter.executePrivatePayment({
+            recipient: RECIPIENT,
+            amountWei: scenario.amountWei,
+            broadcastRequestId:
+              `req-exact-${scenario.label.replaceAll(" ", "-")}-ceiling`,
+            beforeBroadcast: async () => {
+              beforeBroadcastCalls += 1;
+              throw new Error("PREPARATION_ACCEPTED_AT_EXACT_CEILING");
+            },
+          }),
+          /PREPARATION_ACCEPTED_AT_EXACT_CEILING/u,
+        );
+        assert.equal(beforeBroadcastCalls, 1);
+        assert.equal(runner.calls.length, 1);
+        assert.equal(runner.calls[0]?.args.includes("--broadcast"), false);
+      });
+    }
+  });
+
+  it("rejects a tail-dominant sponsorship above its structural ceiling", async () => {
+    const paddedFeeWei = ESTIMATED_PRIVATE_FEE_WEI * 23n / 20n;
+    const safeCeilingWei = 5_000_000_000_000_000n;
+    const amountWei = DEFAULT_SHIELD_WEI - safeCeilingWei;
+    const changeWei = DEFAULT_SHIELD_WEI - amountWei - paddedFeeWei;
+    assert.ok(amountWei > changeWei);
+    assert.ok(safeCeilingWei < MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI);
+    let beforeBroadcastCalls = 0;
+    const runner = new FakeRunner(() => ({
+      exitCode: 0,
+      stdout: withPrivateSponsorshipFee(
+        privatePaymentPreparation(RECIPIENT, amountWei),
+        safeCeilingWei + 1n,
+      ),
+      stderr: "",
+    }));
+    const { adapter } = await fixture(runner);
+
+    await assert.rejects(
+      adapter.executePrivatePayment({
+        recipient: RECIPIENT,
+        amountWei,
+        broadcastRequestId: "req-tail-dominant-fee-over-ceiling",
+        beforeBroadcast: async () => {
+          beforeBroadcastCalls += 1;
+        },
+      }),
+      /sponsorship fee exceeded its safe cap/u,
+    );
+    assert.equal(beforeBroadcastCalls, 0);
+    assert.equal(runner.calls.length, 1);
+    assert.equal(runner.calls[0]?.args.includes("--broadcast"), false);
   });
 
   it("preflights and journals recovery from an explicitly named pocket", async () => {
@@ -4342,7 +4613,6 @@ describe("SpawnCommandRunner", () => {
   it("rejects changed sponsor semantics before journaling or delegation", async (t) => {
     const preparation = privatePaymentPreparation();
     const approved = userOperationFromPreparation(preparation);
-    const approvedReserveWei = ESTIMATED_PRIVATE_FEE_WEI * 23n / 20n;
     const cases: Array<[
       string,
       Parameters<typeof alterPaymasterSponsorship>[1],
@@ -4353,7 +4623,10 @@ describe("SpawnCommandRunner", () => {
       ["relayer", { relayer: OTHER_ADDRESS }],
       ["refund", { refundWei: 1n }],
       ["zero fee", { feeWei: 0n }],
-      ["fee over actual reserve", { feeWei: approvedReserveWei + 1n }],
+      [
+        "fee over safe ceiling",
+        { feeWei: MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI + 1n },
+      ],
     ];
     for (const [label, replacement] of cases) {
       await t.test(label, async () => {
@@ -4471,6 +4744,217 @@ describe("SpawnCommandRunner", () => {
     assert.equal(result.exitCode, 0);
     assert.equal(result.stdout, "delegated");
     assert.equal((await stat(journalPath)).mode & 0o777, 0o600);
+  });
+
+  it("allows the live-shaped sponsored fee above its nominal quote reserve", async () => {
+    const estimatedFeeWei = 3_060_177_241_472_373n;
+    const paddedFeeWei = estimatedFeeWei * 23n / 20n;
+    const sponsorshipFeeWei = 4_187_287_536_056_460n;
+    assert.ok(sponsorshipFeeWei > paddedFeeWei);
+    const preparation = withPrivateSponsorshipFee(
+      privateRebalancePreparation(
+        DEFAULT_SHIELD_WEI * 2n,
+        estimatedFeeWei,
+      ),
+      sponsorshipFeeWei,
+    );
+    const { result, journalPath } = await runGuardedPrivateSend({
+      requestId: "req-network-guard-live-sponsored-fee",
+      preparation,
+      actualOperation: userOperationFromPreparation(preparation),
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, "delegated");
+    assert.equal((await stat(journalPath)).mode & 0o777, 0o600);
+  });
+
+  it("allows live-shaped upward sponsorship drift at broadcast", async () => {
+    const estimatedFeeWei = 3_060_177_241_472_373n;
+    const paddedFeeWei = estimatedFeeWei * 23n / 20n;
+    const sponsorshipFeeWei = 4_187_287_536_056_460n;
+    assert.ok(sponsorshipFeeWei > paddedFeeWei);
+    const preparation = privateRebalancePreparation(
+      DEFAULT_SHIELD_WEI * 2n,
+      estimatedFeeWei,
+    );
+    const actualOperation = alterPaymasterSponsorship(
+      userOperationFromPreparation(preparation),
+      {
+        proof: "0xabcd",
+        root: `0x${"cc".repeat(32)}`,
+        feeWei: sponsorshipFeeWei,
+      },
+    );
+    const { result, journalPath } = await runGuardedPrivateSend({
+      requestId: "req-network-guard-live-sponsored-fee-drift",
+      preparation,
+      actualOperation,
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, "delegated");
+    assert.equal((await stat(journalPath)).mode & 0o777, 0o600);
+    assert.equal(
+      (JSON.parse(await readFile(journalPath, "utf8")) as {
+        userOperationHash: string;
+      }).userOperationHash,
+      exactUserOperationHash(actualOperation),
+    );
+  });
+
+  it("enforces the exact self-change sponsorship ceiling", async () => {
+    const paddedFeeWei = ESTIMATED_PRIVATE_FEE_WEI * 23n / 20n;
+    const tinyTailWei = 1n;
+    const safeCeilingWei = paddedFeeWei + tinyTailWei;
+    const preparation = withPrivateSponsorshipFee(
+      privatePaymentPreparation(RECIPIENT, tinyTailWei),
+      safeCeilingWei,
+    );
+    const accepted = await runGuardedPrivateSend({
+      requestId: "req-network-guard-self-change-fee-ceiling",
+      preparation,
+      actualOperation: userOperationFromPreparation(preparation),
+    });
+    assert.equal(accepted.result.exitCode, 0);
+    assert.equal(accepted.result.stdout, "delegated");
+    assert.equal((await stat(accepted.journalPath)).mode & 0o777, 0o600);
+
+    const rejected = await runGuardedPrivateSend({
+      requestId: "req-network-guard-self-change-fee-over-ceiling",
+      preparation: privatePaymentPreparation(RECIPIENT, tinyTailWei),
+      actualOperation: alterPaymasterSponsorship(
+        userOperationFromPreparation(
+          privatePaymentPreparation(RECIPIENT, tinyTailWei),
+        ),
+        { feeWei: safeCeilingWei + 1n },
+      ),
+    });
+    assert.equal(rejected.result.exitCode, 0);
+    assert.equal(
+      rejected.result.stdout,
+      "Agent Boost rejected UserOperation paymasterData that changed after the approved dry run",
+    );
+    await assert.rejects(stat(rejected.journalPath), { code: "ENOENT" });
+  });
+
+  it("enforces a tail-dominant structural sponsorship ceiling below the global cap", async () => {
+    const paddedFeeWei = ESTIMATED_PRIVATE_FEE_WEI * 23n / 20n;
+    const safeCeilingWei = 5_000_000_000_000_000n;
+    const amountWei = DEFAULT_SHIELD_WEI - safeCeilingWei;
+    const changeWei = DEFAULT_SHIELD_WEI - amountWei - paddedFeeWei;
+    assert.ok(amountWei > changeWei);
+    assert.ok(safeCeilingWei < MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI);
+    const basePreparation = privatePaymentPreparation(RECIPIENT, amountWei);
+    const preparation = withPrivateSponsorshipFee(
+      basePreparation,
+      safeCeilingWei,
+    );
+    const accepted = await runGuardedPrivateSend({
+      requestId: "req-network-guard-tail-dominant-fee-ceiling",
+      preparation,
+      actualOperation: userOperationFromPreparation(preparation),
+    });
+    assert.equal(accepted.result.exitCode, 0);
+    assert.equal(accepted.result.stdout, "delegated");
+    assert.equal((await stat(accepted.journalPath)).mode & 0o777, 0o600);
+
+    const rejected = await runGuardedPrivateSend({
+      requestId: "req-network-guard-tail-dominant-fee-over-ceiling",
+      preparation: basePreparation,
+      actualOperation: alterPaymasterSponsorship(
+        userOperationFromPreparation(basePreparation),
+        { feeWei: safeCeilingWei + 1n },
+      ),
+    });
+    assert.equal(rejected.result.exitCode, 0);
+    assert.equal(
+      rejected.result.stdout,
+      "Agent Boost rejected UserOperation paymasterData that changed after the approved dry run",
+    );
+    await assert.rejects(stat(rejected.journalPath), { code: "ENOENT" });
+  });
+
+  it("accepts exact no-change and global sponsorship ceilings", async (t) => {
+    const paddedFeeWei = ESTIMATED_PRIVATE_FEE_WEI * 23n / 20n;
+    const noChangeAmountWei = DEFAULT_SHIELD_WEI - paddedFeeWei;
+    const cases = [
+      {
+        label: "no-change structural",
+        feeWei: paddedFeeWei,
+        preparation: privatePreparation({
+          withdrawalAmountWei: DEFAULT_SHIELD_WEI,
+          calls: [{
+            target: RECIPIENT,
+            data: "0x",
+            value: noChangeAmountWei,
+          }],
+        }),
+      },
+      {
+        label: "global cap",
+        feeWei: MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI,
+        preparation: privateRebalancePreparation(),
+      },
+    ] as const;
+
+    for (const scenario of cases) {
+      await t.test(scenario.label, async () => {
+        const preparation = withPrivateSponsorshipFee(
+          scenario.preparation,
+          scenario.feeWei,
+        );
+        const { result, journalPath } = await runGuardedPrivateSend({
+          requestId:
+            `req-network-guard-exact-${scenario.label.replaceAll(" ", "-")}`,
+          preparation,
+          actualOperation: userOperationFromPreparation(preparation),
+        });
+
+        assert.equal(result.exitCode, 0);
+        assert.equal(result.stdout, "delegated");
+        assert.equal((await stat(journalPath)).mode & 0o777, 0o600);
+      });
+    }
+  });
+
+  it("keeps no-change and global sponsorship ceilings fail-closed", async () => {
+    const paddedFeeWei = ESTIMATED_PRIVATE_FEE_WEI * 23n / 20n;
+    const noChangeTailWei = DEFAULT_SHIELD_WEI - paddedFeeWei;
+    const noChangePreparation = privatePreparation({
+      withdrawalAmountWei: DEFAULT_SHIELD_WEI,
+      calls: [{ target: RECIPIENT, data: "0x", value: noChangeTailWei }],
+    });
+    const noChange = await runGuardedPrivateSend({
+      requestId: "req-network-guard-no-change-fee-over-ceiling",
+      preparation: noChangePreparation,
+      actualOperation: alterPaymasterSponsorship(
+        userOperationFromPreparation(noChangePreparation),
+        { feeWei: paddedFeeWei + 1n },
+      ),
+    });
+    assert.equal(noChange.result.exitCode, 0);
+    assert.equal(
+      noChange.result.stdout,
+      "Agent Boost rejected UserOperation paymasterData that changed after the approved dry run",
+    );
+    await assert.rejects(stat(noChange.journalPath), { code: "ENOENT" });
+
+    const cappedPreparation = privateRebalancePreparation();
+    const overCap = await runGuardedPrivateSend({
+      requestId: "req-network-guard-sponsorship-over-global-cap",
+      preparation: cappedPreparation,
+      actualOperation: alterPaymasterSponsorship(
+        userOperationFromPreparation(cappedPreparation),
+        { feeWei: MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI + 1n },
+      ),
+    });
+    assert.equal(overCap.result.exitCode, 0);
+    assert.equal(
+      overCap.result.stdout,
+      "Agent Boost rejected UserOperation paymasterData that changed after the approved dry run",
+    );
+    await assert.rejects(stat(overCap.journalPath), { code: "ENOENT" });
   });
 
   for (const scenario of [

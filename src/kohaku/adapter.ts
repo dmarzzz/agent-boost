@@ -2187,6 +2187,7 @@ function validatePreparedAccountCalls(input: {
   ) {
     throw new Error("Kohaku unshield prepare changed the requested tail call");
   }
+  let privateChange: PreparedAccountCall | undefined;
   if (remainder.length === 2) {
     const change = remainder[0];
     if (
@@ -2197,6 +2198,7 @@ function validatePreparedAccountCalls(input: {
     ) {
       throw new Error("Kohaku unshield prepare changed the private change call");
     }
+    privateChange = change;
   }
   const paddedFeeWei =
     (input.estimatedFeeWei * TORNADO_TAIL_FEE_PAD_NUMERATOR) /
@@ -2207,8 +2209,14 @@ function validatePreparedAccountCalls(input: {
       "Kohaku unshield prepare reserved an unexpected padded paymaster fee",
     );
   }
+  // Kohaku's private-change CALL returns value to the same 7702 sender. It is
+  // balance-neutral, but both it and the immutable tail must each be fundable.
+  const largestRequiredBalanceWei = privateChange !== undefined &&
+      privateChange.value > input.tailCall.value
+    ? privateChange.value
+    : input.tailCall.value;
   const availableFeeReserveWei =
-    input.withdrawalAmountWei - input.tailCall.value;
+    input.withdrawalAmountWei - largestRequiredBalanceWei;
   const maxFeeReserveWei = availableFeeReserveWei <
       MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI
     ? availableFeeReserveWei
@@ -2218,9 +2226,9 @@ function validatePreparedAccountCalls(input: {
       "Kohaku unshield prepare exceeded the private paymaster fee cap",
     );
   }
-  if (input.sponsorship.feeWei > paddedFeeWei) {
+  if (input.sponsorship.feeWei > maxFeeReserveWei) {
     throw new Error(
-      "Kohaku unshield prepare sponsorship fee exceeded its reserved fee",
+      "Kohaku unshield prepare sponsorship fee exceeded its safe cap",
     );
   }
   return {
