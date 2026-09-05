@@ -5318,18 +5318,19 @@ function routingContext(message: unknown): string | undefined {
 }
 
 type PrivateBalanceOperationFamily = "creation" | "funding" | "policy";
+type PrivateBalanceOperationStatusFamily = PrivateBalanceOperationFamily | "ambiguous";
 
 function privateBalanceOperationStatusFamily(
   message: unknown,
-): PrivateBalanceOperationFamily | undefined {
+): PrivateBalanceOperationStatusFamily | undefined {
   if (typeof message !== "string") return undefined;
   const normalized = message.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
   const families: PrivateBalanceOperationFamily[] = [];
-  if (/\b(?:private(?:[- ]balance)?\s+creation|creation\s+(?:request|operation|status))\b/u
+  if (/\b(?:private(?:[- ]balance)?\s+creat(?:ion|ed)|creat(?:ion|ed)\s+(?:request|operation|status))\b/u
     .test(normalized)) {
     families.push("creation");
   }
-  if (/\b(?:private(?:[- ]balance)?\s+funding|funding\s+(?:request|operation|status)|rebalance(?:\s+(?:request|operation|status))?)\b/u
+  if (/\b(?:private(?:[- ]balance)?\s+fund(?:ing|ed)|fund(?:ing|ed)\s+(?:private(?:[- ]balance)?\s+)?(?:request|operation|status)|rebalance(?:\s+(?:request|operation|status))?)\b/u
     .test(normalized)) {
     families.push("funding");
   }
@@ -5337,14 +5338,16 @@ function privateBalanceOperationStatusFamily(
     .test(normalized)) {
     families.push("policy");
   }
-  return families.length === 1 ? families[0] : undefined;
+  if (families.length === 0) return undefined;
+  return families.length === 1 ? families[0] : "ambiguous";
 }
 
 function privateBalanceStatusBindingMatchesFamily(
   binding: StableBinding,
-  family: PrivateBalanceOperationFamily | undefined,
+  family: PrivateBalanceOperationStatusFamily | undefined,
 ): boolean {
   if (family === undefined) return true;
+  if (family === "ambiguous") return false;
   const value = nonEmptyString(binding.request_id) ?? nonEmptyString(binding.decision_id);
   if (!value) return false;
   const prefixes: Record<PrivateBalanceOperationFamily, RegExp> = {

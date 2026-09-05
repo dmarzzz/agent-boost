@@ -2555,6 +2555,25 @@ test("private-funding status requests clarify without one prior unresolved match
       priorTurn: "turn-1",
     },
     {
+      label: "wrong-funded-operation-family",
+      tool: "wallet_get_private_balance_operation",
+      requestId: "pbcr_wrong-funded-family-12345678",
+      code: "PRIVATE_BALANCE_CREATE_STATUS",
+      phase: "creating",
+      priorTurn: "turn-1",
+      prompt: "Check the status of the funded private balance operation.",
+    },
+    {
+      label: "ambiguous-private-operation-family",
+      tool: "wallet_get_private_balance_operation",
+      requestId: "pbfr_ambiguous-private-family-12345678",
+      code: "PRIVATE_BALANCE_FUNDING_STATUS",
+      phase: "submitted",
+      priorTurn: "turn-1",
+      prompt:
+        "Check the status of the private balance creation and private balance funding operations.",
+    },
+    {
       label: "same-turn-stale",
       tool: "wallet_get_private_balance_operation",
       requestId: "pbfr_same-turn-natural-12345678",
@@ -2593,7 +2612,7 @@ test("private-funding status requests clarify without one prior unresolved match
     const response = await handleHermesTurnGatePayload(preLlm({
       session,
       turn: "turn-2",
-      userMessage: prompt,
+      userMessage: "prompt" in fixture ? fixture.prompt : prompt,
     }), options);
     assert.ok("context" in response, fixture.label);
     if ("context" in response) {
