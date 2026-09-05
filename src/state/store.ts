@@ -123,6 +123,13 @@ const timestampSchema = z.string().refine(
 const addressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
 const digestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 const transactionHashSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
+const userOperationReceiptEvidenceSchema = z.object({
+  version: z.literal(1),
+  status: z.enum(["success", "reverted"]),
+  userOperationHash: transactionHashSchema,
+  transactionHash: transactionHashSchema,
+  observedAt: timestampSchema,
+}).strict();
 const SEPOLIA_TORNADO_ETH_0_1_POOL =
   "0x8c4a04d872a6c1be37964a21ba3a138525dff50b";
 const TORNADO_DEPOSIT_CALL_PATTERN = /^0xb214faa5([0-9a-f]{64})$/;
@@ -327,6 +334,7 @@ const paymentRequestBase = {
   broadcastStartedAt: timestampSchema.optional(),
   transactionHash: transactionHashSchema.optional(),
   userOperationHash: transactionHashSchema.optional(),
+  userOperationReceiptEvidence: userOperationReceiptEvidenceSchema.optional(),
   confirmation: confirmationSchema.optional(),
   recipientBalanceBeforeWei: atomicSchema.optional(),
   reconciliation: reconciliationSchema.optional(),
@@ -496,6 +504,7 @@ const recoveryRequestBase = {
   createdAt: timestampSchema, updatedAt: timestampSchema,
   broadcastStartedAt: timestampSchema.optional(),
   transactionHash: transactionHashSchema.optional(), userOperationHash: transactionHashSchema.optional(),
+  userOperationReceiptEvidence: userOperationReceiptEvidenceSchema.optional(),
   confirmation: confirmationSchema.optional(), recipientBalanceBeforeWei: atomicSchema.optional(),
   reconciliation: reconciliationSchema.optional(), error: requestErrorSchema.optional(),
 };
@@ -624,6 +633,7 @@ const privateBalanceFundingRequestSchema = z.object({
   broadcastStartedAt: timestampSchema.optional(),
   transactionHash: transactionHashSchema.optional(),
   userOperationHash: transactionHashSchema.optional(),
+  userOperationReceiptEvidence: userOperationReceiptEvidenceSchema.optional(),
   sourcePublicChangeWei: atomicSchema.optional(),
   confirmation: privateBalanceFundingConfirmationSchema.optional(),
   reconciliation: reconciliationSchema.optional(), appliedAt: timestampSchema.optional(),
@@ -1809,6 +1819,7 @@ function validateState(state: StateDocument): void {
       throw new Error("Payment request plan reference is invalid");
     }
     validatePrivateDebitRestoration(request);
+    validateUserOperationReceiptEvidence(request, "Payment request");
   }
   for (const [decisionId, plan] of Object.entries(state.regularPlans)) {
     if (decisionId !== plan.decisionId) {
@@ -1881,6 +1892,7 @@ function validateState(state: StateDocument): void {
       throw new Error("Recovery request plan reference is invalid");
     }
     validatePrivateDebitRestoration(request);
+    validateUserOperationReceiptEvidence(request, "Recovery request");
   }
   for (const [decisionId, plan] of Object.entries(state.policyPlans)) {
     if (decisionId !== plan.decisionId) throw new Error("Policy plan map key is invalid");
@@ -2086,7 +2098,54 @@ function validatePrivateBalanceFundingState(
     if (request.sourcePrivateBalance) {
       validatePrivateBalance(request.sourcePrivateBalance, false);
     }
+    validateUserOperationReceiptEvidence(request, "Private balance funding request");
     if (unresolvedPhases.has(request.phase)) reserveTarget(request.targetPrivateBalance);
+  }
+}
+
+function validateUserOperationReceiptEvidence(value: {
+  phase: string;
+  route?: "shield_from_main" | "rebalance_private";
+  createdAt: string;
+  broadcastStartedAt?: string;
+  transactionHash?: string;
+  userOperationHash?: string;
+  userOperationReceiptEvidence?: {
+    version: 1;
+    status: "success" | "reverted";
+    userOperationHash: string;
+    transactionHash: string;
+    observedAt: string;
+  };
+  confirmation?: unknown;
+  privateBalanceRestoredAt?: string;
+  publicChangeWei?: string;
+  sourcePublicChangeWei?: string;
+  appliedAt?: string;
+}, label: string): void {
+  const evidence = value.userOperationReceiptEvidence;
+  if (!evidence) return;
+  if (value.route === "shield_from_main") {
+    throw new Error(`${label} cannot bind UserOperation evidence to a raw transaction`);
+  }
+  if (!value.broadcastStartedAt || !value.userOperationHash || !value.transactionHash ||
+    evidence.userOperationHash.toLowerCase() !== value.userOperationHash.toLowerCase() ||
+    evidence.transactionHash.toLowerCase() !== value.transactionHash.toLowerCase()) {
+    throw new Error(`${label} UserOperation receipt evidence binding is invalid`);
+  }
+  if (Date.parse(evidence.observedAt) < Date.parse(value.broadcastStartedAt) ||
+    Date.parse(evidence.observedAt) < Date.parse(value.createdAt)) {
+    throw new Error(`${label} UserOperation receipt evidence timestamp is invalid`);
+  }
+  if (evidence.status === "success" &&
+    (value.phase === "failed" || value.privateBalanceRestoredAt !== undefined)) {
+    throw new Error(`${label} successful UserOperation evidence is contradictory`);
+  }
+  if (evidence.status === "reverted" &&
+    (value.phase === "confirmed" || value.confirmation !== undefined ||
+      value.publicChangeWei !== undefined || value.sourcePublicChangeWei !== undefined ||
+      value.appliedAt !== undefined)) {
+    throw new Error(`${label} reverted UserOperation evidence is contradictory`);
   }
 }
 
@@ -2538,7 +2597,8 @@ function validateStateTransition(previous: StateDocument, next: StateDocument): 
     next.requests,
     [
       "phase", "updatedAt", "broadcastStartedAt", "transactionHash",
-      "userOperationHash", "confirmation", "recipientBalanceBeforeWei",
+      "userOperationHash", "userOperationReceiptEvidence", "confirmation",
+      "recipientBalanceBeforeWei",
       "reconciliation", "error", "privateBalanceDebitedAt",
       "privateBalanceRestoredAt", "publicChangeWei",
     ],
@@ -2561,7 +2621,8 @@ function validateStateTransition(previous: StateDocument, next: StateDocument): 
     next.recoveryRequests,
     [
       "phase", "updatedAt", "broadcastStartedAt", "transactionHash",
-      "userOperationHash", "confirmation", "recipientBalanceBeforeWei",
+      "userOperationHash", "userOperationReceiptEvidence", "confirmation",
+      "recipientBalanceBeforeWei",
       "reconciliation", "error", "privateBalanceDebitedAt",
       "privateBalanceRestoredAt", "publicChangeWei",
     ],
@@ -2578,7 +2639,8 @@ function validateStateTransition(previous: StateDocument, next: StateDocument): 
     next.privateBalanceFundingRequests,
     [
       "phase", "updatedAt", "broadcastStartedAt", "transactionHash",
-      "userOperationHash", "confirmation", "reconciliation", "appliedAt",
+      "userOperationHash", "userOperationReceiptEvidence", "confirmation",
+      "reconciliation", "appliedAt",
       "error", "aggregatePrivateBalanceAfterWei", "sourcePrivateBalanceAfterWei",
       "targetPrivateBalanceAfterWei", "sourcePublicChangeWei",
     ],
@@ -2595,7 +2657,7 @@ function validateStateTransition(previous: StateDocument, next: StateDocument): 
     terminalPhases: ["confirmed", "failed"],
     appendOnlyFields: [
       "broadcastStartedAt", "privateBalanceDebitedAt", "privateBalanceRestoredAt",
-      "confirmation", "publicChangeWei",
+      "confirmation", "publicChangeWei", "userOperationReceiptEvidence",
     ],
     hashFields: ["transactionHash", "userOperationHash"],
   });
@@ -2614,7 +2676,7 @@ function validateStateTransition(previous: StateDocument, next: StateDocument): 
     terminalPhases: ["confirmed", "failed"],
     appendOnlyFields: [
       "broadcastStartedAt", "privateBalanceDebitedAt", "privateBalanceRestoredAt",
-      "confirmation", "publicChangeWei",
+      "confirmation", "publicChangeWei", "userOperationReceiptEvidence",
     ],
     hashFields: ["transactionHash", "userOperationHash"],
   });
@@ -2640,6 +2702,7 @@ function validateStateTransition(previous: StateDocument, next: StateDocument): 
       terminalPhases: ["confirmed", "failed"],
       appendOnlyFields: [
         "broadcastStartedAt", "confirmation", "appliedAt", "sourcePublicChangeWei",
+        "userOperationReceiptEvidence",
       ],
       hashFields: ["transactionHash", "userOperationHash"],
     },

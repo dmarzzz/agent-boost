@@ -436,6 +436,88 @@ test("terminal phases, durable evidence, and core request bindings are append-on
   );
 });
 
+test("terminal UserOperation evidence is hash-bound, append-only, and contradiction-safe", async () => {
+  const context = await readyStore();
+  const payment = paymentRecords(context, "userop-evidence", "submitted");
+  const userOperationHash = `0x${"c".repeat(64)}`;
+  const transactionHash = `0x${"d".repeat(64)}`;
+  payment.request.broadcastStartedAt = CREATED_AT;
+  payment.request.userOperationHash = userOperationHash;
+  payment.request.transactionHash = transactionHash;
+  payment.request.userOperationReceiptEvidence = {
+    version: 1,
+    status: "success",
+    userOperationHash,
+    transactionHash,
+    observedAt: UPDATED_AT,
+  };
+  await context.store.update((draft) => {
+    draft.plans[payment.plan.decisionId] = payment.plan;
+    draft.requests[payment.request.requestId] = payment.request;
+  });
+
+  await assert.rejects(
+    context.store.update((draft) => {
+      draft.requests[payment.request.requestId]!.userOperationReceiptEvidence!.status =
+        "reverted";
+    }),
+    /evidence.*cannot be removed or changed|successful.*contradictory/i,
+  );
+  await assert.rejects(
+    context.store.update((draft) => {
+      draft.requests[payment.request.requestId]!.userOperationReceiptEvidence!
+        .transactionHash = `0x${"e".repeat(64)}`;
+    }),
+    /evidence binding is invalid|evidence.*cannot be removed or changed/i,
+  );
+  await assert.rejects(
+    context.store.update((draft) => {
+      delete draft.requests[payment.request.requestId]!.userOperationReceiptEvidence;
+    }),
+    /evidence.*cannot be removed or changed/i,
+  );
+
+  const contradictory = await readyStore();
+  const recovery = recoveryRecords(contradictory, "contradictory-evidence");
+  recovery.request.broadcastStartedAt = CREATED_AT;
+  recovery.request.userOperationHash = userOperationHash;
+  recovery.request.transactionHash = transactionHash;
+  recovery.request.userOperationReceiptEvidence = {
+    version: 1,
+    status: "success",
+    userOperationHash: `0x${"f".repeat(64)}`,
+    transactionHash,
+    observedAt: UPDATED_AT,
+  };
+  await assert.rejects(
+    contradictory.store.update((draft) => {
+      draft.recoveryPlans[recovery.plan.decisionId] = recovery.plan;
+      draft.recoveryRequests[recovery.request.requestId] = recovery.request;
+    }),
+    /evidence binding is invalid/i,
+  );
+
+  const rawFunding = await readyStore();
+  const funding = mainFundingRecords(rawFunding, "raw-evidence");
+  funding.request.broadcastStartedAt = CREATED_AT;
+  funding.request.userOperationHash = userOperationHash;
+  funding.request.transactionHash = transactionHash;
+  funding.request.userOperationReceiptEvidence = {
+    version: 1,
+    status: "success",
+    userOperationHash,
+    transactionHash,
+    observedAt: UPDATED_AT,
+  };
+  await assert.rejects(
+    rawFunding.store.update((draft) => {
+      draft.privateBalanceFundingPlans[funding.plan.decisionId] = funding.plan;
+      draft.privateBalanceFundingRequests[funding.request.requestId] = funding.request;
+    }),
+    /cannot bind UserOperation evidence to a raw transaction/i,
+  );
+});
+
 test("funding consumption receipt cannot be removed or rebound", async () => {
   const context = await readyStore();
   const funding = mainFundingRecords(context, "consumed");

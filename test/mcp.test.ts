@@ -790,6 +790,13 @@ function fakeRuntime(): AgentBoostRuntime {
           attempts: 2,
           checkedAt: new Date(0).toISOString(),
         },
+        userOperationReceiptEvidence: {
+          version: 1 as const,
+          status: "success" as const,
+          userOperationHash: `0x${"a".repeat(64)}`,
+          transactionHash: `0x${"b".repeat(64)}`,
+          observedAt: new Date(0).toISOString(),
+        },
       };
     },
     async getRequest() {
@@ -806,6 +813,13 @@ function fakeRuntime(): AgentBoostRuntime {
         updatedAt: new Date(0).toISOString(),
         recipientBalanceBeforeWei: "123",
         reconciliation: { attempts: 2, checkedAt: new Date(0).toISOString() },
+        userOperationReceiptEvidence: {
+          version: 1 as const,
+          status: "success" as const,
+          userOperationHash: `0x${"a".repeat(64)}`,
+          transactionHash: `0x${"b".repeat(64)}`,
+          observedAt: new Date(0).toISOString(),
+        },
       };
     },
     async planRecoveryTransfer(input) {
@@ -2631,7 +2645,7 @@ test("MCP exposes wallet-first tools and structured onboarding", async () => {
   );
   assert.doesNotMatch(
     JSON.stringify(executedPayload),
-    /recipientBalanceBeforeWei|reconciliation/,
+    /recipientBalanceBeforeWei|reconciliation|userOperationReceiptEvidence/,
   );
   const executedText = executed.content.find((block) => block.type === "text");
   assert.match(

@@ -23,6 +23,11 @@ import {
   recordPublicChangeAccount,
 } from "./public-change.js";
 import { StateStore, type StateDocument } from "./state/store.js";
+import {
+  assertUserOperationReceiptEvidenceMatches,
+  sameUserOperationTerminalResult,
+  terminalUserOperationReceiptEvidence,
+} from "./user-operation-receipt.js";
 
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
 const ATOMIC_PATTERN = /^(0|[1-9][0-9]*)$/;
@@ -384,6 +389,8 @@ export class PaymentController {
     let receiptStatus: "pending" | "success" | "reverted" | undefined;
     let receiptTransactionHash: string | undefined;
     let receiptMethod: "transaction_receipt" | "user_operation_receipt" | undefined;
+    let receiptEvidence = request.userOperationReceiptEvidence;
+    let newReceiptEvidence: typeof receiptEvidence;
     let checkpoint: Awaited<ReturnType<typeof matchingPrivateBroadcastCheckpoint>>;
     let reconciliationError:
       | "PRIVATE_BROADCAST_CHECKPOINT_MISMATCH"
@@ -400,10 +407,31 @@ export class PaymentController {
     } catch {
       reconciliationError = "PRIVATE_BROADCAST_CHECKPOINT_MISMATCH";
     }
+    if (receiptEvidence && !checkpoint && !reconciliationError) {
+      reconciliationError = "PRIVATE_BROADCAST_CHECKPOINT_MISMATCH";
+    }
     const userOperationHash = reconciliationError
       ? undefined
       : request.userOperationHash ?? checkpoint?.userOperationHash;
-    if (userOperationHash) {
+    if (receiptEvidence && checkpoint && !reconciliationError) {
+      try {
+        assertUserOperationReceiptEvidenceMatches({
+          evidence: receiptEvidence,
+          checkpoint,
+          ...(request.userOperationHash === undefined
+            ? {}
+            : { storedUserOperationHash: request.userOperationHash }),
+          ...(request.transactionHash === undefined
+            ? {}
+            : { storedTransactionHash: request.transactionHash }),
+        });
+        receiptStatus = receiptEvidence.status;
+        receiptTransactionHash = receiptEvidence.transactionHash;
+        receiptMethod = "user_operation_receipt";
+      } catch {
+        reconciliationError = "PRIVATE_BROADCAST_CHECKPOINT_MISMATCH";
+      }
+    } else if (userOperationHash) {
       if (this.#chain?.getUserOperationReceiptStatus) {
         try {
           const result = await this.#chain.getUserOperationReceiptStatus(
@@ -413,9 +441,20 @@ export class PaymentController {
           receiptStatus = result.status;
           if (result.status !== "pending") {
             if (request.transactionHash &&
-              request.transactionHash.toLowerCase() !== result.transactionHash.toLowerCase()) {
+              request.transactionHash.toLowerCase() !==
+                result.transactionHash.toLowerCase()) {
               throw new Error("UserOperation receipt transaction hash mismatch");
             }
+            newReceiptEvidence = checkpoint
+              ? terminalUserOperationReceiptEvidence({
+                  userOperationHash,
+                  receipt: result,
+                  observedAt: this.#clock.now().toISOString(),
+                  ...(request.transactionHash === undefined
+                    ? {}
+                    : { storedTransactionHash: request.transactionHash }),
+                })
+              : undefined;
             receiptTransactionHash = result.transactionHash;
             receiptMethod = "user_operation_receipt";
           }
@@ -436,6 +475,47 @@ export class PaymentController {
       } catch {
         // Receipt lookup is best-effort. Reconciliation never broadcasts.
       }
+    }
+
+    if (newReceiptEvidence && checkpoint) {
+      const evidenceState = await this.#store.update((draft) => {
+        const current = draft.requests[requestId];
+        if (!current) throw new Error("REQUEST_NOT_FOUND");
+        if (current.userOperationHash &&
+          current.userOperationHash.toLowerCase() !==
+            newReceiptEvidence!.userOperationHash.toLowerCase()) {
+          throw new Error("UserOperation receipt evidence hash mismatch");
+        }
+        if (current.transactionHash &&
+          current.transactionHash.toLowerCase() !==
+            newReceiptEvidence!.transactionHash.toLowerCase()) {
+          throw new Error("UserOperation receipt transaction hash mismatch");
+        }
+        if (current.userOperationReceiptEvidence) {
+          if (!sameUserOperationTerminalResult(
+            current.userOperationReceiptEvidence,
+            newReceiptEvidence!,
+          )) {
+            throw new Error("UserOperation terminal receipt evidence is immutable");
+          }
+        } else {
+          current.userOperationHash = newReceiptEvidence!.userOperationHash;
+          current.transactionHash = newReceiptEvidence!.transactionHash;
+          current.userOperationReceiptEvidence = newReceiptEvidence!;
+          current.updatedAt = newReceiptEvidence!.observedAt;
+        }
+      });
+      receiptEvidence = evidenceState.requests[requestId]?.userOperationReceiptEvidence;
+      if (!receiptEvidence) throw new Error("UserOperation receipt evidence was not persisted");
+      assertUserOperationReceiptEvidenceMatches({
+        evidence: receiptEvidence,
+        checkpoint,
+        storedUserOperationHash: receiptEvidence.userOperationHash,
+        storedTransactionHash: receiptEvidence.transactionHash,
+      });
+      receiptStatus = receiptEvidence.status;
+      receiptTransactionHash = receiptEvidence.transactionHash;
+      receiptMethod = "user_operation_receipt";
     }
 
     let publicChangeWei: bigint | undefined;

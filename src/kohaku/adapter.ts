@@ -60,6 +60,10 @@ const MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI = 10_000_000_000_000_000n;
 const TOR_GUARD_STATE_CORRUPTION_LINE =
   "Bootstrap failed: tor: corrupted data in persistent state: Error setting up the guard manager";
 const TOR_CACHE_RECOVERY_HINT = "Try: kohaku clear-tor-cache";
+const TOR_GUARD_STATE_CORRUPTION_DECORATED_LINE =
+  `■  ✖ ${TOR_GUARD_STATE_CORRUPTION_LINE}`;
+const TOR_CACHE_RECOVERY_DECORATED_HINT =
+  `│    → ${TOR_CACHE_RECOVERY_HINT}`;
 const TORNADO_STALE_ROOT_LINE_RE =
   /^■  ✖ State root verification failed: root not found in Pool recent history(?: \(expected=(?:0|[1-9][0-9]*), currentOnChain=(?:0|[1-9][0-9]*)\))?$/u;
 const NETWORK_GUARD_PATH = fileURLToPath(
@@ -1379,11 +1383,19 @@ function isRecoverableTorGuardStateCorruption(
   result: CommandResult,
 ): boolean {
   return [result.stdout, result.stderr].some((output) => {
-    const lines = output.split(/\r?\n/u).map((line) => line.trim());
-    return lines.some((line, index) =>
-      line === TOR_GUARD_STATE_CORRUPTION_LINE &&
-      lines[index + 1] === TOR_CACHE_RECOVERY_HINT
-    );
+    // Cache deletion is permitted only for Kohaku's two exact adjacent-line
+    // signatures. Keep each stream isolated and do not normalize decoration.
+    const lines = output.split(/\r?\n/u);
+    return lines.some((line, index) => {
+      const nextLine = lines[index + 1];
+      return (
+        line === TOR_GUARD_STATE_CORRUPTION_LINE &&
+        nextLine === TOR_CACHE_RECOVERY_HINT
+      ) || (
+        line === TOR_GUARD_STATE_CORRUPTION_DECORATED_LINE &&
+        nextLine === TOR_CACHE_RECOVERY_DECORATED_HINT
+      );
+    });
   });
 }
 

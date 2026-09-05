@@ -3770,6 +3770,16 @@ function savedWalletLoadReference(
   if (!match) return undefined;
   const action = (match[1] ?? "").toLowerCase();
   const tail = (match[2] ?? "").trim();
+  if (
+    action === "use" &&
+    /^(?:(?:only|exactly)\s+)*(?:(?:(?:the|this)\s+)?agent[ -]boost\s+tool|(?:the|this)\s+tool)\b/iu
+      .test(tail)
+  ) {
+    // `Use the Agent Boost tool ...` is tool-selection syntax, including when
+    // the following identifier is misspelled. Never reinterpret it as a
+    // saved-wallet friendly name. Explicit wallet wrappers below remain legal.
+    return undefined;
+  }
   // Selecting/loading already makes the named profile active. Treat common
   // restatements of that effect as request syntax, not as part of the friendly
   // name. Without this, `load wallet agent-boost and make it active` was pinned
@@ -5006,6 +5016,17 @@ function routingContext(message: unknown): string | undefined {
   const normalized = message.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
   if (!normalized) return undefined;
 
+  // A user (or an operational recovery prompt) may name the exact read-only
+  // getter. Keep this deliberately narrower than a generic `use <name>`
+  // request so legal saved-wallet names continue to work when introduced as
+  // a wallet/profile/account. Without this signal, the leading `Use` could be
+  // mistaken for a saved-profile load because MCP tool names contain `_`.
+  const explicitPrivateBalanceOperationStatusTool =
+    /^(?:please\s+)?use\s+(?:(?:only|exactly|the|this)\s+)*(?:mcp__agent_boost__)?wallet_get_private_balance_operation(?:\s+tool)?(?=$|[.!?]|\s+(?:directly|now|to|with|for)\b)/u
+      .test(normalized) ||
+    /^(?:please\s+)?use\s+(?:(?:only|exactly)\s+)*(?:(?:the|this)\s+)?agent[ -]boost\s+tool\s+(?:mcp__agent_boost__)?wallet_get_private_balance_operation(?=$|[.!?]|\s+(?:directly|now|to|with|for)\b)/u
+      .test(normalized);
+
   const routedArguments = transferRoutingArguments(message);
   const topLevelFundingRoute = topLevelWalletFundingArguments(message) !== undefined;
   const transferActionIntent = topLevelFundingRoute ||
@@ -5090,6 +5111,7 @@ function routingContext(message: unknown): string | undefined {
   const parsedPrivateBalancePolicyTarget = privateBalancePolicyTargetArguments(message);
   const privateBalanceIntent = /\b(?:private[- ]balance|private\s+(?:pocket|subwallet)|shielded\s+(?:balance|pocket))s?\b/u
     .test(normalized) ||
+    explicitPrivateBalanceOperationStatusTool ||
     ((childActionIntent ||
       /\b(?:change|update|edit|set|modify|show|view|get|check|read)\b/u.test(normalized)) &&
       /\b(?:pocket|child)\b/u.test(normalized)) ||
@@ -5154,10 +5176,11 @@ function routingContext(message: unknown): string | undefined {
   if (privateBalanceSnapshotRead) {
     return "Agent Boost routing for the actual user request: call wallet_get_tree directly and return its rendered wallet tree exactly. This combined child-pocket read asks for balance, readiness, and policy together; do not narrow it to the policy-only tool or call saved-wallet inventory, context, or setup first.";
   }
-  const privateBalanceOperationStatus = privateBalanceIntent && (
-    /\b(?:status|progress|outcome|what\s+happened|check)\b[^.!?]{0,80}\b(?:creat(?:e|ion)|fund(?:ing|ed)?|operation)\b/u
+  const privateBalanceOperationStatus = explicitPrivateBalanceOperationStatusTool ||
+    (privateBalanceIntent || /\bprivate\s+funding\b/u.test(normalized)) && (
+    /\b(?:status|progress|outcome|what\s+happened|check|reconcile|refresh)\b[^.!?]{0,80}\b(?:creat(?:e|ion)|fund(?:ing|ed)?|operation)\b/u
       .test(normalized) ||
-    /\b(?:creat(?:e|ion)|fund(?:ing|ed)?|operation)\b[^.!?]{0,80}\b(?:status|progress|outcome|what\s+happened|check)\b/u
+    /\b(?:creat(?:e|ion)|fund(?:ing|ed)?|operation)\b[^.!?]{0,80}\b(?:status|progress|outcome|result|what\s+happened|check|reconcile|refresh)\b/u
       .test(normalized)
   );
   if (privateBalanceOperationStatus) {
@@ -5292,6 +5315,44 @@ function routingContext(message: unknown): string | undefined {
     return "Agent Boost routing for the actual user request: ask one concise clarification for the wallet-policy setting request. The message includes policy-shaped settings but no syntactically distinct instruction to read or change a policy. Do not call any Agent Boost tool in this turn.";
   }
   return undefined;
+}
+
+type PrivateBalanceOperationFamily = "creation" | "funding" | "policy";
+
+function privateBalanceOperationStatusFamily(
+  message: unknown,
+): PrivateBalanceOperationFamily | undefined {
+  if (typeof message !== "string") return undefined;
+  const normalized = message.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
+  const families: PrivateBalanceOperationFamily[] = [];
+  if (/\b(?:private(?:[- ]balance)?\s+creation|creation\s+(?:request|operation|status))\b/u
+    .test(normalized)) {
+    families.push("creation");
+  }
+  if (/\b(?:private(?:[- ]balance)?\s+funding|funding\s+(?:request|operation|status)|rebalance(?:\s+(?:request|operation|status))?)\b/u
+    .test(normalized)) {
+    families.push("funding");
+  }
+  if (/\b(?:private(?:[- ]balance)?\s+policy|policy\s+(?:request|operation|status|update))\b/u
+    .test(normalized)) {
+    families.push("policy");
+  }
+  return families.length === 1 ? families[0] : undefined;
+}
+
+function privateBalanceStatusBindingMatchesFamily(
+  binding: StableBinding,
+  family: PrivateBalanceOperationFamily | undefined,
+): boolean {
+  if (family === undefined) return true;
+  const value = nonEmptyString(binding.request_id) ?? nonEmptyString(binding.decision_id);
+  if (!value) return false;
+  const prefixes: Record<PrivateBalanceOperationFamily, RegExp> = {
+    creation: /^(?:pbcr|pbc)_/u,
+    funding: /^(?:pbfr|pbf)_/u,
+    policy: /^(?:pbpr|pbp)_/u,
+  };
+  return prefixes[family].test(value);
 }
 
 function routedRequest(
@@ -5535,6 +5596,69 @@ async function handlePreLlmCall(
 
   const route = routingContext(userMessage);
   if (route === undefined) return {};
+  if (route.includes("call wallet_get_private_balance_operation directly")) {
+    const expectedFamily = privateBalanceOperationStatusFamily(userMessage);
+    const pendingDispatch = await readPendingDispatchStatus(
+      stateDirectory,
+      identity,
+      now,
+    );
+    const pendingStatus = pendingDispatch.status === "absent"
+      ? await readPendingStatusRead(stateDirectory, identity, now)
+      : pendingDispatch;
+    const originatingTurnHash = pendingStatus.status === "active"
+      ? "dispatch_turn_hash" in pendingStatus.value
+        ? pendingStatus.value.dispatch_turn_hash
+        : pendingStatus.value.result_turn_hash
+      : undefined;
+    if (
+      pendingStatus.status === "active" &&
+      pendingStatus.value.tool === "wallet_get_private_balance_operation" &&
+      (!("state" in pendingStatus.value) || pendingStatus.value.state === "unresolved") &&
+      privateBalanceStatusBindingMatchesFamily(
+        pendingStatus.value.binding,
+        expectedFamily,
+      ) &&
+      originatingTurnHash !== turnHash(identity)
+    ) {
+      await publishRoutedTransfer(
+        stateDirectory,
+        identity,
+        "wallet_get_private_balance_operation",
+        pendingStatus.value.binding,
+        true,
+        now,
+        ttlMs,
+      );
+      return {
+        context:
+          "Agent Boost matched this private-balance status request to one trusted " +
+          "unresolved operation from an earlier turn. Perform exactly one fresh " +
+          "status read now: call wallet_get_private_balance_operation directly with " +
+          `exactly these arguments: ${JSON.stringify(pendingStatus.value.binding)}. ` +
+          "Do not answer from chat history, call another Agent Boost tool, execute or " +
+          "retry the operation, create a replacement, or reveal the internal request " +
+          "ID. After the result, follow only its current signed status.",
+      };
+    }
+    await publishRoutedTransfer(
+      stateDirectory,
+      identity,
+      "$clarify_status_followup",
+      {},
+      true,
+      now,
+      ttlMs,
+    );
+    return {
+      context:
+        "Agent Boost cannot bind this private-balance status request to a trusted " +
+        "unresolved private-balance operation from an earlier turn. Ask one concise " +
+        "clarification about which operation the user wants checked. Do not call any " +
+        "Agent Boost tool, answer from chat history, start, retry, or replace an " +
+        "operation.",
+    };
+  }
   const routedSavedWallet = typeof userMessage === "string" &&
       route.includes("call wallet_preview_saved_profile_load directly")
     ? savedWalletLoadReference(

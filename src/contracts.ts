@@ -161,6 +161,19 @@ export interface PrivateBalanceCreationRequest {
 
 export type PrivateBalanceFundingRoute = "shield_from_main" | "rebalance_private";
 
+/**
+ * Internal, monotonic proof that an exact journaled ERC-4337 operation reached
+ * a terminal on-chain result. This is durable recovery state and must never be
+ * exposed through MCP responses.
+ */
+export interface UserOperationReceiptEvidence {
+  version: 1;
+  status: "success" | "reverted";
+  userOperationHash: string;
+  transactionHash: string;
+  observedAt: string;
+}
+
 export interface PrivateBalanceFundingPlan {
   version: 1;
   decisionId: string;
@@ -225,6 +238,8 @@ export interface PrivateBalanceFundingRequest {
   broadcastStartedAt?: string;
   transactionHash?: string;
   userOperationHash?: string;
+  /** Internal append-only terminal receipt evidence. Never expose through MCP. */
+  userOperationReceiptEvidence?: UserOperationReceiptEvidence;
   confirmation?: {
     method:
       | "adapter"
@@ -431,6 +446,8 @@ export interface PaymentRequest {
   broadcastStartedAt?: string;
   transactionHash?: string;
   userOperationHash?: string;
+  /** Internal append-only terminal receipt evidence. Never expose through MCP. */
+  userOperationReceiptEvidence?: UserOperationReceiptEvidence;
   confirmation?: {
     method:
       | "adapter"
@@ -575,6 +592,8 @@ export interface RecoveryTransferRequest {
   broadcastStartedAt?: string;
   transactionHash?: string;
   userOperationHash?: string;
+  /** Internal append-only terminal receipt evidence. Never expose through MCP. */
+  userOperationReceiptEvidence?: UserOperationReceiptEvidence;
   confirmation?: PaymentRequest["confirmation"];
   /** Internal reconciliation checkpoint. Omitted from MCP responses. */
   recipientBalanceBeforeWei?: string;

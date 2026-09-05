@@ -492,6 +492,86 @@ async function publishStatusRoute(
   return { stateDirectory, session, turn, routePath, tool, binding };
 }
 
+const PRIVATE_FUNDING_OPERATIONAL_PROMPT =
+  "Use the Agent Boost tool wallet_get_private_balance_operation now to reconcile the same existing pending private funding operation once. Do not create, prepare, confirm, submit, or replace anything. Report only its current terminal result.";
+
+async function publishNaturalPrivateFundingStatusRoute(
+  t: test.TestContext,
+  session: string,
+): Promise<{
+  stateDirectory: string;
+  session: string;
+  turn: string;
+  routePath: string;
+  tool: "wallet_get_private_balance_operation";
+  binding: { request_id: string };
+}> {
+  const stateDirectory = await mkdtemp(join(tmpdir(), "agent-boost-natural-status-"));
+  t.after(async () => rm(stateDirectory, { recursive: true, force: true }));
+  const now = Date.now();
+  const options = { stateDirectory, now: () => now };
+  const priorTurn = "prior-status-turn";
+  const turn = "operational-status-turn";
+  const tool = "wallet_get_private_balance_operation" as const;
+  const binding = { request_id: `pbfr_${session}-12345678` };
+  const envelope = {
+    schema: "org.agentboost.tool-result",
+    schema_version: "1.0",
+    manifest_digest: `sha256:${"d".repeat(64)}`,
+    outcome: "submitted",
+    code: "PRIVATE_BALANCE_OPERATION_STATUS",
+    data: { request: { requestId: binding.request_id, phase: "submitted" } },
+  };
+
+  await handleHermesTurnGatePayload({
+    hook_event_name: "pre_llm_call",
+    tool_name: null,
+    tool_input: null,
+    session_id: session,
+    extra: { turn_id: priorTurn, user_message: "Earlier operation context." },
+  }, options);
+  assert.deepEqual(await handleHermesTurnGatePayload({
+    hook_event_name: "pre_tool_call",
+    tool_name: `mcp__agent_boost__${tool}`,
+    tool_input: binding,
+    session_id: session,
+    extra: { turn_id: priorTurn, tool_call_id: "prior-status-call" },
+  }, options), {});
+  await handleHermesTurnGatePayload({
+    hook_event_name: "post_tool_call",
+    tool_name: `mcp__agent_boost__${tool}`,
+    tool_input: binding,
+    session_id: session,
+    extra: {
+      turn_id: priorTurn,
+      tool_call_id: "prior-status-call",
+      result: {
+        structuredContent: envelope,
+        _meta: { "org.agentboost/model-context": envelope },
+        content: [{ type: "text", text: "Signed pending operation status" }],
+      },
+    },
+  }, options);
+  const routed = await handleHermesTurnGatePayload({
+    hook_event_name: "pre_llm_call",
+    tool_name: null,
+    tool_input: null,
+    session_id: session,
+    extra: { turn_id: turn, user_message: PRIVATE_FUNDING_OPERATIONAL_PROMPT },
+  }, options);
+  assert.ok("context" in routed);
+  if ("context" in routed) {
+    assert.match(routed.context, /exactly one fresh status read/u);
+    assert.equal(routed.context.includes(JSON.stringify(binding)), true);
+  }
+  const routePath = await stateFile(stateDirectory, ".route.json");
+  const route = JSON.parse(await readFile(routePath, "utf8")) as Record<string, unknown>;
+  assert.equal(route.tool, tool);
+  assert.deepEqual(route.binding, binding);
+  assert.equal(route.arguments_pinned, true);
+  return { stateDirectory, session, turn, routePath, tool, binding };
+}
+
 function signedStatusResult(
   tool: StatusRouteTool,
   binding: Record<string, unknown>,
@@ -1517,6 +1597,97 @@ test("durable status routes force and pin every supported direct status read", a
       source: "agent-boost-output-guard",
       reason: "authenticated Agent Boost status binding",
     });
+  }
+});
+
+test("natural private-funding recovery is exact, one-shot, and signed through direct and Tool Search", async (t) => {
+  for (const mode of ["direct", "tool-search"] as const) {
+    const route = await publishNaturalPrivateFundingStatusRoute(
+      t,
+      `natural-status-${mode}`,
+    );
+    const wireTool = `mcp__agent_boost__${route.tool}`;
+    const invocationTool = mode === "direct" ? wireTool : "tool_call";
+    const selected = openAiTool(invocationTool);
+    const wrongBinding = { request_id: "pbfr_model-invented-12345678" };
+    const invocationArgs = mode === "direct"
+      ? wrongBinding
+      : { name: wireTool, arguments: wrongBinding };
+    const exactInvocationArgs = mode === "direct"
+      ? route.binding
+      : { name: wireTool, arguments: route.binding };
+    const canonical = `**Private funding reconciled (${mode})**`;
+    const result = await runPluginInteractions([
+      newTurn(route.session, route.turn, PRIVATE_FUNDING_OPERATIONAL_PROMPT),
+      llmRequest({
+        tools: [
+          openAiTool("mcp__agent_boost__wallet_preview_saved_profile_load"),
+          selected,
+        ],
+        tool_choice: "auto",
+      }, "chat_completions", route.session, route.turn),
+      toolRequest(invocationTool, invocationArgs, route.session, route.turn),
+      toolExecution(
+        "mcp__agent_boost__wallet_preview_saved_profile_load",
+        { wallet_name: "model-invented" },
+        route.session,
+        route.turn,
+      ),
+      toolExecution(
+        invocationTool,
+        invocationArgs,
+        route.session,
+        route.turn,
+        `${mode}-first-status-read`,
+      ),
+      toolExecution(
+        invocationTool,
+        exactInvocationArgs,
+        route.session,
+        route.turn,
+        `${mode}-duplicate-status-read`,
+      ),
+      afterTool(
+        signedStatusResult(route.tool, route.binding, {
+          phase: "confirmed",
+          rendered: canonical,
+          completeTurn: true,
+        }),
+        invocationTool,
+        route.session,
+        exactInvocationArgs,
+        route.turn,
+      ),
+      transform("The stale chat context says it may still be pending.", route.session),
+    ], { AGENT_BOOST_HERMES_TURN_GATE_DIR: route.stateDirectory });
+
+    const providerRequest = forcedRequest(result.outputs[1]);
+    assert.deepEqual(providerRequest.tools, [selected], `${mode}: provider tools`);
+    assert.deepEqual(providerRequest.tool_choice, {
+      type: "function",
+      function: { name: invocationTool },
+    }, `${mode}: provider tool choice`);
+    assert.deepEqual(result.outputs[2], {
+      args: exactInvocationArgs,
+      source: "agent-boost-output-guard",
+      reason: "authenticated Agent Boost status binding",
+    }, `${mode}: hidden handle pin`);
+    assert.deepEqual(
+      (result.outputs[3] as { forwarded: unknown[] }).forwarded,
+      [],
+      `${mode}: other tool blocked`,
+    );
+    assert.deepEqual(
+      (result.outputs[4] as { forwarded: unknown[] }).forwarded,
+      [exactInvocationArgs],
+      `${mode}: exact status read forwarded`,
+    );
+    assert.deepEqual(
+      (result.outputs[5] as { forwarded: unknown[] }).forwarded,
+      [],
+      `${mode}: duplicate status read blocked`,
+    );
+    assert.equal(result.outputs[7], canonical, `${mode}: signed terminal rendering`);
   }
 });
 

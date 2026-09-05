@@ -831,6 +831,7 @@ test("failed private change-account recovery leaves exact payment success unreso
   wallet.failChangeAccountRecovery = true;
   const userOperationHash = `0x${"69".repeat(32)}`;
   const transactionHash = `0x${"6a".repeat(32)}`;
+  let receiptReads = 0;
   wallet.executePrivatePayment = async ({ broadcastRequestId, beforeBroadcast }) => {
     await beforeBroadcast();
     wallet.calls += 1;
@@ -846,6 +847,7 @@ test("failed private change-account recovery leaves exact payment success unreso
         return address.toLowerCase() === PRIVATE_CHANGE_SENDER.toLowerCase() ? 88n : 0n;
       },
       async getUserOperationReceiptStatus(hash, expectedSender) {
+        receiptReads += 1;
         assert.equal(hash, userOperationHash);
         assert.equal(expectedSender, PRIVATE_CHANGE_SENDER);
         return { status: "success", transactionHash };
@@ -868,14 +870,47 @@ test("failed private change-account recovery leaves exact payment success unreso
   assert.equal(unresolved.transactionHash, transactionHash);
   assert.equal(unresolved.confirmation, undefined);
   assert.equal(unresolved.error?.code, "PUBLIC_CHANGE_TRACKING_PENDING");
+  assert.deepEqual(unresolved.userOperationReceiptEvidence, {
+    version: 1,
+    status: "success",
+    userOperationHash,
+    transactionHash,
+    observedAt: new Date(1_000).toISOString(),
+  });
   assert.equal(wallet.changeAccountCalls.length, 1);
+  assert.equal(receiptReads, 1);
 
   wallet.failChangeAccountRecovery = false;
-  const recovered = await controller.getRequest(interrupted.requestId);
+  const restartedStore = new StateStore(join(store.path, ".."));
+  await restartedStore.initialize();
+  const restarted = new PaymentController({
+    store: restartedStore,
+    wallet,
+    chain: {
+      async assertSepolia() {},
+      async getBalanceWei(address) {
+        return address.toLowerCase() === PRIVATE_CHANGE_SENDER.toLowerCase() ? 88n : 0n;
+      },
+      async getUserOperationReceiptStatus() {
+        receiptReads += 1;
+        throw new Error("receipt provider unavailable after restart");
+      },
+    },
+    clock: { now: () => new Date(2_000) },
+  });
+  const recovered = await restarted.getRequest(interrupted.requestId);
   assert.equal(recovered.phase, "confirmed");
   assert.equal(recovered.publicChangeWei, "88");
   assert.equal(recovered.confirmation?.method, "user_operation_receipt");
+  const stable = await restarted.getRequest(interrupted.requestId);
+  assert.deepEqual(stable, recovered);
+  assert.equal(receiptReads, 1);
   assert.equal(wallet.calls, 1);
+  const state = await store.read();
+  const profile = state.wallet!.profiles[state.wallet!.activeWalletId]!;
+  const pocket = profile.privateBalances[recovered.privateBalanceId!]!;
+  assert.equal(pocket.balanceWei, "0");
+  assert.equal(Object.keys(pocket.publicChangeAccounts ?? {}).length, 1);
 });
 
 test("a mismatched UserOperation transaction stays unresolved and ignores the outer receipt", async () => {

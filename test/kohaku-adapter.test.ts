@@ -60,6 +60,12 @@ const TOR_GUARD_STATE_CORRUPTION_LINE =
 const TOR_CACHE_RECOVERY_HINT = "Try: kohaku clear-tor-cache";
 const TOR_GUARD_STATE_CORRUPTION_OUTPUT =
   `${TOR_GUARD_STATE_CORRUPTION_LINE}\n${TOR_CACHE_RECOVERY_HINT}\n`;
+const TOR_GUARD_STATE_CORRUPTION_DECORATED_LINE =
+  `■  ✖ ${TOR_GUARD_STATE_CORRUPTION_LINE}`;
+const TOR_CACHE_RECOVERY_DECORATED_HINT =
+  `│    → ${TOR_CACHE_RECOVERY_HINT}`;
+const TOR_GUARD_STATE_CORRUPTION_DECORATED_OUTPUT =
+  `${TOR_GUARD_STATE_CORRUPTION_DECORATED_LINE}\n${TOR_CACHE_RECOVERY_DECORATED_HINT}\n`;
 const TORNADO_STALE_ROOT_OUTPUT =
   "│\n■  ✖ State root verification failed: root not found in Pool recent history\n";
 const TORNADO_REPAIR_STORE_KEY =
@@ -1304,6 +1310,45 @@ describe("KohakuWalletAdapter", () => {
     assert.match(runner.calls[2]?.env?.NODE_OPTIONS ?? "", /network-guard\.mjs/u);
   });
 
+  it("repairs the exact decorated pinned Kohaku Tor failure from stderr", async () => {
+    let balanceAttempts = 0;
+    const runner = new FakeRunner((invocation) => {
+      if (command(invocation) === "clear-tor-cache") {
+        return { exitCode: 0, stdout: "cleared\n", stderr: "" };
+      }
+      assert.equal(command(invocation), "balances");
+      balanceAttempts += 1;
+      if (balanceAttempts === 1) {
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr: TOR_GUARD_STATE_CORRUPTION_DECORATED_OUTPUT,
+        };
+      }
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          public_balances_aggregated: [{
+            symbol: "ETH",
+            raw_token_holdings: "300000000000000000",
+          }],
+          private_balances: { tornado: [] },
+        }),
+        stderr: "",
+      };
+    });
+    const { adapter } = await fixture(runner);
+
+    assert.deepEqual(await adapter.getBalanceSnapshot(), {
+      publicBalanceWei: 300_000_000_000_000_000n,
+      privateBalanceWei: 0n,
+    });
+    assert.deepEqual(
+      runner.calls.map(command),
+      ["balances", "clear-tor-cache", "balances"],
+    );
+  });
+
   it("recovers a non-consuming fresh-address peek but preserves its no-RPC boundary", async () => {
     let peekAttempts = 0;
     const runner = new FakeRunner((invocation) => {
@@ -1345,8 +1390,9 @@ describe("KohakuWalletAdapter", () => {
       balanceAttempts += 1;
       return {
         exitCode: balanceAttempts === 1 ? 17 : 23,
-        stdout: `${TOR_GUARD_STATE_CORRUPTION_OUTPUT}${privateOutput}\n`,
-        stderr: `${privateOutput}-stderr`,
+        stdout: privateOutput,
+        stderr:
+          `${TOR_GUARD_STATE_CORRUPTION_DECORATED_OUTPUT}${privateOutput}-stderr\n`,
       };
     });
     const { adapter } = await fixture(runner);
@@ -1409,6 +1455,16 @@ describe("KohakuWalletAdapter", () => {
       `prefix: ${TOR_GUARD_STATE_CORRUPTION_LINE}\n${TOR_CACHE_RECOVERY_HINT}\n`,
       `${TOR_CACHE_RECOVERY_HINT}\n${TOR_GUARD_STATE_CORRUPTION_LINE}\n`,
       `${TOR_GUARD_STATE_CORRUPTION_LINE}\nunrelated detail\n${TOR_CACHE_RECOVERY_HINT}\n`,
+      `${TOR_GUARD_STATE_CORRUPTION_DECORATED_LINE}\n`,
+      `${TOR_CACHE_RECOVERY_DECORATED_HINT}\n`,
+      `${TOR_CACHE_RECOVERY_DECORATED_HINT}\n${TOR_GUARD_STATE_CORRUPTION_DECORATED_LINE}\n`,
+      `${TOR_GUARD_STATE_CORRUPTION_DECORATED_LINE}\n│ unrelated detail\n${TOR_CACHE_RECOVERY_DECORATED_HINT}\n`,
+      `■  ✗ ${TOR_GUARD_STATE_CORRUPTION_LINE}\n${TOR_CACHE_RECOVERY_DECORATED_HINT}\n`,
+      `${TOR_GUARD_STATE_CORRUPTION_DECORATED_LINE}\n│   → ${TOR_CACHE_RECOVERY_HINT}\n`,
+      `${TOR_GUARD_STATE_CORRUPTION_DECORATED_LINE}\n${TOR_CACHE_RECOVERY_HINT}\n`,
+      `${TOR_GUARD_STATE_CORRUPTION_LINE}\n${TOR_CACHE_RECOVERY_DECORATED_HINT}\n`,
+      ` ${TOR_GUARD_STATE_CORRUPTION_DECORATED_LINE}\n${TOR_CACHE_RECOVERY_DECORATED_HINT}\n`,
+      `${TOR_GUARD_STATE_CORRUPTION_DECORATED_LINE}\n${TOR_CACHE_RECOVERY_DECORATED_HINT} \n`,
     ];
 
     for (const stdout of unrelatedOutputs) {
@@ -1426,24 +1482,36 @@ describe("KohakuWalletAdapter", () => {
       assert.deepEqual(runner.calls.map(command), ["balances"]);
     }
 
-    const splitRunner = new FakeRunner(() => ({
-      exitCode: 31,
-      stdout: `${TOR_GUARD_STATE_CORRUPTION_LINE}\n`,
-      stderr: `${TOR_CACHE_RECOVERY_HINT}\n`,
-    }));
-    const splitFixture = await fixture(splitRunner);
-    await assert.rejects(
-      splitFixture.adapter.getBalanceSnapshot(),
-      /balances failed with exit code 31/u,
-    );
-    assert.deepEqual(splitRunner.calls.map(command), ["balances"]);
+    const splitStreams = [
+      {
+        stdout: `${TOR_GUARD_STATE_CORRUPTION_LINE}\n`,
+        stderr: `${TOR_CACHE_RECOVERY_HINT}\n`,
+      },
+      {
+        stdout: `${TOR_GUARD_STATE_CORRUPTION_DECORATED_LINE}\n`,
+        stderr: `${TOR_CACHE_RECOVERY_DECORATED_HINT}\n`,
+      },
+    ];
+    for (const splitStream of splitStreams) {
+      const splitRunner = new FakeRunner(() => ({
+        exitCode: 31,
+        ...splitStream,
+      }));
+      const splitFixture = await fixture(splitRunner);
+      await assert.rejects(
+        splitFixture.adapter.getBalanceSnapshot(),
+        /balances failed with exit code 31/u,
+      );
+      assert.deepEqual(splitRunner.calls.map(command), ["balances"]);
+    }
   });
 
   it("never retries stateful non-broadcast commands after Tor corruption", async () => {
     const addressRunner = new FakeRunner(() => ({
       exitCode: 37,
-      stdout: TOR_GUARD_STATE_CORRUPTION_OUTPUT,
-      stderr: "address-state-private-output",
+      stdout: "",
+      stderr:
+        `${TOR_GUARD_STATE_CORRUPTION_DECORATED_OUTPUT}address-state-private-output`,
     }));
     const addressFixture = await fixture(addressRunner);
     await assert.rejects(
@@ -1490,8 +1558,9 @@ describe("KohakuWalletAdapter", () => {
       }
       return {
         exitCode: 43,
-        stdout: TOR_GUARD_STATE_CORRUPTION_OUTPUT,
-        stderr: "broadcast-private-output",
+        stdout: "",
+        stderr:
+          `${TOR_GUARD_STATE_CORRUPTION_DECORATED_OUTPUT}broadcast-private-output`,
       };
     });
     const { adapter } = await fixture(runner);

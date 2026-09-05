@@ -516,6 +516,7 @@ test("StateStore atomically migrates v2 profiles to deterministic physical pocke
       request?.phase === "executing" || request?.phase === "submitted" ||
         request?.phase === "indeterminate",
     );
+    assert.equal("userOperationReceiptEvidence" in (request ?? {}), false);
   }
 
   const restarted = new StateStore(root);

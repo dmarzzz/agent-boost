@@ -51,6 +51,7 @@ class PhysicalWallet implements WalletAdapter {
   checkpoint?: PrivateBroadcastCheckpoint;
   rawCheckpoint?: RawTransactionBroadcastCheckpoint;
   changeAccountCalls: Array<{ walletName: string; expectedAddress: string }> = [];
+  failChangeAccountRecovery = false;
 
   selectWallet(_walletName: string): void {}
   async listWallets(): Promise<Array<{ name: string; network: "sepolia" }>> {
@@ -117,6 +118,9 @@ class PhysicalWallet implements WalletAdapter {
     expectedAddress: string,
   ): Promise<void> {
     this.changeAccountCalls.push({ walletName, expectedAddress });
+    if (this.failChangeAccountRecovery) {
+      throw new Error("private change account recovery failed");
+    }
   }
 
   async peekNextFreshAddressForWallet(walletName: string): Promise<string> {
@@ -317,7 +321,7 @@ async function readyStore(defaultPrivateBalanceWei = 0n): Promise<StateStore> {
 function controller(
   store: StateStore,
   wallet: PhysicalWallet,
-  chain = new TestChain(),
+  chain: ChainClient = new TestChain(),
   now = 1_000,
 ): PrivateBalanceController {
   return new PrivateBalanceController({
@@ -824,6 +828,96 @@ test("private funding hydrates its crash journal and tracks exact public change"
   );
   assert.equal(chain.transactionReceiptReads, 0);
   assert.equal(wallet.rebalanceCalls, 1);
+});
+
+test("private funding reuses durable success evidence after receipt RPC failure", async () => {
+  const store = await readyStore();
+  const wallet = new PhysicalWallet();
+  const chain = new TestChain();
+  const runtime = controller(store, wallet, chain);
+  const source = await createPocket(runtime, "source", "source-evidence-retry");
+  const target = await createPocket(runtime, "target", "target-evidence-retry");
+  wallet.balances.set(source.backendWalletName, 3n * DENOMINATION);
+  wallet.balances.set(target.backendWalletName, 0n);
+  wallet.nextExecutors.set(source.backendWalletName, EXECUTOR);
+  chain.balances.set(EXECUTOR, 321n);
+  wallet.executePrivateRebalance = async (input) => {
+    await input.beforeBroadcast();
+    wallet.rebalanceCalls += 1;
+    wallet.checkpoint = {
+      version: 1,
+      requestId: input.broadcastRequestId,
+      userOperationHash: USER_OP_HASH,
+      sender: EXECUTOR,
+      entryPointAddress: ENTRY_POINT_V08,
+      journaledAt: new Date(1_000).toISOString(),
+    };
+    wallet.balances.set(source.backendWalletName, DENOMINATION);
+    wallet.balances.set(target.backendWalletName, DENOMINATION);
+    return { userOperationHash: USER_OP_HASH, confirmed: false };
+  };
+
+  const plan = await runtime.previewFunding({
+    source: { kind: "private_balance", privateBalance: source.name },
+    targetPrivateBalance: target.name,
+    amountWei: DENOMINATION.toString(),
+  });
+  const submitted = await runtime.executeFunding({
+    decisionId: plan.decisionId,
+    clientRequestId: "private-funding-evidence-retry",
+    userConfirmed: true,
+  });
+  assert.equal(submitted.phase, "submitted");
+
+  chain.receipt = "success";
+  wallet.failChangeAccountRecovery = true;
+  const waitingForChange = await runtime.fundingStatus(submitted.requestId);
+  assert.equal(waitingForChange.phase, "indeterminate");
+  assert.equal(waitingForChange.error?.code, "PUBLIC_CHANGE_TRACKING_PENDING");
+  assert.deepEqual(waitingForChange.userOperationReceiptEvidence, {
+    version: 1,
+    status: "success",
+    userOperationHash: USER_OP_HASH,
+    transactionHash: TX_HASH,
+    observedAt: new Date(1_000).toISOString(),
+  });
+  assert.equal(chain.userOperationReceiptReads, 1);
+
+  wallet.failChangeAccountRecovery = false;
+  let unavailableReceiptReads = 0;
+  const unavailableReceiptChain: ChainClient = {
+    async assertSepolia() {},
+    async getBalanceWei(address) {
+      return chain.balances.get(address) ?? 0n;
+    },
+    async getUserOperationReceiptStatus() {
+      unavailableReceiptReads += 1;
+      throw new Error("UserOperation receipt provider unavailable after restart");
+    },
+  };
+  const restartedStore = new StateStore(join(store.path, ".."));
+  await restartedStore.initialize();
+  const restarted = controller(restartedStore, wallet, unavailableReceiptChain, 2_000);
+  const confirmed = await restarted.fundingStatus(submitted.requestId);
+  assert.equal(confirmed.phase, "confirmed");
+  assert.equal(confirmed.sourcePublicChangeWei, "321");
+  assert.equal(confirmed.confirmation?.method, "user_operation_receipt");
+  assert.ok(confirmed.appliedAt);
+  assert.equal(chain.userOperationReceiptReads, 1);
+  assert.equal(unavailableReceiptReads, 0);
+  assert.equal(wallet.rebalanceCalls, 1);
+
+  const stable = await restarted.fundingStatus(submitted.requestId);
+  assert.deepEqual(stable, confirmed);
+  const saved = await activeProfile(store);
+  assert.equal(saved.privateBalances[source.privateBalanceId]?.balanceWei, DENOMINATION.toString());
+  assert.equal(saved.privateBalances[target.privateBalanceId]?.balanceWei, DENOMINATION.toString());
+  assert.equal(
+    Object.keys(saved.privateBalances[source.privateBalanceId]?.publicChangeAccounts ?? {}).length,
+    1,
+  );
+  assert.equal((await store.read()).privateBalanceFundingPlans[plan.decisionId]?.appliedAt,
+    confirmed.appliedAt);
 });
 
 test("adapter-confirmed private rebalance with a journal waits for exact receipt and change recovery", async () => {

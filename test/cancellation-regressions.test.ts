@@ -27,6 +27,7 @@ class CancellationWallet implements WalletAdapter {
   recoveryCalls = 0;
   checkpoint?: PrivateBroadcastCheckpoint;
   changeAccountCalls: Array<{ walletName: string; expectedAddress: string }> = [];
+  failChangeAccountRecovery = false;
 
   async ensureWallet(): Promise<void> {}
   async nextFreshAddress(): Promise<string> { return MAIN; }
@@ -43,6 +44,9 @@ class CancellationWallet implements WalletAdapter {
     expectedAddress: string,
   ): Promise<void> {
     this.changeAccountCalls.push({ walletName, expectedAddress });
+    if (this.failChangeAccountRecovery) {
+      throw new Error("private change account recovery failed");
+    }
   }
 
   async executePrivatePayment(input: {
@@ -325,6 +329,100 @@ test("adapter-confirmed recovery with a journal waits for exact receipt and chan
   );
 });
 
+test("recovery reuses durable success evidence after change recovery and receipt RPC fail", async () => {
+  const store = await readyStore();
+  const wallet = new CancellationWallet();
+  const userOperationHash = `0x${"47".repeat(32)}`;
+  const transactionHash = `0x${"48".repeat(32)}`;
+  let receiptReads = 0;
+  wallet.executeRecoveryTransfer = async ({ broadcastRequestId, beforeBroadcast }) => {
+    await beforeBroadcast();
+    wallet.recoveryCalls += 1;
+    wallet.checkpoint = {
+      version: 1,
+      requestId: broadcastRequestId,
+      userOperationHash,
+      sender: CHANGE_SENDER,
+      entryPointAddress: ENTRY_POINT_V08,
+      journaledAt: new Date(1_000).toISOString(),
+    };
+    return { userOperationHash, confirmed: false };
+  };
+  const chain: ChainClient = {
+    async assertSepolia() {},
+    async getBalanceWei(address) {
+      if (address.toLowerCase() === CHANGE_SENDER.toLowerCase()) return 19n;
+      return address === MAIN ? 1_000n : 90n;
+    },
+    async getUserOperationReceiptStatus(hash, expectedSender) {
+      receiptReads += 1;
+      assert.equal(hash, userOperationHash);
+      assert.equal(expectedSender, CHANGE_SENDER);
+      return { status: "success", transactionHash };
+    },
+  };
+  const controller = new RecoveryTransferController({
+    store,
+    wallet,
+    chain,
+    withdrawalAmountWei: 100n,
+    feeReserveWei: 10n,
+    clock: { now: () => new Date(1_000) },
+  });
+  const plan = await controller.plan({ recipient: RECIPIENT, amountWei: "90" });
+  const submitted = await controller.execute({
+    decisionId: plan.decisionId,
+    clientRequestId: "recovery-evidence-retry",
+    userConfirmed: true,
+  });
+  wallet.failChangeAccountRecovery = true;
+  const waitingForChange = await controller.getRequest(submitted.requestId);
+  assert.equal(waitingForChange.phase, "submitted");
+  assert.equal(waitingForChange.error?.code, "PUBLIC_CHANGE_TRACKING_PENDING");
+  assert.deepEqual(waitingForChange.userOperationReceiptEvidence, {
+    version: 1,
+    status: "success",
+    userOperationHash,
+    transactionHash,
+    observedAt: new Date(1_000).toISOString(),
+  });
+  assert.equal(receiptReads, 1);
+
+  wallet.failChangeAccountRecovery = false;
+  const restartedStore = new StateStore(join(store.path, ".."));
+  await restartedStore.initialize();
+  const restarted = new RecoveryTransferController({
+    store: restartedStore,
+    wallet,
+    chain: {
+      async assertSepolia() {},
+      async getBalanceWei(address) {
+        if (address.toLowerCase() === CHANGE_SENDER.toLowerCase()) return 19n;
+        return address === MAIN ? 1_000n : 90n;
+      },
+      async getUserOperationReceiptStatus() {
+        receiptReads += 1;
+        throw new Error("receipt provider unavailable after restart");
+      },
+    },
+    withdrawalAmountWei: 100n,
+    feeReserveWei: 10n,
+    clock: { now: () => new Date(2_000) },
+  });
+  const confirmed = await restarted.getRequest(submitted.requestId);
+  assert.equal(confirmed.phase, "confirmed");
+  assert.equal(confirmed.publicChangeWei, "19");
+  assert.equal(confirmed.confirmation?.method, "user_operation_receipt");
+  assert.equal(receiptReads, 1);
+  assert.equal(wallet.recoveryCalls, 1);
+  assert.deepEqual(await restarted.getRequest(submitted.requestId), confirmed);
+  const state = await store.read();
+  const profile = state.wallet!.profiles[state.wallet!.activeWalletId]!;
+  const pocket = profile.privateBalances[confirmed.privateBalanceId!]!;
+  assert.equal(pocket.balanceWei, "0");
+  assert.equal(Object.keys(pocket.publicChangeAccounts ?? {}).length, 1);
+});
+
 test("recovery hydrates a crash-journal hash and restores a reverted reservation once", async () => {
   const store = await readyStore();
   const wallet = new CancellationWallet();
@@ -372,6 +470,13 @@ test("recovery hydrates a crash-journal hash and restores a reverted reservation
   assert.equal(failed.phase, "failed");
   assert.equal(failed.userOperationHash, userOperationHash);
   assert.equal(failed.transactionHash, transactionHash);
+  assert.deepEqual(failed.userOperationReceiptEvidence, {
+    version: 1,
+    status: "reverted",
+    userOperationHash,
+    transactionHash,
+    observedAt: new Date(1_000).toISOString(),
+  });
   assert.equal(failed.error?.code, "RECOVERY_TRANSACTION_REVERTED");
   assert.ok(failed.privateBalanceRestoredAt);
   const restoredAt = failed.privateBalanceRestoredAt;

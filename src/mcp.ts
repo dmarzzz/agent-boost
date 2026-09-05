@@ -4539,6 +4539,7 @@ function publicPaymentRequest(request: PaymentRequest): Record<string, unknown> 
   delete publicRequest.broadcastStartedAt;
   delete publicRequest.recipientBalanceBeforeWei;
   delete publicRequest.reconciliation;
+  delete publicRequest.userOperationReceiptEvidence;
   return publicRequest;
 }
 
@@ -4589,6 +4590,7 @@ function publicRecoveryRequest(
   delete publicRequest.broadcastStartedAt;
   delete publicRequest.recipientBalanceBeforeWei;
   delete publicRequest.reconciliation;
+  delete publicRequest.userOperationReceiptEvidence;
   return publicRequest;
 }
 

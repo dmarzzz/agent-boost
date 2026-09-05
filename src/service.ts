@@ -2238,6 +2238,7 @@ function publicPaymentRequest(request: PaymentRequest): PaymentRequest {
   delete publicRequest.broadcastStartedAt;
   delete publicRequest.recipientBalanceBeforeWei;
   delete publicRequest.reconciliation;
+  delete publicRequest.userOperationReceiptEvidence;
   return publicRequest;
 }
 
@@ -2325,6 +2326,7 @@ function publicPrivateBalanceFundingRequest(
   const {
     targetCommitment: _targetCommitment,
     preparedDepositCall: _preparedDepositCall,
+    userOperationReceiptEvidence: _userOperationReceiptEvidence,
     ...publicRequest
   } = request;
   return {
@@ -2588,6 +2590,7 @@ function publicRecoveryRequest(
   delete publicRequest.broadcastStartedAt;
   delete publicRequest.recipientBalanceBeforeWei;
   delete publicRequest.reconciliation;
+  delete publicRequest.userOperationReceiptEvidence;
   return publicRequest;
 }
 

@@ -2386,7 +2386,7 @@ test("pre-LLM routing context selects exact canonical tools for explicit intents
     ],
     [
       "check the funding status of my travel private balance",
-      "wallet_get_private_balance_operation",
+      "cannot bind this private-balance status request",
     ],
   ] as const;
   for (const [index, [userMessage, expectedTool]] of fixtures.entries()) {
@@ -2432,6 +2432,243 @@ test("pre-LLM routing context selects exact canonical tools for explicit intents
     assert.match(genericLoad.context, /\{"wallet_name":"my Old Wallet"\}/u);
     assert.match(genericLoad.context, /exactly once/u);
     assert.match(genericLoad.context, /do not call wallet_list_saved_profiles first/u);
+  }
+});
+
+test("private-funding status requests hard-pin the private-balance operation getter", async (t) => {
+  const stateDirectory = await temporaryState(t);
+  const options = { stateDirectory, now: () => NOW };
+  const messages = [
+    "Check the status of the same pending private funding operation.",
+    "What happened with my private funding operation?",
+    "Reconcile the existing private funding operation and report its result.",
+    "Use only wallet_get_private_balance_operation with the retained request reference to refresh its status.",
+    "Use the Agent Boost tool wallet_get_private_balance_operation now to reconcile the same existing pending private funding operation once. Do not create, prepare, confirm, submit, or replace anything. Report only its current terminal result.",
+  ];
+
+  for (const [index, userMessage] of messages.entries()) {
+    const session = `private-funding-status-route-${index}`;
+    const requestId = `pbfr_natural-status-${index}-12345678`;
+    const binding = { request_id: requestId };
+    await handleHermesTurnGatePayload(preLlm({
+      session,
+      turn: "turn-1",
+      userMessage: "Earlier operation context.",
+    }), options);
+    assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+      session,
+      turn: "turn-1",
+      tool: "wallet_get_private_balance_operation",
+      input: binding,
+    }), options), {});
+    await handleHermesTurnGatePayload(postTool({
+      session,
+      turn: "turn-1",
+      tool: "wallet_get_private_balance_operation",
+      input: binding,
+      result: trustedStatusResult("PRIVATE_BALANCE_OPERATION_STATUS", {
+        request: { requestId, phase: "submitted" },
+      }),
+    }), options);
+
+    const response = await handleHermesTurnGatePayload(preLlm({
+      session,
+      turn: "turn-2",
+      userMessage,
+    }), options);
+    assert.ok("context" in response, userMessage);
+    if ("context" in response) {
+      assert.match(response.context, /call wallet_get_private_balance_operation directly/u);
+      assert.match(response.context, /exactly one fresh status read/u);
+      assert.equal(response.context.includes(JSON.stringify(binding)), true);
+      assert.doesNotMatch(response.context, /wallet_preview_saved_profile_load/u);
+    }
+
+    const wrongTool = await handleHermesTurnGatePayload(preTool({
+      session,
+      turn: "turn-2",
+      tool: "wallet_preview_saved_profile_load",
+      input: { wallet_name: "wallet_get_private_balance_operation" },
+    }), options);
+    assert.equal(isBlocked(wrongTool), true, userMessage);
+    if (isBlocked(wrongTool)) {
+      assert.match(wrongTool.message, /pinned.*wallet_get_private_balance_operation/u);
+    }
+
+    const wrongHandle = await handleHermesTurnGatePayload(preTool({
+      session,
+      turn: "turn-2",
+      tool: "wallet_get_private_balance_operation",
+      input: { request_id: "pbfr_model-invented-12345678" },
+    }), options);
+    assert.deepEqual(wrongHandle, {
+      action: "modify",
+      args: binding,
+    }, `${userMessage}: direct getter binding`);
+
+    assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+      session,
+      turn: "turn-2",
+      tool: "tool_call",
+      input: {
+        name: "mcp__agent_boost__wallet_get_private_balance_operation",
+        arguments: JSON.stringify({ request_id: "pbfr_model-invented-12345678" }),
+      },
+    }), options), {
+      action: "modify",
+      args: {
+        name: "mcp__agent_boost__wallet_get_private_balance_operation",
+        arguments: binding,
+      },
+    }, `${userMessage}: Tool Search getter binding`);
+  }
+});
+
+test("private-funding status requests clarify without one prior unresolved matching handle", async (t) => {
+  const stateDirectory = await temporaryState(t);
+  const options = { stateDirectory, now: () => NOW };
+  const prompt = "Use the Agent Boost tool wallet_get_private_balance_operation now to reconcile the same existing pending private funding operation once. Do not create, prepare, confirm, submit, or replace anything. Report only its current terminal result.";
+  const fixtures = [
+    { label: "absent" },
+    {
+      label: "terminal",
+      tool: "wallet_get_private_balance_operation",
+      requestId: "pbfr_terminal-natural-12345678",
+      code: "PRIVATE_BALANCE_OPERATION_STATUS",
+      phase: "confirmed",
+      priorTurn: "turn-1",
+    },
+    {
+      label: "wrong-family",
+      tool: "wallet_get_regular_transfer_request",
+      requestId: "rreq_wrong-family-natural-12345678",
+      code: "REGULAR_TRANSFER_STATUS",
+      phase: "submitted",
+      priorTurn: "turn-1",
+    },
+    {
+      label: "wrong-private-operation-family",
+      tool: "wallet_get_private_balance_operation",
+      requestId: "pbcr_wrong-private-family-12345678",
+      code: "PRIVATE_BALANCE_CREATE_STATUS",
+      phase: "creating",
+      priorTurn: "turn-1",
+    },
+    {
+      label: "same-turn-stale",
+      tool: "wallet_get_private_balance_operation",
+      requestId: "pbfr_same-turn-natural-12345678",
+      code: "PRIVATE_BALANCE_OPERATION_STATUS",
+      phase: "submitted",
+      priorTurn: "turn-2",
+    },
+  ] as const;
+
+  for (const [index, fixture] of fixtures.entries()) {
+    const session = `private-funding-status-clarify-${index}`;
+    if ("tool" in fixture) {
+      const binding = { request_id: fixture.requestId };
+      await handleHermesTurnGatePayload(preLlm({
+        session,
+        turn: fixture.priorTurn,
+        userMessage: "Read the earlier operation status.",
+      }), options);
+      assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+        session,
+        turn: fixture.priorTurn,
+        tool: fixture.tool,
+        input: binding,
+      }), options), {});
+      await handleHermesTurnGatePayload(postTool({
+        session,
+        turn: fixture.priorTurn,
+        tool: fixture.tool,
+        input: binding,
+        result: trustedStatusResult(fixture.code, {
+          request: { requestId: fixture.requestId, phase: fixture.phase },
+        }),
+      }), options);
+    }
+
+    const response = await handleHermesTurnGatePayload(preLlm({
+      session,
+      turn: "turn-2",
+      userMessage: prompt,
+    }), options);
+    assert.ok("context" in response, fixture.label);
+    if ("context" in response) {
+      assert.match(response.context, /cannot bind this private-balance status request/u);
+      assert.match(response.context, /ask one concise clarification/iu);
+      assert.doesNotMatch(response.context, /exactly these arguments/u);
+    }
+    const blocked = await handleHermesTurnGatePayload(preTool({
+      session,
+      turn: "turn-2",
+      tool: "wallet_get_private_balance_operation",
+      input: { request_id: "pbfr_model-invented-12345678" },
+    }), options);
+    assert.equal(isBlocked(blocked), true, fixture.label);
+    if (isBlocked(blocked)) {
+      assert.match(blocked.message, /no trusted unresolved setup or operation/iu);
+    }
+  }
+});
+
+test("tool-shaped Use requests do not steal legal saved-wallet load names", async (t) => {
+  const stateDirectory = await temporaryState(t);
+  const options = { stateDirectory, now: () => NOW };
+
+  for (const [index, userMessage] of [
+    "Use the Agent Boost tool wallet_get_private_balance_operations now.",
+    "Use the Agent Boost tool wallet_get_private_balance_operation_notes now.",
+    "Do not use wallet_get_private_balance_operation.",
+    "How does private funding work?",
+  ].entries()) {
+    const response = await handleHermesTurnGatePayload(preLlm({
+      session: `private-status-near-miss-${index}`,
+      turn: "turn-1",
+      userMessage,
+    }), options);
+    assert.deepEqual(response, {}, userMessage);
+  }
+
+  const legalWalletLoads = [
+    [
+      "Use my saved wallet named wallet_get_private_balance_operation.",
+      "wallet_get_private_balance_operation",
+    ],
+    [
+      "Use wallet_get_private_balance_operation wallet.",
+      "wallet_get_private_balance_operation",
+    ],
+    [
+      "Use wallet_get_private_balance_operation-notes wallet.",
+      "wallet_get_private_balance_operation-notes",
+    ],
+    ["Use private-funding wallet.", "private-funding"],
+  ] as const;
+  for (const [index, [userMessage, walletName]] of legalWalletLoads.entries()) {
+    const session = `private-status-legal-wallet-name-${index}`;
+    const response = await handleHermesTurnGatePayload(preLlm({
+      session,
+      turn: "turn-1",
+      userMessage,
+    }), options);
+    assert.ok("context" in response, userMessage);
+    if ("context" in response) {
+      assert.match(response.context, /wallet_preview_saved_profile_load/u);
+      assert.ok(
+        response.context.includes(JSON.stringify({ wallet_name: walletName })),
+        response.context,
+      );
+      assert.doesNotMatch(response.context, /call wallet_get_private_balance_operation directly/u);
+    }
+    assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+      session,
+      turn: "turn-1",
+      tool: "wallet_preview_saved_profile_load",
+      input: { wallet_name: walletName },
+    }), options), {}, userMessage);
   }
 });
 
