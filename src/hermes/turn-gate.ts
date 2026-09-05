@@ -3674,7 +3674,7 @@ function authenticatedUserDecision(
     scopedApproval = /^(?:yes,?\s+create\s+(?:it|the\s+(?:private\s+)?(?:balance|pocket))|create\s+it|(?:✅|👍)\s+create\s+it)[.!]*$/u;
     scopedRejection = /^(?:cancel\s+(?:the\s+)?(?:private[- ]balance|private\s+pocket)\s+creat(?:e|ion)|(?:do not|don['’]t)\s+create\s+(?:it|the\s+(?:private\s+)?(?:balance|pocket)))[.!]*$/u;
   } else if (tool === "wallet_apply_private_balance_fund") {
-    scopedApproval = /^(?:yes,?\s+fund\s+it|fund\s+it|(?:i\s+)?approve\s+(?:the\s+)?(?:private[- ]balance\s+)?funding|(?:✅|👍)\s+fund\s+it)[.!]*$/u;
+    scopedApproval = /^(?:(?:(?:yes,?|✅|👍)\s+)?fund\s+it(?:\s+exactly\s+as\s+(?:previewed|shown|planned))?|(?:i\s+)?approve\s+(?:the\s+)?(?:private[- ]balance\s+)?funding)[.!]*$/u;
     scopedRejection = /^(?:cancel\s+(?:the\s+)?(?:private[- ]balance\s+)?funding|(?:do not|don['’]t)\s+fund\s+it)[.!]*$/u;
   } else if (tool === "wallet_create") {
     scopedApproval = /^(?:yes,?\s+create\s+it|(?:✅|👍)\s+create\s+it)[.!]*$/u;

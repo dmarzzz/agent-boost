@@ -6,7 +6,14 @@ import {
   pbkdf2Sync,
   randomBytes,
 } from "node:crypto";
-import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -1516,7 +1523,9 @@ describe("KohakuWalletAdapter", () => {
         );
         return {
           exitCode: 0,
-          stdout: JSON.stringify({ userOperationHash }),
+          stdout:
+            "Merkle tree for 512 leaves took 41ms\n" +
+            JSON.stringify({ userOperationHash }),
           stderr: "",
         };
       }
@@ -1540,7 +1549,14 @@ describe("KohakuWalletAdapter", () => {
         ),
         "0x555d20",
       );
-      return { exitCode: 0, stdout: preparedPayment, stderr: "" };
+      return {
+        exitCode: 0,
+        stdout:
+          "Merkle tree for 256 leaves took 19ms\n" +
+          "Merkle tree for 512 leaves took 41ms\n" +
+          preparedPayment,
+        stderr: "",
+      };
     });
     const created = await fixture(runner);
     liveDataDir = created.dataDir;
@@ -1573,6 +1589,27 @@ describe("KohakuWalletAdapter", () => {
         created.secret,
       ),
       "0x555d20",
+    );
+    const walletFiles = await readdir(walletDir);
+    assert.equal(
+      walletFiles.filter((name) =>
+        name.startsWith(".tc-storage.agent-boost-root-repair-") &&
+        name.endsWith(".bak")
+      ).length,
+      1,
+    );
+    assert.equal(
+      walletFiles.some((name) =>
+        name.startsWith(".tc-storage.agent-boost-repair-") &&
+        name.endsWith(".tmp")
+      ),
+      false,
+    );
+    assert.equal(
+      (await readdir(liveDataDir)).some((name) =>
+        name.startsWith(".agent-boost-tornado-repair-")
+      ),
+      false,
     );
   });
 
@@ -2646,6 +2683,331 @@ describe("KohakuWalletAdapter", () => {
     assert.equal(runner.calls.length, 0);
   });
 
+  it("accepts exact Kohaku Merkle timing lines before private JSON", async () => {
+    const preparedPayment = privatePaymentPreparation();
+    const timingPrefixes = [
+      "Merkle tree for 0 leaves took 0ms\n",
+      "Merkle tree for 7 leaves took 13ms\r\n" +
+        "Merkle tree for 1234567890 leaves took 9876543210ms\n",
+      "Merkle tree for 1 leaves took 1ms\n".repeat(16),
+    ];
+
+    for (const [index, timingPrefix] of timingPrefixes.entries()) {
+      let beforeBroadcastCalls = 0;
+      let broadcastCalls = 0;
+      const runner = new FakeRunner(async (invocation) => {
+        assert.equal(command(invocation), "unshield");
+        if (!invocation.args.includes("--broadcast")) {
+          return {
+            exitCode: 0,
+            stdout: `${timingPrefix}${preparedPayment}`,
+            stderr: "",
+          };
+        }
+        broadcastCalls += 1;
+        const userOperationHash = await writeBroadcastJournal(
+          invocation,
+          preparedPayment,
+        );
+        return {
+          exitCode: 0,
+          stdout:
+            `${timingPrefix}${JSON.stringify({ userOperationHash })}`,
+          stderr: "",
+        };
+      });
+      const { adapter } = await fixture(runner);
+
+      const result = await adapter.executePrivatePayment({
+        recipient: RECIPIENT,
+        amountWei: 20_000_000_000_000_000n,
+        broadcastRequestId: `req-merkle-timing-${index}`,
+        beforeBroadcast: async () => {
+          beforeBroadcastCalls += 1;
+        },
+      });
+
+      assert.match(result.userOperationHash ?? "", /^0x[0-9a-f]{64}$/u);
+      assert.equal(beforeBroadcastCalls, 1);
+      assert.equal(broadcastCalls, 1);
+      assert.equal(runner.calls.length, 2);
+    }
+  });
+
+  it("rejects non-exact Merkle output and JSON smuggling before broadcast", async () => {
+    const preparedPayment = privatePaymentPreparation();
+    const exactTimingLine = "Merkle tree for 7 leaves took 13ms\n";
+    const invalidOutputs = [
+      `diagnostic output\n${preparedPayment}`,
+      `diagnostic output\n${exactTimingLine}${preparedPayment}`,
+      `${exactTimingLine}diagnostic output\n${preparedPayment}`,
+      `Merkle tree for -7 leaves took 13ms\n${preparedPayment}`,
+      `Merkle tree for 7 leaves took 13 ms\n${preparedPayment}`,
+      `Merkle tree for 12345678901 leaves took 13ms\n${preparedPayment}`,
+      `Merkle tree for 7 leaves took 12345678901ms\n${preparedPayment}`,
+      `Merkle tree for 7 leaves took 13ms ${preparedPayment}`,
+      `${exactTimingLine}${preparedPayment}\ntrailing output`,
+      `${exactTimingLine}${preparedPayment}\n{}`,
+      `${preparedPayment}\n${exactTimingLine}`,
+      `${exactTimingLine.repeat(17)}${preparedPayment}`,
+    ];
+
+    for (const [index, stdout] of invalidOutputs.entries()) {
+      let beforeBroadcastCalls = 0;
+      const runner = new FakeRunner((invocation) => {
+        assert.equal(command(invocation), "unshield");
+        assert.equal(invocation.args.includes("--broadcast"), false);
+        return { exitCode: 0, stdout, stderr: "" };
+      });
+      const { adapter } = await fixture(runner);
+
+      await assert.rejects(
+        adapter.executePrivatePayment({
+          recipient: RECIPIENT,
+          amountWei: 20_000_000_000_000_000n,
+          broadcastRequestId: `req-merkle-invalid-${index}`,
+          beforeBroadcast: async () => {
+            beforeBroadcastCalls += 1;
+          },
+        }),
+        (error: unknown) => {
+          assert.equal(error instanceof WalletExecutionError, true);
+          assert.equal((error as WalletExecutionError).mayHaveBroadcast, false);
+          assert.match(String(error), /unshield prepare returned invalid JSON/u);
+          return true;
+        },
+      );
+      assert.equal(beforeBroadcastCalls, 0);
+      assert.equal(runner.calls.length, 1);
+    }
+
+    const nonObjectRunner = new FakeRunner((invocation) => {
+      assert.equal(command(invocation), "unshield");
+      assert.equal(invocation.args.includes("--broadcast"), false);
+      return { exitCode: 0, stdout: `${exactTimingLine}[]`, stderr: "" };
+    });
+    const { adapter } = await fixture(nonObjectRunner);
+    await assert.rejects(
+      adapter.executePrivatePayment({
+        recipient: RECIPIENT,
+        amountWei: 20_000_000_000_000_000n,
+        broadcastRequestId: "req-merkle-non-object",
+        beforeBroadcast: CHECKPOINT_BROADCAST,
+      }),
+      /unshield prepare returned a non-object JSON value/u,
+    );
+    assert.equal(nonObjectRunner.calls.length, 1);
+  });
+
+  it("keeps private intent validation strict after an allowed preamble", async () => {
+    type MutablePreparation = {
+      recipient: string;
+      amountWei: string;
+      privateOperation: {
+        withdrawals: Array<{
+          userOperation: ReturnType<typeof serializedUserOperation>;
+        }>;
+      };
+    };
+    const withdrawalAmountWei = DEFAULT_SHIELD_WEI * 2n;
+    const freshPayload = (): MutablePreparation =>
+      JSON.parse(
+        privateRebalancePreparation(withdrawalAmountWei),
+      ) as MutablePreparation;
+
+    const changedSender = freshPayload();
+    changedSender.recipient = OTHER_ADDRESS;
+
+    const changedTail = freshPayload();
+    const withdrawal = changedTail.privateOperation.withdrawals[0]!;
+    withdrawal.userOperation = alterLastPreparedCall(
+      withdrawal.userOperation,
+      { target: OTHER_ADDRESS },
+    );
+
+    const changedAmount = freshPayload();
+    changedAmount.amountWei = (withdrawalAmountWei + 1n).toString();
+
+    const cases = [
+      {
+        label: "sender",
+        stdout: JSON.stringify(changedSender),
+        expected: /changed the private sender/u,
+      },
+      {
+        label: "tail",
+        stdout: JSON.stringify(changedTail),
+        expected: /changed the requested tail call/u,
+      },
+      {
+        label: "amount",
+        stdout: JSON.stringify(changedAmount),
+        expected: /mismatched operation data/u,
+      },
+    ];
+
+    for (const testCase of cases) {
+      let beforeBroadcastCalls = 0;
+      const runner = new FakeRunner((invocation) => {
+        if (command(invocation) === "next-fresh-address") {
+          return { exitCode: 0, stdout: ADDRESS, stderr: "" };
+        }
+        assert.equal(command(invocation), "unshield");
+        assert.equal(invocation.args.includes("--broadcast"), false);
+        return {
+          exitCode: 0,
+          stdout:
+            "Merkle tree for 512 leaves took 41ms\n" + testCase.stdout,
+          stderr: "",
+        };
+      });
+      const { adapter } = await fixture(runner);
+
+      await assert.rejects(
+        adapter.executePrivateRebalance({
+          sourceWalletName: "source-pocket",
+          sourceExecutorAddress: ADDRESS,
+          withdrawalAmountWei,
+          preparedDepositCall: DEPOSIT_CALL,
+          broadcastRequestId: `req-prefixed-tampered-${testCase.label}`,
+          beforeBroadcast: async () => {
+            beforeBroadcastCalls += 1;
+          },
+        }),
+        (error: unknown) => {
+          assert.equal(error instanceof WalletExecutionError, true);
+          assert.equal((error as WalletExecutionError).mayHaveBroadcast, false);
+          assert.match(String(error), testCase.expected);
+          assert.doesNotMatch(String(error), /invalid JSON/u);
+          return true;
+        },
+      );
+      assert.equal(beforeBroadcastCalls, 0);
+      assert.deepEqual(
+        runner.calls.map(command),
+        ["next-fresh-address", "unshield"],
+      );
+    }
+  });
+
+  it("treats malformed private broadcast chatter as possibly broadcast", async () => {
+    const preparedPayment = privatePaymentPreparation();
+    let beforeBroadcastCalls = 0;
+    let broadcastCalls = 0;
+    const requestId = "req-malformed-broadcast-chatter";
+    const execute = async (adapter: KohakuWalletAdapter) =>
+      adapter.executePrivatePayment({
+        recipient: RECIPIENT,
+        amountWei: 20_000_000_000_000_000n,
+        broadcastRequestId: requestId,
+        beforeBroadcast: async () => {
+          beforeBroadcastCalls += 1;
+        },
+      });
+    const runner = new FakeRunner(async (invocation) => {
+      assert.equal(command(invocation), "unshield");
+      if (!invocation.args.includes("--broadcast")) {
+        return { exitCode: 0, stdout: preparedPayment, stderr: "" };
+      }
+      broadcastCalls += 1;
+      const userOperationHash = await writeBroadcastJournal(
+        invocation,
+        preparedPayment,
+      );
+      return {
+        exitCode: 0,
+        stdout:
+          "Merkle tree for 7 leaves took 13 ms\n" +
+          JSON.stringify({ userOperationHash }),
+        stderr: "",
+      };
+    });
+    const { adapter } = await fixture(runner);
+
+    await assert.rejects(execute(adapter), (error: unknown) => {
+      assert.equal(error instanceof WalletExecutionError, true);
+      assert.equal((error as WalletExecutionError).mayHaveBroadcast, true);
+      assert.match(String(error), /broadcast returned invalid JSON/u);
+      return true;
+    });
+    assert.equal(beforeBroadcastCalls, 1);
+    assert.equal(broadcastCalls, 1);
+    assert.equal(runner.calls.length, 2);
+
+    await assert.rejects(execute(adapter), (error: unknown) => {
+      assert.equal(error instanceof WalletExecutionError, true);
+      assert.equal((error as WalletExecutionError).mayHaveBroadcast, true);
+      assert.match(String(error), /already has a durable UserOperation/u);
+      return true;
+    });
+    assert.equal(beforeBroadcastCalls, 1);
+    assert.equal(broadcastCalls, 1);
+    assert.equal(runner.calls.length, 2);
+  });
+
+  it("blocks replay when prefixed private output disagrees with its checkpoint", async () => {
+    const preparedPayment = privatePaymentPreparation();
+    let beforeBroadcastCalls = 0;
+    let broadcastCalls = 0;
+    const requestId = "req-prefixed-broadcast-hash-mismatch";
+    const execute = async (adapter: KohakuWalletAdapter) =>
+      adapter.executePrivatePayment({
+        recipient: RECIPIENT,
+        amountWei: 20_000_000_000_000_000n,
+        broadcastRequestId: requestId,
+        beforeBroadcast: async () => {
+          beforeBroadcastCalls += 1;
+        },
+      });
+    const runner = new FakeRunner(async (invocation) => {
+      assert.equal(command(invocation), "unshield");
+      if (!invocation.args.includes("--broadcast")) {
+        return { exitCode: 0, stdout: preparedPayment, stderr: "" };
+      }
+      broadcastCalls += 1;
+      const checkpointHash = await writeBroadcastJournal(
+        invocation,
+        preparedPayment,
+      );
+      assert.notEqual(checkpointHash.toLowerCase(), USER_OPERATION_HASH);
+      return {
+        exitCode: 0,
+        stdout:
+          "Merkle tree for 512 leaves took 41ms\n" +
+          JSON.stringify({ userOperationHash: USER_OPERATION_HASH }),
+        stderr: "",
+      };
+    });
+    const { adapter } = await fixture(runner);
+
+    await assert.rejects(execute(adapter), (error: unknown) => {
+      assert.equal(error instanceof WalletExecutionError, true);
+      assert.equal((error as WalletExecutionError).mayHaveBroadcast, true);
+      assert.match(
+        String(error),
+        /broadcast output disagrees with the exact UserOperation checkpoint/u,
+      );
+      return true;
+    });
+    assert.equal(beforeBroadcastCalls, 1);
+    assert.equal(broadcastCalls, 1);
+    assert.equal(runner.calls.length, 2);
+    assert.notEqual(
+      await adapter.getPrivateBroadcastCheckpoint(requestId),
+      undefined,
+    );
+
+    await assert.rejects(execute(adapter), (error: unknown) => {
+      assert.equal(error instanceof WalletExecutionError, true);
+      assert.equal((error as WalletExecutionError).mayHaveBroadcast, true);
+      assert.match(String(error), /already has a durable UserOperation/u);
+      return true;
+    });
+    assert.equal(beforeBroadcastCalls, 1);
+    assert.equal(broadcastCalls, 1);
+    assert.equal(runner.calls.length, 2);
+  });
+
   it("preflights then broadcasts a full-note private rebalance with the exact tail call", async () => {
     const withdrawalAmountWei = DEFAULT_SHIELD_WEI * 2n;
     const preparedRebalance = privateRebalancePreparation(withdrawalAmountWei);
@@ -2658,7 +3020,10 @@ describe("KohakuWalletAdapter", () => {
         if (!invocation.args.includes("--broadcast")) {
           return {
             exitCode: 0,
-            stdout: preparedRebalance,
+            stdout:
+              "Merkle tree for 512 leaves took 41ms\n" +
+              "Merkle tree for 1024 leaves took 89ms\n" +
+              preparedRebalance,
             stderr: "",
           };
         }
@@ -3085,6 +3450,46 @@ describe("KohakuWalletAdapter", () => {
     assert.equal(transfer.env?.RPC_URL, "https://sepolia.example.invalid/rpc-token");
     assert.equal(transfer.args.includes("--without-tor"), false);
     assert.equal(runner.calls[0]?.args.includes("--broadcast"), false);
+  });
+
+  it("keeps Merkle timing chatter invalid for regular transfers", async () => {
+    const runner = new FakeRunner(async (invocation) => {
+      assert.equal(command(invocation), "transfer");
+      if (!invocation.args.includes("--broadcast")) {
+        return {
+          exitCode: 0,
+          stdout: regularTransferPreparation({ amountWei: 3n }),
+          stderr: "",
+        };
+      }
+      await writeRawTransactionBroadcastJournal(invocation);
+      return {
+        exitCode: 0,
+        stdout:
+          "Merkle tree for 7 leaves took 13ms\n" +
+          JSON.stringify({ hashes: [TX_HASH] }),
+        stderr: "",
+      };
+    });
+    const { adapter } = await fixture(runner);
+
+    await assert.rejects(
+      adapter.executeRegularTransfer({
+        sourceAddress: ADDRESS,
+        recipient: RECIPIENT,
+        amountWei: 3n,
+        broadcastRequestId: "req-strict-regular-broadcast-json",
+        beforeBroadcast: CHECKPOINT_BROADCAST,
+      }),
+      (error: unknown) => {
+        assert.equal(error instanceof WalletExecutionError, true);
+        assert.equal((error as WalletExecutionError).mayHaveBroadcast, true);
+        assert.match(String(error), /broadcast returned invalid JSON/u);
+        return true;
+      },
+    );
+    assert.equal(runner.calls.length, 2);
+    assert.equal(runner.calls[1]?.args.includes("--broadcast"), true);
   });
 
   it("keeps the regular-transfer fee ceiling at its original reserve", async () => {

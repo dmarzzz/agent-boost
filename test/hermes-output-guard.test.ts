@@ -1303,7 +1303,7 @@ test("private-balance decisions force their exact apply tool and preserve the hi
       previewTool: "wallet_preview_private_balance_fund",
       confirmationTool: "wallet_apply_private_balance_fund",
       decisionId: "pbf_output_guard_12345678",
-      userMessage: "fund it",
+      userMessage: "✅ Fund it exactly as previewed.",
     },
     {
       previewTool: "wallet_preview_private_balance_policy_update",

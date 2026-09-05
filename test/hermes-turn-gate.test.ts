@@ -1085,7 +1085,126 @@ test("private-balance policy previews accept natural scoped approvals only for t
   }
 });
 
-test("private-balance policy approval wording cannot confirm a different pending action", async (t) => {
+test("private-balance funding accepts an exact-preview approval without accepting changes", async (t) => {
+  const stateDirectory = await temporaryState(t);
+  const options = { stateDirectory, now: () => NOW };
+  const session = "private-balance-funding-exact-preview-approval";
+  const decisionId = "pbf_exact_preview_approval";
+  await handleHermesTurnGatePayload(postTool({
+    session,
+    turn: "turn-1",
+    tool: "wallet_preview_private_balance_fund",
+    result: explicitPreview(
+      "wallet_apply_private_balance_fund",
+      { decision_id: decisionId },
+    ),
+  }), options);
+
+  const routed = await authenticate(options, {
+    session,
+    turn: "turn-2",
+    userMessage: "✅ Fund it exactly as previewed.",
+  });
+  assert.ok("context" in routed);
+  if ("context" in routed) {
+    assert.match(routed.context, /wallet_apply_private_balance_fund/u);
+    assert.match(routed.context, new RegExp(decisionId, "u"));
+    assert.match(routed.context, /"user_confirmed":true/u);
+  }
+  assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+    session,
+    turn: "turn-2",
+    tool: "wallet_apply_private_balance_fund",
+    input: { decision_id: decisionId, user_confirmed: true },
+  }), options), {});
+
+  const replay = await handleHermesTurnGatePayload(preTool({
+    session,
+    turn: "turn-2",
+    tool: "wallet_apply_private_balance_fund",
+    input: { decision_id: decisionId, user_confirmed: true },
+  }), options);
+  assert.equal(isBlocked(replay), true);
+  if (isBlocked(replay)) assert.match(replay.message, /No matching unconsumed preview/u);
+
+  for (const [index, userMessage] of [
+    "Fund it exactly as shown.",
+    "yes, fund it exactly as planned!",
+  ].entries()) {
+    const variantStateDirectory = await temporaryState(t);
+    const variantOptions = { stateDirectory: variantStateDirectory, now: () => NOW };
+    const variantSession = `private-balance-funding-exact-variant-${index}`;
+    const variantDecisionId = `pbf_exact_variant_${index}`;
+    await handleHermesTurnGatePayload(postTool({
+      session: variantSession,
+      turn: "turn-1",
+      tool: "wallet_preview_private_balance_fund",
+      result: explicitPreview(
+        "wallet_apply_private_balance_fund",
+        { decision_id: variantDecisionId },
+      ),
+    }), variantOptions);
+
+    const variantRouted = await authenticate(variantOptions, {
+      session: variantSession,
+      turn: "turn-2",
+      userMessage,
+    });
+    assert.ok("context" in variantRouted, userMessage);
+    if ("context" in variantRouted) {
+      assert.match(variantRouted.context, /wallet_apply_private_balance_fund/u);
+      assert.match(variantRouted.context, new RegExp(variantDecisionId, "u"));
+      assert.match(variantRouted.context, /"user_confirmed":true/u);
+    }
+    assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+      session: variantSession,
+      turn: "turn-2",
+      tool: "wallet_apply_private_balance_fund",
+      input: { decision_id: variantDecisionId, user_confirmed: true },
+    }), variantOptions), {}, userMessage);
+  }
+
+  for (const [index, userMessage] of [
+    "✅ Fund it exactly as previewed, but use 0.2",
+    "✅ Fund it from main",
+    "✅ Fund it?",
+    "no, fund it exactly as previewed",
+    "don't fund it exactly as previewed",
+  ].entries()) {
+    const rejectedStateDirectory = await temporaryState(t);
+    const rejectedOptions = { stateDirectory: rejectedStateDirectory, now: () => NOW };
+    const rejectedSession = `private-balance-funding-changed-approval-${index}`;
+    const rejectedDecisionId = `pbf_changed_approval_${index}`;
+    await handleHermesTurnGatePayload(postTool({
+      session: rejectedSession,
+      turn: "turn-1",
+      tool: "wallet_preview_private_balance_fund",
+      result: explicitPreview(
+        "wallet_apply_private_balance_fund",
+        { decision_id: rejectedDecisionId },
+      ),
+    }), rejectedOptions);
+
+    const rejected = await authenticate(rejectedOptions, {
+      session: rejectedSession,
+      turn: "turn-2",
+      userMessage,
+    });
+    assert.deepEqual(rejected, {}, userMessage);
+    const blocked = await handleHermesTurnGatePayload(preTool({
+      session: rejectedSession,
+      turn: "turn-2",
+      tool: "wallet_apply_private_balance_fund",
+      input: { decision_id: rejectedDecisionId, user_confirmed: true },
+    }), rejectedOptions);
+    assert.equal(isBlocked(blocked), true, userMessage);
+    if (isBlocked(blocked)) {
+      assert.match(blocked.message, /No matching unconsumed preview/u, userMessage);
+    }
+  }
+});
+
+test("action-specific approval wording cannot confirm a different pending action", async (t) => {
   const fixtures = [
     {
       previewTool: "wallet_plan_policy_update",
@@ -1107,6 +1226,27 @@ test("private-balance policy approval wording cannot confirm a different pending
       attemptedTool: "wallet_apply_private_balance_policy_update",
       message: "approve this wallet-policy change",
       decisionId: "child-policy-wrong-scope",
+    },
+    {
+      previewTool: "wallet_preview_private_balance_create",
+      pendingTool: "wallet_apply_private_balance_create",
+      attemptedTool: "wallet_apply_private_balance_create",
+      message: "✅ Fund it exactly as previewed.",
+      decisionId: "create-funding-wording-wrong-scope",
+    },
+    {
+      previewTool: "wallet_preview_private_balance_policy_update",
+      pendingTool: "wallet_apply_private_balance_policy_update",
+      attemptedTool: "wallet_apply_private_balance_policy_update",
+      message: "✅ Fund it exactly as previewed.",
+      decisionId: "policy-funding-wording-wrong-scope",
+    },
+    {
+      previewTool: "wallet_preview_regular_transfer",
+      pendingTool: "wallet_execute_regular_transfer",
+      attemptedTool: "wallet_execute_regular_transfer",
+      message: "✅ Fund it exactly as previewed.",
+      decisionId: "transfer-funding-wording-wrong-scope",
     },
   ] as const;
 

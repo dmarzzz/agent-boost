@@ -1753,7 +1753,7 @@ function validatePrivateRebalancePreparation(input: {
   withdrawalAmountWei: bigint;
   preparedDepositCall: PreparedTornadoDepositCall;
 }): ValidatedPrivatePreparation {
-  const payload = parseJsonObject(input.stdout, "unshield prepare");
+  const payload = parseUnshieldJsonObject(input.stdout, "unshield prepare");
   const operation = validateTornadoPrivatePreparation({
     payload,
     expectedSender: input.executorAddress,
@@ -1798,7 +1798,7 @@ function validatePrivateTailPreparation(input: {
   amountWei: bigint;
   withdrawalAmountWei: bigint;
 }): ValidatedPrivatePreparation {
-  const payload = parseJsonObject(input.stdout, "unshield prepare");
+  const payload = parseUnshieldJsonObject(input.stdout, "unshield prepare");
   if (typeof payload.recipient !== "string") {
     throw new Error("Kohaku unshield prepare returned no private sender");
   }
@@ -2357,6 +2357,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function parseUnshieldJsonObject(
+  stdout: string,
+  command: string,
+): Record<string, unknown> {
+  const json = stdout.replace(
+    /^(?:Merkle tree for [0-9]{1,10} leaves took [0-9]{1,10}ms\r?\n){1,16}/u,
+    "",
+  );
+  return parseJsonObject(json, command);
+}
+
 function parseJsonObject(stdout: string, command: string): Record<string, unknown> {
   let parsed: unknown;
   try {
@@ -2508,7 +2519,7 @@ function optionalPaymentIdentifiers(stdout: string): {
   transactionHash?: string;
   userOperationHash?: string;
 } {
-  const payload = parseJsonObject(stdout, "broadcast");
+  const payload = parseUnshieldJsonObject(stdout, "broadcast");
   const transactionHash = findHashForKeys(payload, [
     "transactionHash",
     "txHash",
