@@ -3,12 +3,19 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   DEFAULT_SHIELD_WEI,
   type ChainClient,
+  type PrivateBalanceRecord,
   type RecoveryTransferPlan,
   type RecoveryTransferRequest,
   type WalletAdapter,
   type WalletProfileRecord,
   type WalletSelectionBinding,
 } from "./contracts.js";
+import { WalletExecutionError } from "./errors.js";
+import {
+  matchingPrivateBroadcastCheckpoint,
+  observeConfirmedPublicChange,
+  recordPublicChangeAccount,
+} from "./public-change.js";
 import { StateStore, type StateDocument } from "./state/store.js";
 
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
@@ -64,13 +71,23 @@ export class RecoveryTransferController {
     const state = await this.#store.update((draft) => {
       for (const request of Object.values(draft.recoveryRequests)) {
         if (request.phase !== "executing") continue;
-        request.phase = "indeterminate";
-        request.updatedAt = this.#clock.now().toISOString();
-        request.error = {
-          code: "RECOVERY_EXECUTION_INTERRUPTED",
-          message:
-            "The runtime restarted during recovery execution; do not create or execute a replacement transfer.",
-        };
+        const now = this.#clock.now().toISOString();
+        request.updatedAt = now;
+        if (request.broadcastStartedAt) {
+          request.phase = "indeterminate";
+          request.error = {
+            code: "RECOVERY_EXECUTION_INTERRUPTED",
+            message:
+              "The runtime restarted after recovery broadcast began; do not create or execute a replacement transfer.",
+          };
+        } else {
+          request.phase = "failed";
+          request.error = {
+            code: "RECOVERY_INTERRUPTED_BEFORE_BROADCAST",
+            message: "The runtime restarted before recovery broadcast began; the reserved private balance was restored.",
+          };
+          restorePrivateBalanceDebit(draft, request, now);
+        }
       }
     });
     for (const request of Object.values(state.recoveryRequests)) {
@@ -81,6 +98,7 @@ export class RecoveryTransferController {
   async plan(input: {
     recipient: string;
     amountWei: string;
+    privateBalanceId?: string;
   }): Promise<RecoveryTransferPlan> {
     if (!ADDRESS_PATTERN.test(input.recipient)) {
       throw new Error("recipient must be a 20-byte Ethereum address");
@@ -90,29 +108,50 @@ export class RecoveryTransferController {
     }
     const blockers: string[] = [];
     if (!this.#executeEnabled) blockers.push("EXECUTION_DISABLED");
-    if (!this.#wallet.executeRecoveryTransfer) blockers.push("RECOVERY_TRANSFER_UNAVAILABLE");
+    if (!this.#wallet.executeRecoveryTransfer &&
+      !this.#wallet.executeRecoveryTransferFromWallet) {
+      blockers.push("RECOVERY_TRANSFER_UNAVAILABLE");
+    }
 
     let state = await this.#store.read();
+    let selected = activePrivateBalance(state, input.privateBalanceId);
+    const unresolved = hasUnresolvedPrivateBalanceActivity(
+      state,
+      selected.privateBalanceId,
+    );
+    if (unresolved) {
+      blockers.push("PRIVATE_BALANCE_OPERATION_UNRESOLVED");
+    }
     if (!state.onboarding || state.onboarding.phase !== "private_ready") {
       blockers.push("PRIVATE_BALANCE_NOT_READY");
-    } else {
+    } else if (!unresolved) {
       try {
-        const privateBalance = await this.#wallet.getPrivateBalanceWei();
+        const privateBalance = await this.#getPrivateBalanceWei(selected);
         state = await this.#store.update((draft) => {
           if (!draft.onboarding) return;
-          if (draft.onboarding.privateBalanceWei !== privateBalance.toString()) {
-            draft.onboarding.privateBalanceWei = privateBalance.toString();
+          const profile = activeWalletProfile(draft);
+          const pocket = activePrivateBalance(draft, selected.privateBalanceId);
+          const now = this.#clock.now().toISOString();
+          if (pocket.balanceWei !== privateBalance.toString()) {
+            pocket.balanceWei = privateBalance.toString();
+            pocket.revision += 1;
+            pocket.updatedAt = now;
+          }
+          const aggregate = sumPrivateBalancesWei(profile).toString();
+          if (draft.onboarding.privateBalanceWei !== aggregate) {
+            draft.onboarding.privateBalanceWei = aggregate;
             draft.onboarding.revision += 1;
-            draft.onboarding.updatedAt = this.#clock.now().toISOString();
+            draft.onboarding.updatedAt = now;
           }
         });
+        selected = activePrivateBalance(state, selected.privateBalanceId);
       } catch {
         blockers.push("PRIVATE_BALANCE_UNAVAILABLE");
       }
     }
 
     const wallet = activeSelection(state);
-    const privateBalance = BigInt(state.onboarding?.privateBalanceWei ?? "0");
+    const privateBalance = BigInt(selected.balanceWei);
     const maxRecipient = this.#withdrawalAmountWei - this.#feeReserveWei;
     const amount = BigInt(input.amountWei);
     if (privateBalance < this.#withdrawalAmountWei) {
@@ -122,12 +161,15 @@ export class RecoveryTransferController {
     const remaining = privateBalance > this.#withdrawalAmountWei
       ? privateBalance - this.#withdrawalAmountWei
       : 0n;
-    const balanceRevision = state.onboarding?.revision ?? 0;
+    const balanceRevision = selected.revision;
     const now = this.#clock.now();
     const plan: RecoveryTransferPlan = {
       version: 1,
       decisionId: `wr_${randomUUID()}`,
       wallet,
+      privateBalanceId: selected.privateBalanceId,
+      privateBalanceRevision: selected.revision,
+      privateBalanceDebitWei: this.#withdrawalAmountWei.toString(),
       recipient: input.recipient,
       amountWei: input.amountWei,
       withdrawalAmountWei: this.#withdrawalAmountWei.toString(),
@@ -140,6 +182,9 @@ export class RecoveryTransferController {
       feeModel: "reserved_from_wallet_controlled_remainder",
       intentDigest: recoveryDigest({
         wallet,
+        privateBalanceId: selected.privateBalanceId,
+        privateBalanceRevision: selected.revision,
+        privateBalanceDebitWei: this.#withdrawalAmountWei.toString(),
         recipient: input.recipient,
         amountWei: input.amountWei,
         withdrawalAmountWei: this.#withdrawalAmountWei.toString(),
@@ -227,26 +272,85 @@ export class RecoveryTransferController {
   }
 
   async reconcileRequest(requestId: string): Promise<RecoveryTransferRequest> {
-    const request = (await this.#store.read()).recoveryRequests[requestId];
+    const initialState = await this.#store.read();
+    const request = initialState.recoveryRequests[requestId];
     if (!request) throw new Error("RECOVERY_REQUEST_NOT_FOUND");
     if (!isUnresolved(request.phase)) return request;
 
     let receiptStatus: "pending" | "success" | "reverted" | undefined;
-    if (request.transactionHash && this.#chain.getTransactionReceiptStatus) {
+    let receiptTransactionHash: string | undefined;
+    let receiptMethod: "transaction_receipt" | "user_operation_receipt" | undefined;
+    let checkpoint: Awaited<ReturnType<typeof matchingPrivateBroadcastCheckpoint>>;
+    let reconciliationError:
+      | "PRIVATE_BROADCAST_CHECKPOINT_MISMATCH"
+      | "PUBLIC_CHANGE_TRACKING_PENDING"
+      | undefined;
+    try {
+      checkpoint = await matchingPrivateBroadcastCheckpoint({
+        wallet: this.#wallet,
+        requestId,
+        ...(request.userOperationHash === undefined
+          ? {}
+          : { storedUserOperationHash: request.userOperationHash }),
+      });
+    } catch {
+      reconciliationError = "PRIVATE_BROADCAST_CHECKPOINT_MISMATCH";
+    }
+    const userOperationHash = reconciliationError
+      ? undefined
+      : request.userOperationHash ?? checkpoint?.userOperationHash;
+    if (userOperationHash) {
+      if (this.#chain.getUserOperationReceiptStatus) {
+        try {
+          const result = await this.#chain.getUserOperationReceiptStatus(
+            userOperationHash,
+            checkpoint?.sender,
+          );
+          receiptStatus = result.status;
+          if (result.status !== "pending") {
+            if (request.transactionHash &&
+              request.transactionHash.toLowerCase() !== result.transactionHash.toLowerCase()) {
+              throw new Error("UserOperation receipt transaction hash mismatch");
+            }
+            receiptTransactionHash = result.transactionHash;
+            receiptMethod = "user_operation_receipt";
+          }
+        } catch {
+          // Reconciliation is read-only and best effort.
+          receiptStatus = undefined;
+          receiptTransactionHash = undefined;
+          receiptMethod = undefined;
+        }
+      }
+    } else if (!request.userOperationHash && !checkpoint && !reconciliationError &&
+      request.transactionHash && this.#chain.getTransactionReceiptStatus) {
       try {
         receiptStatus = await this.#chain.getTransactionReceiptStatus(request.transactionHash);
+        receiptMethod = "transaction_receipt";
       } catch {
         // Reconciliation is read-only and best effort.
       }
     }
-    let delivered = false;
-    if (request.recipientBalanceBeforeWei !== undefined) {
-      try {
-        const current = await this.#chain.getBalanceWei(request.recipient);
-        delivered = current >=
-          BigInt(request.recipientBalanceBeforeWei) + BigInt(request.amountWei);
-      } catch {
-        // Leave unresolved when the read path is unavailable.
+    let publicChangeWei: bigint | undefined;
+    if (receiptStatus === "success" && checkpoint && request.privateBalanceId) {
+      const privateBalance = initialState.wallet?.profiles[
+        request.wallet.walletId
+      ]?.privateBalances[request.privateBalanceId];
+      if (!privateBalance) {
+        reconciliationError = "PUBLIC_CHANGE_TRACKING_PENDING";
+        receiptStatus = undefined;
+      } else {
+        try {
+          publicChangeWei = await observeConfirmedPublicChange({
+            wallet: this.#wallet,
+            chain: this.#chain,
+            backendWalletName: privateBalance.backendWalletName,
+            checkpoint,
+          });
+        } catch {
+          reconciliationError = "PUBLIC_CHANGE_TRACKING_PENDING";
+          receiptStatus = undefined;
+        }
       }
     }
     const checkedAt = this.#clock.now().toISOString();
@@ -258,6 +362,10 @@ export class RecoveryTransferController {
         attempts: (current.reconciliation?.attempts ?? 0) + 1,
         checkedAt,
       };
+      if (!current.userOperationHash && checkpoint) {
+        current.userOperationHash = checkpoint.userOperationHash;
+      }
+      if (receiptTransactionHash) current.transactionHash = receiptTransactionHash;
       if (receiptStatus === "reverted") {
         current.phase = "failed";
         current.updatedAt = checkedAt;
@@ -265,14 +373,44 @@ export class RecoveryTransferController {
           code: "RECOVERY_TRANSACTION_REVERTED",
           message: "The recovery transaction was included but reverted.",
         };
-      } else if (receiptStatus === "success" || delivered) {
+        restorePrivateBalanceDebit(draft, current, checkedAt);
+      } else if (receiptStatus === "success") {
+        if (checkpoint && publicChangeWei !== undefined && current.privateBalanceId) {
+          const profile = draft.wallet?.profiles[current.wallet.walletId];
+          if (!profile) throw new Error("PRIVATE_BALANCE_PUBLIC_CHANGE_TARGET_MISSING");
+          recordPublicChangeAccount({
+            profile,
+            privateBalanceId: current.privateBalanceId,
+            sourceRequestId: current.requestId,
+            address: checkpoint.sender,
+            balanceWei: publicChangeWei,
+            observedAt: checkedAt,
+          });
+          current.publicChangeWei = publicChangeWei.toString();
+        }
         current.phase = "confirmed";
         current.updatedAt = checkedAt;
         current.confirmation = {
-          method: receiptStatus === "success" ? "transaction_receipt" : "recipient_balance_delta",
+          method: receiptMethod ?? "transaction_receipt",
           checkedAt,
         };
         delete current.error;
+      } else if (!current.broadcastStartedAt) {
+        current.phase = "failed";
+        current.updatedAt = checkedAt;
+        current.error = {
+          code: "RECOVERY_NOT_BROADCAST",
+          message: "The recovery stopped before broadcast; the reserved private balance was restored.",
+        };
+        restorePrivateBalanceDebit(draft, current, checkedAt);
+      } else if (reconciliationError) {
+        current.updatedAt = checkedAt;
+        current.error = {
+          code: reconciliationError,
+          message: reconciliationError === "PRIVATE_BROADCAST_CHECKPOINT_MISMATCH"
+            ? "The durable private broadcast checkpoint does not match this recovery. It was not retried."
+            : "The recovery is on-chain, but its wallet-controlled public change is still being recovered before completion is reported.",
+        };
       }
     });
     return updated.recoveryRequests[requestId]!;
@@ -289,17 +427,23 @@ export class RecoveryTransferController {
   }
 
   async #executePlan(plan: RecoveryTransferPlan, clientRequestId: string): Promise<RecoveryTransferRequest> {
-    if (!this.#executeEnabled || !this.#wallet.executeRecoveryTransfer) {
+    if (!this.#executeEnabled || (!this.#wallet.executeRecoveryTransfer &&
+      !this.#wallet.executeRecoveryTransferFromWallet)) {
       throw new Error("RECOVERY_TRANSFER_UNAVAILABLE");
     }
-    await this.#chain.assertSepolia();
-    const livePrivateBalance = await this.#wallet.getPrivateBalanceWei();
-    let recipientBalanceBefore: bigint | undefined;
-    try {
-      recipientBalanceBefore = await this.#chain.getBalanceWei(plan.recipient);
-    } catch {
-      // Receipt reconciliation may still prove delivery.
+    if (!plan.privateBalanceId || plan.privateBalanceRevision === undefined ||
+      !plan.privateBalanceDebitWei) {
+      throw new Error("PRIVATE_BALANCE_BINDING_MISSING");
     }
+    const privateBalanceId = plan.privateBalanceId;
+    const privateBalanceRevision = plan.privateBalanceRevision;
+    const privateBalanceDebitWei = plan.privateBalanceDebitWei;
+    await this.#chain.assertSepolia();
+    const sourcePrivateBalance = activePrivateBalance(
+      await this.#store.read(),
+      privateBalanceId,
+    );
+    const livePrivateBalance = await this.#getPrivateBalanceWei(sourcePrivateBalance);
     const now = this.#clock.now().toISOString();
     const request: RecoveryTransferRequest = {
       version: 1,
@@ -307,6 +451,10 @@ export class RecoveryTransferController {
       clientRequestId,
       decisionId: plan.decisionId,
       wallet: plan.wallet,
+      privateBalanceId,
+      privateBalanceRevision,
+      privateBalanceDebitWei,
+      privateBalanceDebitedAt: now,
       recipient: plan.recipient,
       amountWei: plan.amountWei,
       withdrawalAmountWei: plan.withdrawalAmountWei,
@@ -317,13 +465,11 @@ export class RecoveryTransferController {
       phase: "executing",
       createdAt: now,
       updatedAt: now,
-      ...(recipientBalanceBefore === undefined ? {} : {
-        recipientBalanceBeforeWei: recipientBalanceBefore.toString(),
-      }),
     };
 
     await this.#store.update((draft) => {
       const stored = draft.recoveryPlans[plan.decisionId];
+      const profile = activeWalletProfile(draft);
       if (!stored || stored.decision !== "allow" || stored.consumedByRequestId ||
         stored.intentDigest !== plan.intentDigest || stored.recipient !== plan.recipient ||
         stored.amountWei !== plan.amountWei ||
@@ -331,6 +477,9 @@ export class RecoveryTransferController {
         stored.feeReserveWei !== plan.feeReserveWei ||
         stored.privateBalanceSnapshotWei !== plan.privateBalanceSnapshotWei ||
         stored.balanceRevision !== plan.balanceRevision ||
+        stored.privateBalanceId !== privateBalanceId ||
+        stored.privateBalanceRevision !== privateBalanceRevision ||
+        stored.privateBalanceDebitWei !== privateBalanceDebitWei ||
         !sameSelection(stored.wallet, plan.wallet) ||
         !sameSelection(activeSelection(draft), plan.wallet)) {
         throw new Error("RECOVERY_DECISION_CHANGED");
@@ -342,9 +491,30 @@ export class RecoveryTransferController {
         (existing) => existing.clientRequestId === clientRequestId,
       );
       if (collision) throw new Error("IDEMPOTENCY_CONFLICT");
+      const pocket = profile.privateBalances[privateBalanceId];
+      if (!pocket || pocket.status !== "available") {
+        throw new Error("PRIVATE_BALANCE_NOT_FOUND");
+      }
+      if (pocket.revision !== privateBalanceRevision) {
+        throw new Error("PRIVATE_BALANCE_CHANGED");
+      }
+      if (hasUnresolvedPrivateBalanceActivity(draft, privateBalanceId)) {
+        throw new Error("PRIVATE_BALANCE_OPERATION_UNRESOLVED");
+      }
       if (livePrivateBalance.toString() !== plan.privateBalanceSnapshotWei ||
-        livePrivateBalance < BigInt(plan.withdrawalAmountWei)) {
+        livePrivateBalance < BigInt(privateBalanceDebitWei) ||
+        BigInt(pocket.balanceWei) < BigInt(privateBalanceDebitWei)) {
         throw new Error("RECOVERY_BALANCE_CHANGED");
+      }
+      pocket.balanceWei = (
+        livePrivateBalance - BigInt(privateBalanceDebitWei)
+      ).toString();
+      pocket.revision += 1;
+      pocket.updatedAt = now;
+      if (draft.onboarding) {
+        draft.onboarding.privateBalanceWei = sumPrivateBalancesWei(profile).toString();
+        draft.onboarding.revision += 1;
+        draft.onboarding.updatedAt = now;
       }
       stored.consumedByRequestId = request.requestId;
       draft.recoveryRequests[request.requestId] = request;
@@ -352,68 +522,158 @@ export class RecoveryTransferController {
 
     try {
       await this.#chain.assertSepolia();
-      const result = await this.#wallet.executeRecoveryTransfer({
+      const result = await this.#executeRecoveryTransfer(sourcePrivateBalance, {
         recipient: plan.recipient,
         amountWei: BigInt(plan.amountWei),
+        broadcastRequestId: request.requestId,
+        beforeBroadcast: () => this.#markBroadcastStarted(request.requestId),
       });
-      let delivered = false;
-      if (recipientBalanceBefore !== undefined) {
+      let checkpoint: Awaited<ReturnType<typeof matchingPrivateBroadcastCheckpoint>>;
+      let checkpointMismatch = false;
+      if (result.confirmed) {
         try {
-          const after = await this.#chain.getBalanceWei(plan.recipient);
-          delivered = after >= recipientBalanceBefore + BigInt(plan.amountWei);
+          checkpoint = await matchingPrivateBroadcastCheckpoint({
+            wallet: this.#wallet,
+            requestId: request.requestId,
+            ...(result.userOperationHash === undefined
+              ? {}
+              : { storedUserOperationHash: result.userOperationHash }),
+          });
         } catch {
-          // Keep submitted/indeterminate until a later read can prove delivery.
+          checkpointMismatch = true;
+          // Exact receipt reconciliation owns checkpoint mismatch handling.
         }
       }
+      const exactUserOperationHash = result.userOperationHash ??
+        checkpoint?.userOperationHash;
       let privateBalanceAfter: bigint | undefined;
       try {
-        privateBalanceAfter = await this.#wallet.getPrivateBalanceWei();
+        privateBalanceAfter = await this.#getPrivateBalanceWei(sourcePrivateBalance);
       } catch {
         // The durable request remains sufficient for later reconciliation.
       }
       const updated = await this.#store.update((draft) => {
         const current = draft.recoveryRequests[request.requestId];
         if (!current) throw new Error("RECOVERY_REQUEST_NOT_FOUND");
-        current.phase = result.confirmed || delivered
+        current.phase = checkpointMismatch
+          ? "indeterminate"
+          : exactUserOperationHash
+          ? "submitted"
+          : result.confirmed
           ? "confirmed"
           : result.transactionHash || result.userOperationHash
             ? "submitted"
             : "indeterminate";
         current.updatedAt = this.#clock.now().toISOString();
         if (result.transactionHash) current.transactionHash = result.transactionHash;
-        if (result.userOperationHash) current.userOperationHash = result.userOperationHash;
-        if (result.confirmed || delivered) {
+        if (exactUserOperationHash) current.userOperationHash = exactUserOperationHash;
+        if (result.confirmed && !exactUserOperationHash && !checkpointMismatch) {
           current.confirmation = {
-            method: result.confirmed ? "adapter" : "recipient_balance_delta",
+            method: "adapter",
             checkedAt: current.updatedAt,
           };
+          delete current.error;
+        } else if (checkpointMismatch) {
+          current.error = {
+            code: "PRIVATE_BROADCAST_CHECKPOINT_MISMATCH",
+            message:
+              "The durable private broadcast checkpoint does not match this recovery. It was not retried.",
+          };
         }
-        if (draft.onboarding && privateBalanceAfter !== undefined) {
-          draft.onboarding.privateBalanceWei = privateBalanceAfter.toString();
+        if (draft.onboarding && privateBalanceAfter !== undefined &&
+          current.privateBalanceId) {
+          const profile = draft.wallet?.profiles[current.wallet.walletId];
+          const pocket = profile?.privateBalances[current.privateBalanceId];
+          if (pocket && privateBalanceAfter < BigInt(pocket.balanceWei)) {
+            pocket.balanceWei = privateBalanceAfter.toString();
+            pocket.revision += 1;
+            pocket.updatedAt = current.updatedAt;
+          }
+          draft.onboarding.privateBalanceWei = profile
+            ? sumPrivateBalancesWei(profile).toString()
+            : draft.onboarding.privateBalanceWei;
           draft.onboarding.revision += 1;
           draft.onboarding.updatedAt = current.updatedAt;
         }
       });
       return updated.recoveryRequests[request.requestId]!;
-    } catch {
+    } catch (error) {
+      const definitelyNotBroadcast = error instanceof WalletExecutionError &&
+        !error.mayHaveBroadcast;
       const updated = await this.#store.update((draft) => {
         const current = draft.recoveryRequests[request.requestId];
         if (!current) return;
-        current.phase = "indeterminate";
         current.updatedAt = this.#clock.now().toISOString();
-        current.error = {
-          code: "RECOVERY_TRANSFER_UNRESOLVED",
-          message:
-            "The confirmed recovery transfer may have been submitted. Do not retry it with a new request ID.",
-        };
+        if (definitelyNotBroadcast) {
+          current.phase = "failed";
+          current.error = {
+            code: "RECOVERY_REJECTED_BEFORE_BROADCAST",
+            message: "The recovery failed before broadcast; the reserved private balance was restored.",
+          };
+          restorePrivateBalanceDebit(draft, current, current.updatedAt);
+        } else {
+          current.phase = "indeterminate";
+          current.error = {
+            code: "RECOVERY_TRANSFER_UNRESOLVED",
+            message:
+              "The confirmed recovery transfer may have been submitted. Do not retry it with a new request ID.",
+          };
+        }
       });
       return updated.recoveryRequests[request.requestId]!;
     }
+  }
+
+  #getPrivateBalanceWei(privateBalance: PrivateBalanceRecord): Promise<bigint> {
+    if (this.#wallet.getPrivateBalanceWeiForWallet) {
+      return this.#wallet.getPrivateBalanceWeiForWallet(
+        privateBalance.backendWalletName,
+      );
+    }
+    this.#wallet.selectWallet?.(privateBalance.backendWalletName);
+    return this.#wallet.getPrivateBalanceWei();
+  }
+
+  #executeRecoveryTransfer(
+    privateBalance: PrivateBalanceRecord,
+    input: {
+      recipient: string;
+      amountWei: bigint;
+      broadcastRequestId: string;
+      beforeBroadcast: () => Promise<void>;
+    },
+  ): Promise<{
+    transactionHash?: string;
+    userOperationHash?: string;
+    confirmed?: boolean;
+  }> {
+    if (this.#wallet.executeRecoveryTransferFromWallet) {
+      return this.#wallet.executeRecoveryTransferFromWallet(
+        privateBalance.backendWalletName,
+        input,
+      );
+    }
+    this.#wallet.selectWallet?.(privateBalance.backendWalletName);
+    return this.#wallet.executeRecoveryTransfer!(input);
+  }
+
+  async #markBroadcastStarted(requestId: string): Promise<void> {
+    await this.#store.update((draft) => {
+      const request = draft.recoveryRequests[requestId];
+      if (!request || request.phase !== "executing" || request.broadcastStartedAt) {
+        throw new Error("RECOVERY_REQUEST_NOT_EXECUTABLE");
+      }
+      request.broadcastStartedAt = this.#clock.now().toISOString();
+      request.updatedAt = request.broadcastStartedAt;
+    });
   }
 }
 
 function recoveryDigest(input: {
   wallet: WalletSelectionBinding;
+  privateBalanceId: string;
+  privateBalanceRevision: number;
+  privateBalanceDebitWei: string;
   recipient: string;
   amountWei: string;
   withdrawalAmountWei: string;
@@ -428,6 +688,9 @@ function recoveryDigest(input: {
     wallet_id: input.wallet.walletId,
     wallet_name: input.wallet.walletName,
     selection_epoch: input.wallet.selectionEpoch,
+    private_balance_id: input.privateBalanceId,
+    private_balance_revision: input.privateBalanceRevision,
+    private_balance_debit_atomic: input.privateBalanceDebitWei,
     recipient: input.recipient.toLowerCase(),
     amount_atomic: input.amountWei,
     withdrawal_amount_atomic: input.withdrawalAmountWei,
@@ -451,6 +714,85 @@ function activeProfile(wallet: StateDocument["wallet"]): WalletProfileRecord | u
   return wallet?.profiles[wallet.activeWalletId];
 }
 
+function activeWalletProfile(state: StateDocument): WalletProfileRecord {
+  const profile = activeProfile(state.wallet);
+  if (!profile) throw new Error("ACTIVE_WALLET_PROFILE_MISSING");
+  return profile;
+}
+
+function activePrivateBalance(
+  state: StateDocument,
+  privateBalanceId?: string,
+): PrivateBalanceRecord {
+  const profile = activeWalletProfile(state);
+  const id = privateBalanceId ?? profile.defaultPrivateBalanceId;
+  const privateBalance = profile.privateBalances[id];
+  if (!privateBalance) throw new Error("PRIVATE_BALANCE_NOT_FOUND");
+  return privateBalance;
+}
+
+function sumPrivateBalancesWei(profile: WalletProfileRecord): bigint {
+  return Object.values(profile.privateBalances).reduce(
+    (sum, privateBalance) => privateBalance.status === "available"
+      ? sum + BigInt(privateBalance.balanceWei)
+      : sum,
+    0n,
+  );
+}
+
+function hasUnresolvedPrivateBalanceActivity(
+  state: StateDocument,
+  privateBalanceId: string,
+): boolean {
+  if (Object.values(state.requests).some(
+    (request) => request.privateBalanceId === privateBalanceId &&
+      isUnresolved(request.phase),
+  )) return true;
+  if (Object.values(state.recoveryRequests).some(
+    (request) => request.privateBalanceId === privateBalanceId &&
+      isUnresolved(request.phase),
+  )) return true;
+  if (Object.values(state.regularRequests).some(
+    (request) => request.sourcePrivateBalance?.privateBalanceId ===
+        privateBalanceId && isUnresolved(request.phase),
+  )) return true;
+  return Object.values(state.privateBalanceFundingRequests).some((request) =>
+    isUnresolved(request.phase) &&
+    (request.targetPrivateBalance.privateBalanceId === privateBalanceId ||
+      request.sourcePrivateBalance?.privateBalanceId === privateBalanceId)
+  );
+}
+
+function restorePrivateBalanceDebit(
+  state: StateDocument,
+  request: RecoveryTransferRequest,
+  restoredAt: string,
+): void {
+  if (request.privateBalanceRestoredAt || !request.privateBalanceDebitedAt ||
+    !request.privateBalanceId || !request.privateBalanceDebitWei) {
+    return;
+  }
+  const profile = state.wallet?.profiles[request.wallet.walletId];
+  const privateBalance = profile?.privateBalances[request.privateBalanceId];
+  if (!profile || !privateBalance) {
+    throw new Error("PRIVATE_BALANCE_RESTORE_TARGET_MISSING");
+  }
+  privateBalance.balanceWei = (
+    BigInt(privateBalance.balanceWei) + BigInt(request.privateBalanceDebitWei)
+  ).toString();
+  privateBalance.revision += 1;
+  privateBalance.updatedAt = restoredAt;
+  const onboarding = state.wallet?.activeWalletId === profile.walletId
+    ? state.onboarding
+    : profile.onboarding;
+  if (onboarding) {
+    onboarding.privateBalanceWei = sumPrivateBalancesWei(profile).toString();
+    onboarding.revision += 1;
+    onboarding.updatedAt = restoredAt;
+  }
+  request.privateBalanceRestoredAt = restoredAt;
+}
+
 function sameSelection(
   left: WalletSelectionBinding | undefined,
   right: WalletSelectionBinding | undefined,
@@ -459,6 +801,6 @@ function sameSelection(
     left.walletName === right.walletName && left.selectionEpoch === right.selectionEpoch;
 }
 
-function isUnresolved(phase: RecoveryTransferRequest["phase"]): boolean {
+function isUnresolved(phase: string): boolean {
   return phase === "executing" || phase === "submitted" || phase === "indeterminate";
 }

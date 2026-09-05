@@ -7,7 +7,7 @@
 [![ci][ci-badge]][ci-url]
 [![clean install][install-badge]][install-url]
 [![Node.js 22+][node-badge]][node-url]
-[![Hermes 0.16+][hermes-badge]][hermes-url]
+[![Hermes 0.21+][hermes-badge]][hermes-url]
 ![research preview][preview-badge]
 [![license][license-badge]][license-url]
 
@@ -61,15 +61,30 @@ shields `0.1` of it through Kohaku once funded.
 > Show me my wallets as a tree.
 
 Hermes prints one live, address-free map using friendly wallet names. Public
-balances and the active private balance are refreshed; inactive private
-balances are clearly marked last known.
+balances, every named private balance, and any wallet-controlled public change
+left by a private operation stay nested beneath their saved parent wallet.
+Active balances are refreshed; inactive balances are clearly marked last known.
+
+> Create a private balance called savings under agent-boost, then fund it with 0.1 Sepolia ETH from main.
+
+Private balances are durable named pockets, not chat-only labels. You can add
+more than one beneath a wallet, fund one from its parent main account, or move a
+whole supported private denomination from one sibling pocket into another.
+Creation and funding each get their own chat preview and approval; a later
+clause never runs silently across a confirmation boundary.
+Creating a second wallet gives it its own independent set of pockets and
+policies, all restored when that wallet is loaded again.
 
 > Load my old wallet.
 
-Hermes lists saved profiles, switches by friendly name after approval, restores
-that wallet's durable setup, and separately confirms fresh bounded transfer
-authority. You can create, adopt, archive, and switch among local Sepolia
-wallets without entering a seed, password, key, path, or internal wallet ID.
+One task-level call resolves the wording against saved profiles. If exactly one
+inactive profile fits, Hermes shows its switch preview; if several fit, it asks
+which friendly name to load. Replying with just that name opens its switch
+preview. After approval, the same flow restores that
+wallet's durable setup and returns the fresh bounded-authority preview.
+Granting authority still requires its own later chat confirmation. You can
+create, adopt, archive, and switch among local Sepolia wallets without entering
+a seed, password, key, path, or internal wallet ID.
 
 > Send 0.02 Sepolia ETH privately to 0x2222…2222.
 
@@ -80,8 +95,11 @@ to preview and approve different testnet guardrails.
 
 > Send a regular public transfer of 0.02 Sepolia ETH to 0x2222…2222.
 
-Hermes uses the selected main account, reserves gas, shows a public-transfer
-confirmation, and never substitutes the private route. Regular and private
+Hermes uses the selected main account by default. If you explicitly say “from
+the savings public change,” it instead uses spendable public value nested under
+that private balance. It reserves gas, shows the exact public-transfer source,
+executes and verifies it in one task-level call, and never substitutes the
+private route. Regular and private
 sends share the same testnet delegation envelope. Your next chat reply—“yes,”
 “send it,” or ✅—confirms the shown plan; there is no separate interface or
 plan ID for you to operate.
@@ -131,7 +149,7 @@ until a license file is added.
 [install-url]: https://github.com/dmarzzz/agent-boost/actions/workflows/release-matrix.yml
 [node-badge]: https://img.shields.io/badge/node-%3E%3D22-3f8f14.svg
 [node-url]: https://nodejs.org/en/download
-[hermes-badge]: https://img.shields.io/badge/hermes-0.16%2B-3f8f14.svg
+[hermes-badge]: https://img.shields.io/badge/hermes-0.21%2B-3f8f14.svg
 [hermes-url]: integrations/hermes/agent-boost/SKILL.md
 [preview-badge]: https://img.shields.io/badge/status-research%20preview-9ee01e.svg
 [license-badge]: https://img.shields.io/badge/license-all%20rights%20reserved-lightgrey.svg

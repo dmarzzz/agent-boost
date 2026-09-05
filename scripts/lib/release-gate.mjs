@@ -19,36 +19,73 @@ const EXPECTED_KOHAKU_COMMIT = "fcf9defa4d5ff7f63222f1b3bbe2d30e631ceffd";
 const EXPECTED_FUNDING_WEI = "200000000000000000";
 const EXPECTED_FUNDING_ETH = "0.2";
 const EXPECTED_CHAIN_ID = "eip155:11155111";
+const EXPECTED_MCP_DISCOVERY_TIMEOUT_SECONDS = 60;
+const HERMES_TURN_GATE_PRE_MATCHER = ".*";
+const HERMES_TURN_GATE_POST_MATCHER = "(?:mcp__agent_boost__.*|tool_call)";
+const HERMES_TURN_GATE_TIMEOUT_SECONDS = 5;
+export const HERMES_AGENT_BOOST_SYSTEM_PROMPT_BLOCK = [
+  "[BEGIN AGENT BOOST MANAGED ROUTING]",
+  "Agent Boost wallet rules:",
+  "- An unqualified transfer from a named wallet, profile, or main account is regular/public. For an explicit regular/public send from <parent>/<pocket>, put the parent in source and the child in source_private_balance; if only the pocket or its public change is named, use $selected as source and that child name in source_private_balance. It remains regular, not private. The word private inside a saved-wallet friendly name never selects private mode or a child pocket; only an explicit private, shielded, from-private, recovery, or unshield request does. Route mode first: regular/public -> wallet_preview_regular_transfer; private/shielded -> wallet_preview_private_transfer; recovery/private-to-main -> wallet_preview_recovery_transfer. Do this even when the source is named or inactive; never list or load it first. Treat destination names as lookups; never infer wallet creation.",
+  "- A private balance is a named child pocket under one saved wallet, not another top-level wallet. Use wallet_preview_private_balance_create to add one, wallet_preview_private_balance_fund to fund one, and the private-balance policy tools for its own limits. For funding, wallet_name is the parent; source=$main means that parent's public account, otherwise source is an exact sibling pocket name. Its nested public-change balance stays under that child and is regular-sendable. Use wallet_get_tree for the overview.",
+  "- Any preview or result that asks for approval ends this assistant turn. Continue only after a later actual user turn; all approval happens through that chat reply, never an app, popup, or other confirmation surface. Never manufacture, quote, simulate, or impersonate user input.",
+  "- Never put raw tool/function-call syntax (including <function> tags) or internal tool, decision, or request IDs in user-facing text.",
+  "- A canonical transfer execution performs one no-rebroadcast verification read itself and returns the final, unresolved, or explicitly unverified state. Do not add another tool call in that assistant turn. A matching wallet_get_*_request tool is only for a later user status request; never execute again to check.",
+  "- When the latest trusted Agent Boost result requested a status follow-up, a fresh user message such as check again starts a new read-only turn. Perform exactly one fresh read for that matching setup or unresolved operation; never answer from an older balance, phase, or tree. Repeating a read across user turns is allowed and required. This never permits repeating an execute, apply, create, fund, shield, or broadcast action.",
+  "[END AGENT BOOST MANAGED ROUTING]",
+].join("\n");
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-const HERMES_NATIVE_TOOLS = [
+export const HERMES_NATIVE_TOOLS = [
   "capabilities",
   "onboarding_start",
   "onboarding_status",
-  "wallet_get_context",
-  "wallet_manage_profiles",
+  "wallet_get_main_balance",
+  "wallet_list_saved_profiles",
   "wallet_get_tree",
+  "wallet_preview_private_balance_create",
+  "wallet_apply_private_balance_create",
+  "wallet_preview_private_balance_fund",
+  "wallet_apply_private_balance_fund",
+  "wallet_get_private_balance_operation",
+  "wallet_get_private_balance_policy",
+  "wallet_preview_private_balance_policy_update",
+  "wallet_apply_private_balance_policy_update",
   "wallet_create",
   "wallet_adopt_existing",
-  "wallet_select",
+  "wallet_preview_saved_profile_load",
+  "wallet_apply_saved_profile_load",
   "wallet_archive",
   "wallet_plan_reauthorization",
-  "wallet_reauthorize",
+  "wallet_apply_reauthorization",
   "wallet_get_policy",
   "wallet_plan_policy_update",
   "wallet_apply_policy_update",
   "wallet_start_new_demo",
-  "wallet_plan_regular_transfer",
+  "wallet_preview_regular_transfer",
   "wallet_execute_regular_transfer",
   "wallet_get_regular_transfer_request",
-  "wallet_plan_private_payment",
-  "wallet_execute_private_payment",
-  "wallet_get_request",
-  "wallet_plan_recovery_transfer",
+  "wallet_preview_private_transfer",
+  "wallet_execute_private_transfer",
+  "wallet_get_private_transfer_request",
+  "wallet_preview_recovery_transfer",
   "wallet_execute_recovery_transfer",
   "wallet_get_recovery_request",
   "egress_capabilities",
   "egress_status",
   "egress_fetch",
+];
+export const AGENT_BOOST_MCP_TOOL_COUNT = 54;
+const HERMES_SKILL_NAMES = [
+  "agent-boost-setup",
+  "agent-boost",
+  "agent-boost-wallet-tree",
+  "agent-boost-wallets",
+  "agent-boost-policy",
+  "agent-boost-transfers",
+  "agent-boost-wallet-actions",
+  "agent-boost-authorize",
+  "agent-boost-confirm",
+  "agent-boost-covered-web",
 ];
 
 const ENVELOPE_KEYS = [
@@ -318,11 +355,35 @@ export async function verifyInstalledHermes(options) {
     throw new Error("Hermes was not configured during the clean install");
   }
 
-  const executable = await realpath(
-    stringValue(agentBoost.executable, "Agent Boost executable"),
+  const reportedExecutable = stringValue(
+    agentBoost.executable,
+    "Agent Boost executable",
   );
+  const executable = await realpath(reportedExecutable);
   assertWithin(realSandboxRoot, executable, "Agent Boost executable");
+  const turnGateArtifact = await realpath(join(dirname(executable), "hermes", "turn-gate.js"));
+  assertWithin(realSandboxRoot, turnGateArtifact, "Agent Boost turn-gate artifact");
+  const turnGateMetadata = await lstat(turnGateArtifact);
+  if (!turnGateMetadata.isFile() || turnGateMetadata.isSymbolicLink()) {
+    throw new Error("Installed package is missing dist/hermes/turn-gate.js");
+  }
+  const candidateTurnGateArtifact = join(
+    options.candidateRoot,
+    "dist",
+    "hermes",
+    "turn-gate.js",
+  );
+  const [installedTurnGate, candidateTurnGate] = await Promise.all([
+    readFile(turnGateArtifact),
+    readFile(candidateTurnGateArtifact),
+  ]);
+  if (!installedTurnGate.equals(candidateTurnGate)) {
+    throw new Error("Packaged dist/hermes/turn-gate.js differs from the candidate build");
+  }
   const hermesResult = record(hermes.result, "Hermes installer result");
+  if (hermesResult.installed !== true) {
+    throw new Error("Hermes installer result did not report success");
+  }
   if (hermesResult.config_changed !== true) {
     throw new Error("Clean Hermes profile did not report a new Agent Boost config entry");
   }
@@ -332,6 +393,56 @@ export async function verifyInstalledHermes(options) {
   ]);
   assertWithin(realHermesHome, configPath, "Hermes config path");
   const config = record(parseYaml(await readFile(configPath, "utf8")), "Hermes config");
+  const agent = record(config.agent, "Hermes agent settings");
+  if (agent.tool_use_enforcement !== true) {
+    throw new Error("Hermes config did not default agent.tool_use_enforcement to true");
+  }
+  for (const key of [
+    "execution_guidance",
+    "task_completion_guidance",
+    "parallel_tool_call_guidance",
+  ]) {
+    if (agent[key] !== false) {
+      throw new Error(`Hermes config did not default agent.${key} to false`);
+    }
+  }
+  if (agent.system_prompt !== HERMES_AGENT_BOOST_SYSTEM_PROMPT_BLOCK) {
+    throw new Error("Hermes config does not contain the exact managed Agent Boost routing prompt");
+  }
+  if (hooksAutoAcceptEnabled(config.hooks_auto_accept)) {
+    throw new Error("Hermes config enabled blanket hook auto-acceptance");
+  }
+  if (
+    config.mcp_discovery_timeout !== EXPECTED_MCP_DISCOVERY_TIMEOUT_SECONDS ||
+    config.mcp_single_query_discovery_timeout !==
+      EXPECTED_MCP_DISCOVERY_TIMEOUT_SECONDS
+  ) {
+    throw new Error(
+      "Hermes config did not reserve enough startup time for cold Agent Boost MCP discovery",
+    );
+  }
+  if (record(config.display, "Hermes display settings").busy_input_mode !== "queue") {
+    throw new Error("Hermes config did not default busy input handling to queue");
+  }
+  const plugins = record(config.plugins, "Hermes plugins");
+  const enabledPlugins = plugins.enabled;
+  if (!Array.isArray(enabledPlugins) || !enabledPlugins.includes("agent-boost-output-guard")) {
+    throw new Error("Hermes config did not enable the Agent Boost output guard");
+  }
+  const pluginEntries = record(plugins.entries, "Hermes plugin entries");
+  const outputGuardEntry = record(
+    pluginEntries["agent-boost-output-guard"],
+    "Hermes Agent Boost output-guard entry",
+  );
+  const outputGuardSettings = record(
+    outputGuardEntry.settings,
+    "Hermes Agent Boost output-guard settings",
+  );
+  if (outputGuardSettings.turn_gate_executable !== executable) {
+    throw new Error(
+      "Hermes output guard does not use the installed exact Agent Boost executable",
+    );
+  }
   const servers = record(config.mcp_servers, "Hermes mcp_servers");
   const server = record(servers["agent-boost"], "Hermes agent-boost server");
   if (await realpath(stringValue(server.command, "Hermes server command")) !== executable) {
@@ -342,7 +453,7 @@ export async function verifyInstalledHermes(options) {
   }
   if (
     server.enabled !== true ||
-    server.timeout !== 180 ||
+    server.timeout !== 360 ||
     server.supports_parallel_tool_calls !== false
   ) {
     throw new Error("Hermes config has unexpected Agent Boost runtime settings");
@@ -356,9 +467,57 @@ export async function verifyInstalledHermes(options) {
     throw new Error("Hermes config has unexpected Agent Boost tool exposure");
   }
 
+  const expectedTurnGateCommand = hermesTurnGateCommand(executable);
+  const expectedHooks = expectedHermesTurnGateHooks(expectedTurnGateCommand);
+  if (JSON.stringify(config.hooks) !== JSON.stringify(expectedHooks)) {
+    throw new Error("Hermes config does not contain the exact Agent Boost turn-gate hooks");
+  }
+
+  const turnGateOutput = record(hermesResult.turn_gate, "Hermes installer turn_gate");
+  if (
+    turnGateOutput.command !== expectedTurnGateCommand ||
+    turnGateOutput.allowlist_changed !== true
+  ) {
+    throw new Error("Hermes installer reported unexpected turn_gate output");
+  }
+  const allowlistPath = await realpath(
+    stringValue(turnGateOutput.allowlist_path, "Hermes turn-gate allowlist path"),
+  );
+  assertWithin(realHermesHome, allowlistPath, "Hermes turn-gate allowlist path");
+  await assertMode(allowlistPath, 0o600, "Hermes turn-gate allowlist");
+  let allowlist;
+  try {
+    allowlist = JSON.parse(await readFile(allowlistPath, "utf8"));
+  } catch {
+    throw new Error("Hermes turn-gate allowlist is not valid JSON");
+  }
+  const expectedAllowlist = {
+    approvals: [
+      { event: "pre_tool_call", command: expectedTurnGateCommand },
+      { event: "post_tool_call", command: expectedTurnGateCommand },
+    ],
+  };
+  if (JSON.stringify(allowlist) !== JSON.stringify(expectedAllowlist)) {
+    throw new Error("Hermes turn-gate allowlist is not exact");
+  }
+  const outputGuard = record(hermesResult.output_guard, "Hermes installer output_guard");
+  if (outputGuard.changed !== true || outputGuard.validated !== true) {
+    throw new Error("Hermes installer did not install and validate the output guard");
+  }
+  const outputGuardPath = await realpath(
+    stringValue(outputGuard.plugin_path, "Hermes output-guard plugin path"),
+  );
+  assertWithin(realHermesHome, outputGuardPath, "Hermes output-guard plugin path");
+  for (const file of ["__init__.py", "plugin.yaml"]) {
+    const [actual, expected] = await Promise.all([
+      readFile(join(outputGuardPath, file)),
+      readFile(join(options.candidateRoot, "integrations", "hermes", "agent-boost-output-guard", file)),
+    ]);
+    if (!actual.equals(expected)) throw new Error(`Installed output guard ${file} differs from candidate`);
+  }
+
   const installedSkills = Array.isArray(hermesResult.skills) ? hermesResult.skills : [];
-  const expectedSkills = ["agent-boost-setup", "agent-boost"];
-  for (const name of expectedSkills) {
+  for (const name of HERMES_SKILL_NAMES) {
     const installed = installedSkills.find((skill) => skill?.name === name);
     if (!installed) throw new Error(`Hermes did not install the ${name} skill`);
     if (installed.changed !== true) {
@@ -376,10 +535,299 @@ export async function verifyInstalledHermes(options) {
   return {
     executable,
     configPath,
+    turnGateArtifact,
+    turnGateCommand: expectedTurnGateCommand,
     hermesVersion: publicHermesVersion(
       stringValue(hermes.hermes_version, "Hermes version"),
     ),
     kohakuCommit: EXPECTED_KOHAKU_COMMIT,
+  };
+}
+
+export async function verifyInstalledTurnGate(options) {
+  const stateDirectory = stringValue(
+    options.stateDirectory,
+    "turn-gate smoke state directory",
+  );
+  const environment = {
+    ...(options.environment ?? {}),
+    AGENT_BOOST_HERMES_TURN_GATE_DIR: stateDirectory,
+  };
+  const commandArgs = Array.isArray(options.commandArgs)
+    ? [...options.commandArgs]
+    : ["hermes-turn-gate"];
+  const session = "release-gate-turn-gate-smoke";
+  const previewResult = {
+    _meta: {
+      "org.agentboost/turn-control": {
+        schema_version: 1,
+        boundary: "new_user_turn",
+        continuation: {
+          tool: "wallet_create",
+          binding: {
+            name: "release-smoke-wallet",
+            expected_active_wallet_name: "agent-boost",
+            expected_active_selection_epoch: 1,
+          },
+        },
+      },
+      "org.agentboost/model-context": { response_mode: "preview_then_stop" },
+    },
+    content: [{ type: "text", text: "Create release-smoke-wallet after a later reply." }],
+  };
+  const invoke = async (payload, label) => {
+    const execution = await spawnCapture(options.executable, commandArgs, {
+      env: environment,
+      input: `${JSON.stringify(payload)}\n`,
+      timeoutMs: 10_000,
+      outputLimit: 64 * 1024,
+    });
+    if (execution.exitCode !== 0) {
+      throw new Error(`Installed turn gate failed during ${label}: ${diagnostic(execution)}`);
+    }
+    try {
+      return record(JSON.parse(execution.stdout), `${label} turn-gate response`);
+    } catch {
+      throw new Error(`Installed turn gate returned invalid JSON during ${label}`);
+    }
+  };
+  const hookPayload = (event, turn, tool, input = {}, result) => ({
+    hook_event_name: event,
+    tool_name: tool,
+    tool_input: input,
+    session_id: session,
+    extra: {
+      turn_id: turn,
+      tool_call_id: `${turn}-${event}`,
+      ...(result === undefined ? {} : { result }),
+    },
+  });
+  const nativePreLlmPayload = (sessionId, turn, userMessage) => ({
+    hook_event_name: "pre_llm_call",
+    tool_name: null,
+    tool_input: null,
+    session_id: sessionId,
+    cwd: "",
+    extra: {
+      task_id: `${sessionId}-task`,
+      turn_id: turn,
+      user_message: userMessage,
+    },
+  });
+  const attestRootTurn = async (sessionId, turn, userMessage, label) => {
+    const response = await invoke(
+      nativePreLlmPayload(sessionId, turn, userMessage),
+      label,
+    );
+    if (response.continue === false) {
+      throw new Error(`Installed turn gate blocked ${label}`);
+    }
+    return response;
+  };
+
+  await attestRootTurn(
+    session,
+    "turn-1",
+    "Create release-smoke-wallet.",
+    "preview root-turn attestation",
+  );
+  const published = await invoke(
+    hookPayload(
+      "post_tool_call",
+      "turn-1",
+      "mcp__agent_boost__wallet_create",
+      {},
+      previewResult,
+    ),
+    "preview publication",
+  );
+  assertAllowedTurnGateResponse(published, "preview publication");
+
+  const sameTurn = await invoke(
+    hookPayload("pre_tool_call", "turn-1", "mcp__agent_boost__wallet_get_main_balance"),
+    "same-turn continuation",
+  );
+  assertBlockedTurnGateResponse(sameTurn, "same-turn continuation");
+
+  const exactContinuation = hookPayload(
+    "pre_tool_call",
+    "turn-2",
+    "mcp__agent_boost__wallet_create",
+    {
+      name: "release-smoke-wallet",
+      expected_active_wallet_name: "agent-boost",
+      expected_active_selection_epoch: 1,
+      user_confirmed: true,
+    },
+  );
+  const approvalContext = await attestRootTurn(
+    session,
+    "turn-2",
+    "approve",
+    "actual-user approval authentication",
+  );
+  if (typeof approvalContext.context !== "string" || !approvalContext.context.includes("wallet_create")) {
+    throw new Error("Installed turn gate did not authenticate the actual user approval");
+  }
+  assertAllowedTurnGateResponse(
+    await invoke(exactContinuation, "later exact continuation"),
+    "later exact continuation",
+  );
+  assertBlockedTurnGateResponse(
+    await invoke(exactContinuation, "consumed continuation replay"),
+    "consumed continuation replay",
+  );
+
+  const directSession = "release-gate-direct-confirmation";
+  await attestRootTurn(
+    directSession,
+    "direct-turn-1",
+    "Archive old-wallet now.",
+    "direct confirmation root-turn attestation",
+  );
+  const direct = {
+    ...hookPayload(
+      "pre_tool_call",
+      "direct-turn-1",
+      "mcp__agent_boost__wallet_archive",
+      { wallet_name: "old-wallet", user_confirmed: true },
+    ),
+    session_id: directSession,
+  };
+  assertBlockedTurnGateResponse(
+    await invoke(direct, "direct lifecycle confirmation"),
+    "direct lifecycle confirmation",
+  );
+
+  const unrelatedSession = "release-gate-unrelated-call";
+  await attestRootTurn(
+    unrelatedSession,
+    "ordinary-turn-1",
+    "Show me my wallets.",
+    "unrelated call root-turn attestation",
+  );
+  const unrelated = {
+    ...hookPayload(
+      "pre_tool_call",
+      "ordinary-turn-1",
+      "mcp__agent_boost__wallet_get_tree",
+    ),
+    session_id: unrelatedSession,
+  };
+  assertAllowedTurnGateResponse(
+    await invoke(unrelated, "unrelated call"),
+    "unrelated call",
+  );
+
+  const bridgedToolName = "mcp__agent_boost__wallet_archive";
+  const bridgedConfirmation = {
+    wallet_name: "release-smoke-archive",
+    user_confirmed: true,
+  };
+  const directBridgedSession = "release-gate-bridged-direct";
+  await attestRootTurn(
+    directBridgedSession,
+    "bridged-direct-turn-1",
+    "Archive release-smoke-archive now.",
+    "direct bridged confirmation root-turn attestation",
+  );
+  const directBridged = {
+    ...hookPayload(
+      "pre_tool_call",
+      "bridged-direct-turn-1",
+      "tool_call",
+      {
+        name: bridgedToolName,
+        arguments: JSON.stringify(bridgedConfirmation),
+      },
+    ),
+    session_id: directBridgedSession,
+  };
+  assertBlockedTurnGateResponse(
+    await invoke(directBridged, "direct bridged string confirmation"),
+    "direct bridged string confirmation",
+  );
+
+  const bridgedPreviewResult = {
+    _meta: {
+      "org.agentboost/turn-control": {
+        schema_version: 1,
+        boundary: "new_user_turn",
+        continuation: {
+          tool: "wallet_archive",
+          binding: { wallet_name: "release-smoke-archive" },
+        },
+      },
+      "org.agentboost/model-context": { response_mode: "preview_then_stop" },
+    },
+    content: [{ type: "text", text: "Archive release-smoke-archive after a later reply." }],
+  };
+  const bridgedPreviewSession = "release-gate-bridged-preview";
+  await attestRootTurn(
+    bridgedPreviewSession,
+    "bridged-turn-1",
+    "Archive release-smoke-archive.",
+    "bridged preview root-turn attestation",
+  );
+  const bridgedPreview = {
+    ...hookPayload(
+      "post_tool_call",
+      "bridged-turn-1",
+      "tool_call",
+      {
+        name: bridgedToolName,
+        arguments: JSON.stringify({ wallet_name: "release-smoke-archive" }),
+      },
+      bridgedPreviewResult,
+    ),
+    session_id: bridgedPreviewSession,
+  };
+  assertAllowedTurnGateResponse(
+    await invoke(bridgedPreview, "bridged preview publication"),
+    "bridged preview publication",
+  );
+  const bridgedContinuation = {
+    ...hookPayload(
+      "pre_tool_call",
+      "bridged-turn-2",
+      "tool_call",
+      {
+        name: bridgedToolName,
+        arguments: JSON.stringify(bridgedConfirmation),
+      },
+    ),
+    session_id: bridgedPreviewSession,
+  };
+  const bridgedApprovalContext = await attestRootTurn(
+    bridgedPreviewSession,
+    "bridged-turn-2",
+    "approve",
+    "bridged actual-user approval authentication",
+  );
+  if (
+    typeof bridgedApprovalContext.context !== "string" ||
+    !bridgedApprovalContext.context.includes("wallet_archive")
+  ) {
+    throw new Error("Installed turn gate did not authenticate the bridged approval");
+  }
+  assertAllowedTurnGateResponse(
+    await invoke(bridgedContinuation, "later exact bridged string confirmation"),
+    "later exact bridged string confirmation",
+  );
+  assertBlockedTurnGateResponse(
+    await invoke(bridgedContinuation, "consumed bridged string confirmation replay"),
+    "consumed bridged string confirmation replay",
+  );
+
+  return {
+    sameTurnBlocked: true,
+    exactContinuationAllowed: true,
+    continuationConsumed: true,
+    directConfirmationBlocked: true,
+    unrelatedCallAllowed: true,
+    bridgedDirectConfirmationBlocked: true,
+    bridgedExactContinuationAllowed: true,
+    bridgedContinuationConsumed: true,
   };
 }
 
@@ -431,11 +879,12 @@ export async function installHermesCommand(commandBin, hermesExecutable) {
 
 export async function spawnCapture(executable, args, options = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
+    const hasInput = options.input !== undefined;
     const child = spawn(executable, [...args], {
       cwd: options.cwd,
       env: options.env,
       shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [hasInput ? "pipe" : "ignore", "pipe", "pipe"],
     });
     const stdout = [];
     const stderr = [];
@@ -461,6 +910,7 @@ export async function spawnCapture(executable, args, options = {}) {
     child.stdout.on("data", (chunk) => capture(stdout, chunk));
     child.stderr.on("data", (chunk) => capture(stderr, chunk));
     child.once("error", (error) => finish(() => rejectPromise(error)));
+    child.stdin?.once("error", (error) => finish(() => rejectPromise(error)));
     child.once("close", (exitCode, signal) => {
       finish(() => resolvePromise({
         exitCode: exitCode ?? 1,
@@ -474,6 +924,7 @@ export async function spawnCapture(executable, args, options = {}) {
       finish(() => rejectPromise(new Error(`Release-gate command timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
     timer.unref();
+    if (hasInput) child.stdin.end(options.input);
   });
 }
 
@@ -509,6 +960,52 @@ export async function inspectCandidate(sourceRoot, runCommand = spawnCapture) {
     throw new Error(`Could not inspect candidate changes: ${diagnostic(dirty)}`);
   }
   return { sha: revision.stdout.trim(), trackedChanges: dirty.exitCode === 1 };
+}
+
+function hooksAutoAcceptEnabled(value) {
+  return value === true || (
+    typeof value === "string" &&
+    ["1", "true", "yes", "on"].includes(value.trim().toLowerCase())
+  );
+}
+
+function hermesTurnGateCommand(executable) {
+  const commandPath = /^[A-Za-z0-9_./:@%+=,-]+$/u.test(executable)
+    ? executable
+    : `'${executable.replaceAll("'", `'"'"'`)}'`;
+  return `${commandPath} hermes-turn-gate`;
+}
+
+function expectedHermesTurnGateHooks(command) {
+  return {
+    pre_tool_call: [{
+      matcher: HERMES_TURN_GATE_PRE_MATCHER,
+      command,
+      timeout: HERMES_TURN_GATE_TIMEOUT_SECONDS,
+      fail_closed: true,
+    }],
+    post_tool_call: [{
+      matcher: HERMES_TURN_GATE_POST_MATCHER,
+      command,
+      timeout: HERMES_TURN_GATE_TIMEOUT_SECONDS,
+    }],
+  };
+}
+
+function assertAllowedTurnGateResponse(value, label) {
+  if (Object.keys(value).length !== 0) {
+    throw new Error(`Installed turn gate unexpectedly blocked ${label}`);
+  }
+}
+
+function assertBlockedTurnGateResponse(value, label) {
+  if (
+    value.action !== "block" ||
+    typeof value.message !== "string" ||
+    value.message.length === 0
+  ) {
+    throw new Error(`Installed turn gate failed to block ${label}`);
+  }
 }
 
 function exactKeys(value, expected, label) {

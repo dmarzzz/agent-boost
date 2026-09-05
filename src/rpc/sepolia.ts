@@ -2,11 +2,21 @@ import {
   SEPOLIA_CHAIN_ID,
   type ChainClient,
   type TransactionReceiptStatus,
+  type UserOperationReceiptStatus,
 } from "../contracts.js";
 
 const ETH_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const HEX_QUANTITY_RE = /^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$/;
 const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
+const ABI_ADDRESS_TOPIC_RE = /^0x0{24}[0-9a-fA-F]{40}$/;
+const USER_OPERATION_EVENT_DATA_RE = /^0x[0-9a-fA-F]{256}$/;
+
+/** Canonical singleton used by Kohaku's pinned ERC-4337 EntryPoint v0.8 path. */
+const ENTRY_POINT_V08_ADDRESS =
+  "0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108";
+/** keccak256(UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)). */
+const USER_OPERATION_EVENT_TOPIC =
+  "0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f";
 
 export type RpcFetch = (
   input: string | URL | Request,
@@ -88,6 +98,109 @@ export class SepoliaRpcClient implements ChainClient {
     if (status === 1n) return "success";
     if (status === 0n) return "reverted";
     throw new Error("Sepolia RPC eth_getTransactionReceipt returned an invalid status");
+  }
+
+  async getUserOperationReceiptStatus(
+    userOperationHash: string,
+    expectedSender?: string,
+  ): Promise<UserOperationReceiptStatus> {
+    if (!TX_HASH_RE.test(userOperationHash)) {
+      throw new Error("UserOperation hash must be a 32-byte hex value");
+    }
+    if (expectedSender !== undefined && !ETH_ADDRESS_RE.test(expectedSender)) {
+      throw new Error("Expected UserOperation sender must be an Ethereum address");
+    }
+    const normalizedHash = userOperationHash.toLowerCase();
+    const expectedSenderTopic = expectedSender === undefined
+      ? undefined
+      : `0x${"0".repeat(24)}${expectedSender.slice(2).toLowerCase()}`;
+    const result = await this.#request("eth_getLogs", [
+      {
+        address: ENTRY_POINT_V08_ADDRESS,
+        fromBlock: "earliest",
+        toBlock: "latest",
+        topics: [USER_OPERATION_EVENT_TOPIC, normalizedHash],
+      },
+    ]);
+    if (!Array.isArray(result)) {
+      throw new Error("Sepolia RPC eth_getLogs returned an invalid log list");
+    }
+
+    const canonicalLogs: Record<string, unknown>[] = [];
+    for (const value of result) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new Error("Sepolia RPC eth_getLogs returned an invalid UserOperation log");
+      }
+      const log = value as Record<string, unknown>;
+      if (log.removed !== undefined && typeof log.removed !== "boolean") {
+        throw new Error("Sepolia RPC eth_getLogs returned an invalid UserOperation log");
+      }
+      // A removed log is not evidence of canonical inclusion after a reorg.
+      if (log.removed === true) continue;
+      canonicalLogs.push(log);
+    }
+    if (canonicalLogs.length === 0) return { status: "pending" };
+    if (canonicalLogs.length !== 1) {
+      throw new Error("Sepolia RPC eth_getLogs returned ambiguous UserOperation logs");
+    }
+
+    const log = canonicalLogs[0]!;
+    if (
+      typeof log.address !== "string" ||
+      log.address.toLowerCase() !== ENTRY_POINT_V08_ADDRESS.toLowerCase()
+    ) {
+      throw new Error("Sepolia RPC eth_getLogs returned a mismatched EntryPoint log");
+    }
+    if (!Array.isArray(log.topics) || log.topics.length !== 4) {
+      throw new Error("Sepolia RPC eth_getLogs returned invalid UserOperation topics");
+    }
+    const [eventTopic, hashTopic, senderTopic, paymasterTopic] = log.topics;
+    if (
+      typeof eventTopic !== "string" ||
+      eventTopic.toLowerCase() !== USER_OPERATION_EVENT_TOPIC ||
+      typeof hashTopic !== "string" ||
+      hashTopic.toLowerCase() !== normalizedHash
+    ) {
+      throw new Error("Sepolia RPC eth_getLogs returned mismatched UserOperation topics");
+    }
+    if (
+      typeof senderTopic !== "string" ||
+      !ABI_ADDRESS_TOPIC_RE.test(senderTopic) ||
+      typeof paymasterTopic !== "string" ||
+      !ABI_ADDRESS_TOPIC_RE.test(paymasterTopic)
+    ) {
+      throw new Error("Sepolia RPC eth_getLogs returned invalid UserOperation topics");
+    }
+    if (
+      expectedSenderTopic !== undefined &&
+      senderTopic.toLowerCase() !== expectedSenderTopic
+    ) {
+      throw new Error("Sepolia RPC eth_getLogs returned a mismatched UserOperation sender");
+    }
+    if (
+      typeof log.transactionHash !== "string" ||
+      !TX_HASH_RE.test(log.transactionHash)
+    ) {
+      throw new Error("Sepolia RPC eth_getLogs returned an invalid transaction hash");
+    }
+    if (
+      typeof log.data !== "string" ||
+      !USER_OPERATION_EVENT_DATA_RE.test(log.data)
+    ) {
+      throw new Error("Sepolia RPC eth_getLogs returned invalid UserOperation data");
+    }
+
+    // ABI data words are nonce, success, actualGasCost, and actualGasUsed.
+    const successWord = log.data.slice(2 + 64, 2 + 128).toLowerCase();
+    const falseWord = "0".repeat(64);
+    const trueWord = `${"0".repeat(63)}1`;
+    if (successWord !== falseWord && successWord !== trueWord) {
+      throw new Error("Sepolia RPC eth_getLogs returned an invalid UserOperation success flag");
+    }
+    return {
+      status: successWord === trueWord ? "success" : "reverted",
+      transactionHash: log.transactionHash,
+    };
   }
 
   async #request(method: string, params: readonly unknown[]): Promise<unknown> {

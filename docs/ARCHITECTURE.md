@@ -4,6 +4,8 @@
 flowchart LR
     U[User] <-->|conversation and verbal approval| H[Hermes]
     H <-->|MCP over stdio| A[Agent Boost sidecar]
+    H <-->|native pre-LLM bridge + pre/post tool hooks| G[Agent Boost turn gate]
+    A -->|typed preview continuation| G
     A -->|loopback-only funding page| UI[QR onboarding UI]
     A -->|bounded argv + random loopback RPC URL| K[Kohaku CLI]
     A -->|fixed-origin JSON-RPC| T[Embedded Tor / Arti]
@@ -25,7 +27,8 @@ seed storage, Tornado proving, signing, and broadcast.
 
 | Component | Responsibility |
 | --- | --- |
-| Hermes | Conversation, fallback readback, MCP orchestration |
+| Hermes | Conversation, small intent router, specialist choreography, MCP orchestration |
+| Hermes turn gate | Native root-turn authentication plus shell-hook same-turn hard stop, one-shot exact confirmation provenance, fork isolation, and exact read-only status continuations |
 | Agent Boost MCP server | Schemas, policy, state, idempotency, UI lifecycle |
 | Onboarding UI | Read-only loopback QR, address, funding and shield progress |
 | Kohaku adapter | Wallet operations through fixed, non-shell argv |
@@ -44,6 +47,8 @@ dashboard. Its proxy is narrowly limited to the configured Sepolia RPC origin.
 - runtime ownership lock: exclusive `127.0.0.1:9184` bind;
 - authenticated fixed-origin RPC relay: `127.0.0.1:9185` by default;
 - state: `~/.local/share/agent-boost` by default.
+- Hermes confirmation provenance: `~/.hermes/state/agent-boost-turn-gate-v1`
+  by default, with private permissions and hashed session/turn filenames.
 
 The UI server rejects non-loopback Host headers, cross-site browser requests,
 methods other than GET/HEAD, and framing. It uses no remote assets and returns
@@ -84,28 +89,33 @@ diagnosis rather than an automatic retry.
 ## Payment flow
 
 ```text
-wallet_manage_profiles
-  → select a registered friendly wallet name or adopt a local Sepolia name
-  → confirmation → restore durable wallet state + disable stale authority
-  → wallet_plan_reauthorization
-  → separate confirmation → wallet_reauthorize
+wallet_preview_saved_profile_load(user's friendly reference)
+  → resolve the sole eligible inactive profile, or return friendly-name choices
+  → exact friendly-name reply → pinned wallet_preview_saved_profile_load(name)
+  → confirmation → wallet_apply_saved_profile_load
+    ↳ restore profile + disable stale authority + return reauthorization preview
+  → separate confirmation → wallet_apply_reauthorization
 
-wallet_get_context
-  → live main account address + its on-chain balance
-  → wallet_get_policy / wallet_plan_policy_update
+wallet_get_main_balance
+  → standalone live main-account balance or affordability read
+
+wallet_get_policy / wallet_plan_policy_update
   → separate confirmation → wallet_apply_policy_update
-  → wallet_plan_regular_transfer(recipient, amount)
-    → exact chat preview → new user confirmation → public main-account transfer → durable status
-  → wallet_plan_private_payment(recipient, amount)
+
+wallet_preview_regular_transfer(source, destination, amount, optional source_private_balance)
+  → planner refreshes the selected main balance or one tracked public-change account
+  → exact chat preview → new user confirmation → public transfer → durable status
+
+wallet_preview_private_transfer(source, destination, amount)
+  → planner validates private spendability itself
   → exact chat preview of immutable plan
     ↳ new user confirmation is passed as a Hermes chat attestation
-  → wallet_execute_private_payment(decision_id, stable client ID)
+  → wallet_execute_private_transfer(decision_id, stable client ID)
   → Kohaku unshield --next + exact value tail call
-  → submitted
-  → transaction receipt or recipient balance delta verified
-  → confirmed
+  → submitted → one internal no-rebroadcast verification read
+  → verified durable status returned by the same task-level call
 
-wallet_plan_recovery_transfer(recipient, exact amount)
+wallet_preview_recovery_transfer(source, destination, exact amount)
   → separate confirmation → exact unshield + public tail call
   → durable status; unresolved results are never replaced
 ```
@@ -115,11 +125,12 @@ before signing, execution asserts Sepolia again, refreshes the spendable
 private balance, and rechecks the kill switch, delegation chain, expiry,
 per-payment limit, lifetime limit, and remaining payment count. It then writes an
 `executing` request and consumes the allowance before invoking Kohaku. The
-recipient's pre-execution balance is stored in that same durable request
-before the adapter call. This prevents a crash or error from making a possibly
-submitted payment look safely repeatable and makes later read-only
-reconciliation possible. UserOperation and transaction hashes are separate
-fields; only a true transaction hash is queried as a transaction receipt.
+actual UserOperation is journaled before network submission, including its
+exact hash, sender, request binding, and canonical EntryPoint. This prevents a
+crash or error from making a possibly submitted payment look safely repeatable
+and makes later read-only reconciliation possible. UserOperation and
+transaction hashes are separate fields; only an indexed receipt for the exact
+UserOperation sender establishes a private-operation outcome.
 
 Policy updates use the same plan/confirm/apply shape without touching the
 network. A policy preview binds current use and proposed limits. Apply fails
@@ -129,10 +140,16 @@ of the same successful decision returns the original receipt.
 Kohaku's Tornado path withdraws the configured `0.1` ETH note to the next fresh
 EIP-7702 payment subaccount. The recipient payment is an exact tail call;
 the paymaster fee and remaining change are separate from the recipient amount.
+After an exact successful receipt, Agent Boost ensures that fresh account is
+durably present in the same Kohaku wallet, records its live public balance
+beneath the source private pocket, and exposes it in the address-free tree as
+`public-change/`. A regular transfer may spend from one such account when the
+user names that pocket; fragmented accounts are reported instead of being
+silently combined or stranded.
 
 ## Live balance semantics
 
-`wallet_get_context` reports one balance: `balance_atomic`, the live
+`wallet_get_main_balance` reports one balance: `balance_atomic`, the live
 `eth_getBalance` value for its returned main account address. This is the same
 address/value pair a Sepolia explorer displays. Setup funding targets and
 subaccount or shielded balances are not added to the main account balance.
@@ -144,11 +161,14 @@ funds. The names do not define a custody hierarchy.
 
 The runtime makes this machine-readable as
 `account_role: main_funding_source` and `controls_subaccounts: false`. Before
-publishing `wallet_get_context`, the MCP boundary rejects missing or malformed
+publishing `wallet_get_main_balance`, the MCP boundary rejects missing or malformed
 address/balance pairs and any second balance-shaped field at any nesting depth.
 
 Payment planning refreshes its private spendability internally, so Hermes
 cannot authorize a payment from the displayed address balance alone.
+Likewise, a public-change tree total is informational: regular-transfer
+planning selects and rechecks one concrete wallet-controlled account with
+enough value for the amount plus gas, while keeping its address out of chat.
 
 ## Filesystem and subprocess behavior
 
@@ -178,9 +198,12 @@ none of their side effects are replayed.
 
 Selecting a retained profile follows the same drain-and-archive boundary, then
 restores that profile's onboarding state, increments its selection epoch, and
-deletes prior signing authority. A separately confirmed reauthorization is
-required before another regular or private transfer can be planned. Archived
-profiles retain encrypted data and become available again when selected.
+deletes prior signing authority. When the restored profile is private-ready,
+the canonical apply call also returns an immutable reauthorization preview
+bound to that new epoch; it does not grant authority. A later, separate
+confirmation is required before another regular or private transfer can be
+planned. Archived profiles retain encrypted data and become available again
+when selected.
 
 The Kohaku installation is built from a fixed commit in a staging directory,
 verified, hashed, and atomically renamed into place. An unmanaged target is

@@ -2,9 +2,26 @@
 
 ## Unreleased
 
-- Bumped the wallet capability contract to `org.agentboost.wallet/1.7` for the
-  chat-only confirmation contract, friendly wallet references, regular public
-  transfer route, and durable cancellation/replay protections.
+- Moved Hermes pre-LLM turn authentication from a shell hook into the native
+  output-guard plugin so full parent-session provenance isolates shared-session
+  review/task forks. The installer now pins the plugin to the exact resolved
+  Agent Boost executable, retains only pre/post tool shell hooks, and migrates
+  the retired managed pre-LLM hook and approval without touching operator hooks.
+
+- Bumped the wallet capability contract to `org.agentboost.wallet/1.8` for
+  persistent named private balances, multiple saved wallets, wallet-controlled
+  public-change accounts, and regular public transfers from either main or one
+  exact private balance's public change.
+
+- Added the full persistent wallet graph: create and reload multiple parent
+  wallets, create multiple physically isolated named private balances beneath
+  each one, fund a pocket from main or a sibling pocket, edit parent and pocket
+  policies independently, and render the hierarchy as an address-free tree.
+- Journaled each private UserOperation before broadcast and made its exact
+  sender-bound receipt authoritative for restart reconciliation. Public change
+  from a confirmed private operation is retained beneath its source pocket and
+  can later fund a normal public Sepolia transfer without touching shielded
+  value.
 
 - Made Hermes approvals conversational end to end: an explicit follow-up such
   as “confirm yes send” now executes the shown plan, while missing confirmation

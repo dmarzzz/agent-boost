@@ -90,12 +90,13 @@ ID. The default wallet policy permits:
 Agent Boost asks Kohaku to unshield the `0.1` ETH note to a fresh payment
 subaccount and append the exact recipient transfer as a tail call. The main
 account is a funding source only and has no control or recovery authority over
-subaccounts. Kohaku waits for UserOperation inclusion. Agent Boost stores a recipient
-balance checkpoint before handing execution authority to Kohaku and keeps a
-UserOperation hash distinct from an Ethereum transaction hash. It reports
-`confirmed` only from Kohaku's explicit confirmation, a successful transaction
-receipt, or a sufficient recipient-balance delta. Submitted and interrupted
-requests are reconciled on restart and status reads without broadcasting again.
+subaccounts. Kohaku waits for UserOperation inclusion. Agent Boost journals the
+exact sender-bound UserOperation before Kohaku may broadcast and keeps its
+UserOperation hash distinct from an Ethereum transaction hash. Once that
+journal exists, only its successful exact UserOperation or transaction receipt
+can produce `confirmed`; a recipient balance change is never treated as
+delivery evidence. Submitted and interrupted requests are reconciled on restart
+and status reads without broadcasting again.
 If concrete evidence is unavailable, the durable result remains `submitted` or
 `indeterminate` rather than guessing.
 
@@ -115,15 +116,23 @@ Ask Hermes naturally:
 
 > Load my old wallet.
 
-Hermes calls `wallet_manage_profiles`. If exactly one inactive profile exists,
-“old” is unambiguous; otherwise Hermes asks using friendly names only. After wallet-
-switch approval in chat, `wallet_select` archives the current workflow, restores the
+Hermes calls `wallet_preview_saved_profile_load` with your natural wording. The
+tool resolves the sole eligible inactive profile itself; when several profiles
+fit, it returns the friendly-name choices and Hermes asks which one. A reply
+containing just one listed name opens that wallet's exact switch preview. After
+Hermes shows the wallet-load preview and you approve it in chat,
+`wallet_apply_saved_profile_load` archives the current workflow, restores the
 selected profile's durable setup and request state, advances its selection
-epoch, and disables signing. Hermes then shows the exact fresh authority and
-asks for a second, separate reauthorization approval. Only after
-`wallet_reauthorize` succeeds can a new regular or private transfer be planned.
+epoch, and disables stale signing. The approval
+carries the active friendly name and selection epoch from the preview, so a
+concurrent wallet change makes it fail closed instead of switching from stale
+context. For a private-ready profile that needs authority, that same apply
+result contains the exact fresh-authority preview. Hermes shows it immediately
+and asks for a second, separate reauthorization approval; it does not make an
+extra planning call. Only after `wallet_apply_reauthorization` succeeds can a
+new regular or private transfer be planned.
 
-`wallet_manage_profiles` also discovers unregistered local Kohaku wallets. A
+`wallet_list_saved_profiles` also discovers unregistered local Kohaku wallets. A
 Sepolia entry can be adopted by friendly name without entering a seed, password, private key,
 or filesystem path. Named wallet creation and inactive-profile archival follow
 the same confirmation discipline. Archival retains encrypted state and is
@@ -203,4 +212,6 @@ npm run eval:live -- --hermes "$(command -v hermes)" --provider <provider> --mod
 
 This opt-in eval grades visible response length/content and the exact tool trace.
 It cannot touch a wallet, Tor, Sepolia, or the user's normal Hermes sessions,
-memory, rules, or MCP configuration.
+memory, rules, or MCP configuration. Its disposable Hermes profile defaults
+tool search to `off`, so the weakest-model gate exercises the full eager Agent
+Boost tool contract rather than depending on progressive schema discovery.

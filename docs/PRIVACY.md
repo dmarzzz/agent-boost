@@ -23,9 +23,9 @@ It is not a guarantee of anonymity.
 - Demo reset archives prior state and retains old Kohaku wallet data locally.
   Saved profiles can be selected again and exact private amounts can be
   recovered after separate confirmation, but Agent Boost never exports a seed.
-- Recipient-balance-delta confirmation proves delivery of at least the amount;
-  it is not cryptographic attribution when unrelated concurrent transfers are
-  possible.
+- Recipient balance movement is not treated as delivery evidence. A journaled
+  broadcast is confirmed only by its exact successful transaction or
+  UserOperation receipt, including the expected sender binding.
 
 Shade Tree cover is a research-preview, explicitly invoked module. It does not
 change the wallet RPC route and it is never presented as whole-agent privacy.
