@@ -4782,6 +4782,14 @@ function isCheckAgainRequest(message: unknown): message is string {
     /^(?:can|could|would|will)\s+you\s+(?:please\s+)?check again(?:\s+please)?[.!?]*$/u
       .test(normalized) ||
     /^(?:i(?:['’]ve|\s+have)?\s+(?:sent|submitted|started)\s+it[,;.!?]\s*)check again(?:\s+please)?[.!?]*$/u
+      .test(normalized) ||
+    // Older wallet receipts asked users to "continue setup" even though that
+    // phrase was not independently routable. Treat the narrow, standalone
+    // wording as the same read-only status follow-up, never as authority to
+    // start or repeat onboarding.
+    /^(?:please\s+)?(?:continue|resume|check)\s+(?:(?:with\s+)?the\s+|with\s+)?setup(?:\s+please)?[.!?]*$/u
+      .test(normalized) ||
+    /^(?:can|could|would|will)\s+(?:we|you)\s+(?:please\s+)?(?:continue|resume|check)\s+(?:(?:with\s+)?the\s+|with\s+)?setup(?:\s+please)?[.!?]*$/u
       .test(normalized);
 }
 

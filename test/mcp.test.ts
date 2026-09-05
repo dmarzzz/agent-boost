@@ -4689,11 +4689,14 @@ test("wallet creation ends with a phase-correct setup or authorization handoff",
       expectedOutput: [
         "**✓ Wallet created**",
         "**travel-wallet** is selected; your earlier wallets remain saved.",
-        "**Next:** Reply **continue setup** for its Sepolia funding amount and QR. Authorize only after its private balance is ready.",
+        "**1/3 · Fund your test wallet**",
+        "Send **0.15 Sepolia ETH**. Testnet only; it has no monetary value.",
+        "A funding QR is attached to this message.",
+        "**Next:** Reply **✅** or say **sent** after submitting the transfer.",
       ].join("\n"),
-      expectedAction: /continue setup/iu,
-      forbiddenAction: /authorize it/iu,
-      expectedInstruction: /reply "continue setup" for the exact Sepolia funding amount and QR/iu,
+      expectedAction: /send 0\.15 Sepolia ETH.*attached QR/iu,
+      forbiddenAction: /continue setup|authorize it/iu,
+      expectedInstruction: /Funding needed now: 0\.15 Sepolia ETH/iu,
       safetyInstruction: /plan reauthorization until setup reports private_ready/iu,
     },
     {
@@ -4714,6 +4717,7 @@ test("wallet creation ends with a phase-correct setup or authorization handoff",
   for (const fixture of fixtures) {
     await t.test(fixture.name, async () => {
       const runtime = fakeRuntime();
+      const started = await runtime.startOnboarding();
       runtime.createWallet = async (input) => ({
         wallet: {
           wallet_id: "wallet_created_12345678",
@@ -4727,6 +4731,22 @@ test("wallet creation ends with a phase-correct setup or authorization handoff",
           revision: 4,
           phase: fixture.setupPhase,
         },
+        ...(fixture.setupPhase === "awaiting_funding"
+          ? {
+              onboarding: {
+                snapshot: {
+                  ...started.snapshot,
+                  setupId: "setup_wallet_created_12345678",
+                  revision: 4,
+                  phase: fixture.setupPhase,
+                },
+                uiOpened: started.uiOpened,
+                ...(started.qrPngBase64
+                  ? { qrPngBase64: started.qrPngBase64 }
+                  : {}),
+              },
+            }
+          : {}),
         authorization_required: true,
       });
       let reauthorizationPlanCalls = 0;
@@ -4756,18 +4776,39 @@ test("wallet creation ends with a phase-correct setup or authorization handoff",
           presentation: { next_action: string };
           data: {
             setup?: { setupId: string; revision: number; phase: string };
+            public?: { setupId: string; revision: number; phase: string };
+            funding?: {
+              address?: string;
+              remaining_amount_wei: string;
+              remaining_amount_eth: string;
+              qr_attached: boolean;
+            };
+            ui_opened?: boolean;
+            onboarding?: unknown;
           };
         };
         assert.equal(structured.code, "WALLET_CREATED");
         if (fixture.setupPhase === "awaiting_funding") {
-          assert.deepEqual(structured.data.setup, {
-            setupId: "setup_wallet_created_12345678",
-            revision: 4,
-            phase: "awaiting_funding",
-          });
+          assert.equal(structured.data.setup?.setupId, "setup_wallet_created_12345678");
+          assert.equal(structured.data.setup?.revision, 4);
+          assert.equal(structured.data.setup?.phase, "awaiting_funding");
+          assert.deepEqual(structured.data.public, structured.data.setup);
+          assert.equal(structured.data.funding?.address, WALLET_ADDRESS);
+          assert.equal(
+            structured.data.funding?.remaining_amount_wei,
+            "150000000000000000",
+          );
+          assert.equal(structured.data.funding?.remaining_amount_eth, "0.15");
+          assert.equal(structured.data.funding?.qr_attached, true);
+          assert.equal(structured.data.ui_opened, true);
+          assert.equal(
+            response.content.some((block) => block.type === "image"),
+            true,
+          );
         } else {
           assert.equal(structured.data.setup, undefined);
         }
+        assert.equal(structured.data.onboarding, undefined);
         assert.match(structured.presentation.next_action, fixture.expectedAction);
         assert.doesNotMatch(structured.presentation.next_action, fixture.forbiddenAction);
         assert.equal(authoritativeOutput(response), fixture.expectedOutput);

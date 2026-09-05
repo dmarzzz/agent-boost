@@ -434,6 +434,18 @@ test("create, adopt, and reset validate active-wallet previews atomically", asyn
       wallet: { name: string };
       setup_phase: string;
       setup: { setupId: string; revision: number; phase: string };
+      onboarding: {
+        snapshot: {
+          setupId: string;
+          revision: number;
+          phase: string;
+          address?: string;
+          publicBalanceWei: string;
+          requiredFundingWei: string;
+        };
+        uiOpened: boolean;
+        qrPngBase64?: string;
+      };
     };
     assert.equal(created.wallet.name, "created-wallet");
     assert.deepEqual(created.setup, {
@@ -443,6 +455,17 @@ test("create, adopt, and reset validate active-wallet previews atomically", asyn
     });
     assert.match(created.setup.setupId, /^setup_/u);
     assert.ok(Number.isSafeInteger(created.setup.revision));
+    assert.equal(created.onboarding.snapshot.setupId, created.setup.setupId);
+    assert.equal(created.onboarding.snapshot.phase, created.setup_phase);
+    assert.equal(
+      created.onboarding.snapshot.address,
+      "0x2222222222222222222222222222222222222222",
+    );
+    assert.equal(created.onboarding.snapshot.publicBalanceWei, "0");
+    assert.equal(created.onboarding.snapshot.requiredFundingWei, "200000000000000000");
+    assert.equal(typeof created.onboarding.uiOpened, "boolean");
+    assert.ok(created.onboarding.qrPngBase64);
+    assert.ok(Buffer.from(created.onboarding.qrPngBase64, "base64").length > 100);
 
     const adopted = await runtime.adoptWallet({
       name: "imported-wallet",

@@ -992,6 +992,16 @@ function renderedContractRuntime(state: RenderedContractState): AgentBoostRuntim
       return {
         wallet: { name: input.name, active: true },
         setup_phase: "awaiting_funding",
+        setup: {
+          setupId: awaiting.setupId,
+          revision: awaiting.revision,
+          phase: awaiting.phase,
+        },
+        onboarding: {
+          snapshot: awaiting,
+          uiOpened: false,
+          qrPngBase64: "c2lnbmVkLXJlbnRlcmVkLWNvbnRyYWN0",
+        },
         authorization_required: true,
       };
     },
@@ -3540,9 +3550,12 @@ test("real signed MCP setup and lifecycle results render as compact final chat c
       [
         "**✓ Wallet created**",
         "**travel-wallet** is selected; your earlier wallets remain saved.",
-        "**Next:** Reply **continue setup** for its Sepolia funding amount and QR. Authorize only after its private balance is ready.",
+        "**1/3 · Fund your test wallet**",
+        "Send **0.2 Sepolia ETH**. Testnet only; it has no monetary value.",
+        "A funding QR is attached to this message.",
+        "**Next:** Reply **✅** or say **sent** after submitting the transfer.",
       ].join("\n"),
-      3,
+      6,
     );
 
     const demoPreview = await call("wallet_start_new_demo");

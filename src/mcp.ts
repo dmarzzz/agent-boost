@@ -305,6 +305,52 @@ const unresolvedLifecycleSetupSchema = z.object({
   ]),
 }).strict();
 
+const walletLifecycleOnboardingSchema = z.object({
+  snapshot: z.object({
+    setupId: z.string().min(8).max(512),
+    revision: z.number().int().safe().nonnegative(),
+    phase: z.enum([
+      "not_started",
+      "creating_wallet",
+      "preparing_privacy",
+      "awaiting_funding",
+      "funding_pending",
+      "funded_public",
+      "shielding",
+      "private_ready",
+      "failed",
+    ]),
+    address: z.string().regex(/^0x[0-9a-fA-F]{40}$/u).optional(),
+    publicBalanceWei: z.string().regex(/^[0-9]+$/u),
+    privateBalanceWei: z.string().regex(/^[0-9]+$/u),
+    requiredFundingWei: z.string().regex(/^[0-9]+$/u),
+    shieldAmountWei: z.string().regex(/^[0-9]+$/u),
+    delegation: z.object({
+      mode: z.literal("testnet_delegated"),
+      chainId: z.literal(11_155_111),
+      perPaymentLimitWei: z.string().regex(/^[0-9]+$/u),
+      lifetimeLimitWei: z.string().regex(/^[0-9]+$/u),
+      spentWei: z.string().regex(/^[0-9]+$/u),
+      maxPayments: z.number().int().safe().nonnegative(),
+      expiresAt: z.string(),
+      enabled: z.boolean(),
+    }),
+    rpcRoute: z.object({
+      mode: z.literal("tor"),
+      scope: z.literal("ethereum_json_rpc"),
+      status: z.enum(["starting", "ready", "failed", "closed"]),
+      directFallback: z.literal(false),
+    }).optional(),
+    error: z.object({
+      code: z.string(),
+      message: z.string(),
+      retryable: z.boolean(),
+    }).optional(),
+  }),
+  uiOpened: z.boolean(),
+  qrPngBase64: z.string().min(1).max(16_000_000).optional(),
+});
+
 const privateBalanceCreatePreviewSchema = z.object({
   private_balance_name: privateBalanceReferenceSchema.describe(
     "Friendly name for the new isolated private balance, unique inside its parent wallet.",
@@ -395,6 +441,14 @@ const privateBalancePolicyUpdateSchema = z.object({
   }
 });
 
+type WalletLifecycleRuntimeResult = Record<string, unknown> & {
+  onboarding?: {
+    snapshot: PublicOnboardingSnapshot;
+    uiOpened: boolean;
+    qrPngBase64?: string;
+  };
+};
+
 export interface AgentBoostRuntime {
   capabilities(): Promise<Record<string, unknown>>;
   startOnboarding(): Promise<{
@@ -480,7 +534,7 @@ export interface AgentBoostRuntime {
     userConfirmed: boolean;
     expectedActiveWalletName?: string;
     expectedActiveSelectionEpoch?: number;
-  }): Promise<Record<string, unknown>>;
+  }): Promise<WalletLifecycleRuntimeResult>;
   adoptWallet(input: {
     name: string;
     userConfirmed: boolean;
@@ -622,11 +676,27 @@ function manifestDigest(capabilities: Record<string, unknown>): string {
 function walletLifecycleEnvelopeData(
   data: Record<string, unknown>,
 ): Record<string, unknown> {
-  const { setup: _untrustedSetup, ...withoutSetup } = data;
+  // `onboarding` is service-to-adapter presentation material. Project it
+  // through the public allowlists below; never serialize it wholesale because
+  // future service fields must not become MCP fields by accident.
+  const {
+    setup: _untrustedSetup,
+    onboarding: _internalOnboarding,
+    ...withoutSetup
+  } = data;
   if (data.setup_continuation_status === "unavailable") return withoutSetup;
   const parsed = unresolvedLifecycleSetupSchema.safeParse(data.setup);
   if (!parsed.success || parsed.data.phase !== data.setup_phase) return withoutSetup;
   return { ...withoutSetup, setup: parsed.data };
+}
+
+function walletLifecycleOnboarding(
+  data: Record<string, unknown>,
+): NonNullable<WalletLifecycleRuntimeResult["onboarding"]> | undefined {
+  const parsed = walletLifecycleOnboardingSchema.safeParse(data.onboarding);
+  return parsed.success
+    ? parsed.data as unknown as NonNullable<WalletLifecycleRuntimeResult["onboarding"]>
+    : undefined;
 }
 
 function envelope(
@@ -1077,7 +1147,12 @@ function buildPresentation(
     const setupContinuationUnavailable =
       !archived && data.setup_continuation_status === "unavailable";
     const authorizationRequired = data.authorization_required !== false;
-    const privateBalanceReady = stringField(data, "setup_phase") === "private_ready";
+    const setupPhase = stringField(data, "setup_phase");
+    const privateBalanceReady = setupPhase === "private_ready";
+    const funding = asRecord(data.funding);
+    const fundingAmount = stringField(funding, "remaining_amount_eth");
+    const fundingAddress = stringField(funding, "address");
+    const fundingQrAttached = funding.qr_attached === true;
     return {
       version: "1.0",
       kind: "receipt",
@@ -1089,11 +1164,27 @@ function buildPresentation(
             ? "Wallet adopted"
             : "Wallet selected",
       state: setupContinuationUnavailable ? "attention" : "complete",
-      fields: [{
-        label: "Wallet",
-        value: stringField(wallet, "name") ?? "Selected profile",
-        format: "text",
-      }],
+      fields: [
+        {
+          label: "Wallet",
+          value: stringField(wallet, "name") ?? "Selected profile",
+          format: "text",
+        },
+        ...(code === "WALLET_CREATED" && fundingAmount && fundingAddress
+          ? [
+              {
+                label: "Funding needed",
+                value: `${fundingAmount} Sepolia ETH`,
+                format: "amount" as const,
+              },
+              {
+                label: "Funding address",
+                value: fundingAddress,
+                format: "address" as const,
+              },
+            ]
+          : []),
+      ],
       notice: {
         tone: setupContinuationUnavailable ? "warning" : "info",
         text: archived
@@ -1111,7 +1202,13 @@ function buildPresentation(
         : authorizationRequired
           ? privateBalanceReady
             ? "Ask the user to reply \"authorize it\" before previewing bounded Sepolia transfer permission."
-            : "Ask the user to reply \"continue setup\" for the funding amount and QR; authorize only after the private balance is ready."
+            : code === "WALLET_CREATED" && fundingAmount && fundingAddress
+              ? `Send ${fundingAmount} Sepolia ETH to the funding address${
+                fundingQrAttached ? " or scan the attached QR" : ""
+              }, then reply sent. Authorize only after the private balance is ready.`
+              : setupPhase === "funded_public" || setupPhase === "shielding"
+                ? "Privacy preparation is running; ask the user to reply \"check again\" shortly."
+                : "Ask the user to reply \"continue setup\" for the funding amount and QR; authorize only after the private balance is ready."
           : "No reauthorization is required.",
     };
   }
@@ -2102,8 +2199,41 @@ function authoritativeUserFacingOutput(
       ].join("\n");
     }
     if (code === "WALLET_CREATED") {
-      const privateBalanceReady = stringField(data, "setup_phase") === "private_ready";
+      const setupPhase = stringField(data, "setup_phase");
+      const privateBalanceReady = setupPhase === "private_ready";
       const authorizationRequired = data.authorization_required !== false;
+      const funding = asRecord(data.funding);
+      const remaining = stringField(funding, "remaining_amount_eth");
+      const fundingAddress = stringField(funding, "address");
+      if (
+        authorizationRequired &&
+        (setupPhase === "awaiting_funding" || setupPhase === "funding_pending") &&
+        remaining && fundingAddress
+      ) {
+        return [
+          "**✓ Wallet created**",
+          `**${name}** is selected; your earlier wallets remain saved.`,
+          "**1/3 · Fund your test wallet**",
+          `Send **${remaining} Sepolia ETH**. Testnet only; it has no monetary value.`,
+          funding.qr_attached === true
+            ? "A funding QR is attached to this message."
+            : `Send it to **${fundingAddress}**.`,
+          "**Next:** Reply **✅** or say **sent** after submitting the transfer.",
+        ].join("\n");
+      }
+      if (
+        authorizationRequired &&
+        (setupPhase === "funded_public" || setupPhase === "shielding")
+      ) {
+        return [
+          "**✓ Wallet created**",
+          `**${name}** is selected; your earlier wallets remain saved.`,
+          "**2/3 · Preparing private balance**",
+          "✓ Funding found",
+          "◌ Privacy preparation is still running",
+          "**Next:** Reply **check again** in a minute.",
+        ].join("\n");
+      }
       return [
         "**✓ Wallet created**",
         `**${name}** is selected; your earlier wallets remain saved.`,
@@ -2111,7 +2241,7 @@ function authoritativeUserFacingOutput(
           ? "**Ready:** Its existing bounded Sepolia transfer permission remains active."
           : privateBalanceReady
           ? "**Next:** Reply **authorize it** to preview bounded Sepolia transfer permission."
-          : "**Next:** Reply **continue setup** for its Sepolia funding amount and QR. Authorize only after its private balance is ready.",
+          : "Setup is still starting. **Next:** Reply **check again** shortly. Authorize only after its private balance is ready.",
       ].join("\n");
     }
     if (code === "WALLET_ADOPTED") {
@@ -3129,7 +3259,24 @@ function compactToolText(structured: Record<string, unknown>): string {
       ? `${name} was already selected and its bounded authorization remains active. Do not reauthorize it unless the user asks to change the permission.`
       : setupPhase === "private_ready"
         ? `${name} is now selected and its private balance is ready, but delegated signing remains disabled. END THIS TURN and tell the user to reply \"authorize it\" in a new chat message. Do not create a wallet reauthorization preview in this assistant turn.`
-        : `${name} is now selected and delegated signing remains disabled. END THIS TURN and tell the user to reply \"continue setup\" for the exact Sepolia funding amount and QR. Do not plan reauthorization until setup reports private_ready, and do not claim it can transfer yet.`;
+        : code === "WALLET_CREATED"
+          ? (() => {
+              const funding = asRecord(data.funding);
+              const remaining = stringField(funding, "remaining_amount_eth");
+              const address = stringField(funding, "address");
+              if (remaining && address) {
+                return `${name} is now selected and its wallet was created, but delegated signing remains disabled. Funding needed now: ${remaining} Sepolia ETH to ${address}. ${
+                  funding.qr_attached === true
+                    ? "The funding QR is attached."
+                    : "No QR is attached; use the exact address above."
+                } END THIS TURN and tell the user to reply ✅ or say sent after submitting the transfer. Do not call onboarding_start, ask them to continue setup, plan reauthorization until setup reports private_ready, or claim the wallet can transfer yet.`;
+              }
+              if (setupPhase === "funded_public" || setupPhase === "shielding") {
+                return `${name} is now selected and its wallet was created; delegated signing remains disabled while privacy preparation is running. Funding was found. END THIS TURN and tell the user to reply \"check again\" shortly. Do not plan reauthorization until setup reports private_ready, and do not claim it can transfer yet.`;
+              }
+              return `${name} is now selected and its wallet was created; setup is still starting and delegated signing remains disabled. END THIS TURN and tell the user to reply \"check again\" shortly. Do not call onboarding_start, plan reauthorization until setup reports private_ready, or claim it can transfer yet.`;
+            })()
+          : `${name} is now selected and delegated signing remains disabled. END THIS TURN and tell the user to reply \"continue setup\" for the exact Sepolia funding amount and QR. Do not plan reauthorization until setup reports private_ready, and do not claim it can transfer yet.`;
   }
 
   if (code === "WALLET_ARCHIVED") {
@@ -5301,12 +5448,26 @@ async function registerMcpServer(
           userConfirmed: true,
           ...approvalBinding,
         });
+        const onboarding = walletLifecycleOnboarding(created);
+        const lifecycleData = walletLifecycleEnvelopeData(created);
+        const createdData = onboarding
+          ? {
+              ...lifecycleData,
+              setup: publicOnboardingState(onboarding.snapshot),
+              public: publicOnboardingState(onboarding.snapshot),
+              funding: fundingDetails(
+                onboarding.snapshot,
+                Boolean(onboarding.qrPngBase64),
+              ),
+              ui_opened: onboarding.uiOpened,
+            }
+          : lifecycleData;
         return result(envelope(
           digest,
           "ready",
           "WALLET_CREATED",
-          walletLifecycleEnvelopeData(created),
-        ));
+          createdData,
+        ), onboarding?.qrPngBase64);
       } catch (error) {
         return domainError(digest, error);
       }

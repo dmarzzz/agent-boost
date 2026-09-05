@@ -3543,6 +3543,70 @@ test("Check again pins the exact durable getter and identity for every unresolve
   }
 });
 
+test("Continue setup compatibly routes a created wallet to its exact read-only status", async (t) => {
+  const stateDirectory = await temporaryState(t);
+  const options = { stateDirectory, now: () => NOW };
+  const session = "continue-created-wallet-setup";
+  const setup = {
+    setupId: "setup_continue_12345678",
+    revision: 4,
+    phase: "awaiting_funding",
+  };
+  const createInput = {
+    name: "travel-wallet",
+    expected_active_wallet_name: "agent-boost",
+    expected_active_selection_epoch: 1,
+  };
+  assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+    session,
+    turn: "turn-1",
+    tool: "wallet_create",
+    input: createInput,
+  }), options), {});
+  await handleHermesTurnGatePayload(postTool({
+    session,
+    turn: "turn-1",
+    tool: "wallet_create",
+    input: createInput,
+    result: trustedStatusResult("WALLET_CREATED", { setup }),
+  }), options);
+
+  const routed = await handleHermesTurnGatePayload(preLlm({
+    session,
+    turn: "turn-2",
+    userMessage: "Can we continue setup?",
+  }), options);
+  assert.ok("context" in routed);
+  if ("context" in routed) {
+    assert.match(routed.context, /call onboarding_status directly/u);
+    assert.equal(routed.context.includes(JSON.stringify({
+      setup_id: setup.setupId,
+      since_revision: setup.revision,
+      wait_ms: 30_000,
+    })), true);
+    assert.match(routed.context, /Do not answer from chat history/u);
+  }
+
+  assert.equal(isBlocked(await handleHermesTurnGatePayload(preTool({
+    session,
+    turn: "turn-2",
+    tool: "onboarding_start",
+  }), options)), true);
+  assert.deepEqual(await handleHermesTurnGatePayload(preTool({
+    session,
+    turn: "turn-2",
+    tool: "onboarding_status",
+    input: { setup_id: "setup_wrong_12345678" },
+  }), options), {
+    action: "modify",
+    args: {
+      setup_id: setup.setupId,
+      since_revision: setup.revision,
+      wait_ms: 30_000,
+    },
+  });
+});
+
 test("wrapped Check again wording preserves the trusted handle through direct and Tool Search", async (t) => {
   const stateDirectory = await temporaryState(t);
   const options = { stateDirectory, now: () => NOW };
@@ -3653,6 +3717,8 @@ test("Check again without a trusted exact identity clarifies and never starts on
     "Can you check again?",
     "Check again please",
     "I sent it. Check again.",
+    "Continue setup.",
+    "Can we continue setup?",
   ].entries()) {
     const emptySession = `fresh-status-truly-empty-${index}`;
     const emptyResponse = await handleHermesTurnGatePayload(preLlm({

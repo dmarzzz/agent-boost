@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  pbkdf2Sync,
+  randomBytes,
+} from "node:crypto";
 import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,6 +53,10 @@ const TOR_GUARD_STATE_CORRUPTION_LINE =
 const TOR_CACHE_RECOVERY_HINT = "Try: kohaku clear-tor-cache";
 const TOR_GUARD_STATE_CORRUPTION_OUTPUT =
   `${TOR_GUARD_STATE_CORRUPTION_LINE}\n${TOR_CACHE_RECOVERY_HINT}\n`;
+const TORNADO_STALE_ROOT_OUTPUT =
+  "│\n■  ✖ State root verification failed: root not found in Pool recent history\n";
+const TORNADO_REPAIR_STORE_KEY =
+  "tornado-cash-state-11155111-123456789012345678901234567890";
 const OBSERVED_LIVE_TORNADO_DEPOSIT_FEE_WEI = 1_230_473_586_707_504n;
 const COMMITMENT = `0x${"12".repeat(32)}`;
 const DEPOSIT_DATA: `0x${string}` = `0xb214faa5${COMMITMENT.slice(2)}`;
@@ -939,6 +949,86 @@ async function fixture(runner: CommandRunner): Promise<{
   };
 }
 
+function encryptedRepairStore(password: string): Buffer {
+  const tornadoState = {
+    pools: {
+      poolsTuples: [[TORNADO_POOL, {
+        address: TORNADO_POOL,
+        registeredBlock: "0x555d20",
+        lastSyncedBlock: "0xb19710",
+      }]],
+    },
+    deposits: {
+      depositsTuples: [[TORNADO_POOL, [[
+        "old-commitment",
+        { commitment: "old-commitment", leafIndex: "0x1" },
+      ]]]],
+    },
+    withdrawals: { withdrawalsTuples: [] },
+    legacySecrets: { byPool: [] },
+    sync: { lastSyncedBlock: "0xb19710" },
+  };
+  const store = {
+    [TORNADO_REPAIR_STORE_KEY]: JSON.stringify(tornadoState),
+  };
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = pbkdf2Sync(password, salt, 310_000, 32, "sha256");
+  try {
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    const ciphertext = Buffer.concat([
+      cipher.update(JSON.stringify(store), "utf8"),
+      cipher.final(),
+    ]);
+    return Buffer.from(JSON.stringify({
+      v: 1,
+      salt: salt.toString("base64"),
+      iv: iv.toString("base64"),
+      tag: cipher.getAuthTag().toString("base64"),
+      ciphertext: ciphertext.toString("base64"),
+    }));
+  } finally {
+    key.fill(0);
+  }
+}
+
+function repairStorePoolCheckpoint(
+  ciphertext: Buffer,
+  password: string,
+): string | undefined {
+  const envelope = JSON.parse(ciphertext.toString("utf8")) as {
+    salt: string;
+    iv: string;
+    tag: string;
+    ciphertext: string;
+  };
+  const key = pbkdf2Sync(
+    password,
+    Buffer.from(envelope.salt, "base64"),
+    310_000,
+    32,
+    "sha256",
+  );
+  try {
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      key,
+      Buffer.from(envelope.iv, "base64"),
+    );
+    decipher.setAuthTag(Buffer.from(envelope.tag, "base64"));
+    const store = JSON.parse(Buffer.concat([
+      decipher.update(Buffer.from(envelope.ciphertext, "base64")),
+      decipher.final(),
+    ]).toString("utf8")) as Record<string, string>;
+    const state = JSON.parse(store[TORNADO_REPAIR_STORE_KEY]!) as {
+      pools: { poolsTuples: Array<[string, { lastSyncedBlock?: string }]> };
+    };
+    return state.pools.poolsTuples[0]?.[1].lastSyncedBlock;
+  } finally {
+    key.fill(0);
+  }
+}
+
 function command(invocation: CommandInvocation): string {
   return invocation.args[0] ?? "";
 }
@@ -1404,6 +1494,185 @@ describe("KohakuWalletAdapter", () => {
       ),
       false,
     );
+  });
+
+  it("repairs the exact pinned Tornado stale-root failure in a shadow before one private broadcast", async () => {
+    const preparedPayment = privatePaymentPreparation();
+    let liveDataDir = "";
+    let candidateRuns = 0;
+    let broadcastRuns = 0;
+    let beforeBroadcastCalls = 0;
+    const runner = new FakeRunner(async (invocation) => {
+      assert.equal(command(invocation), "unshield");
+      const dataDirIndex = invocation.args.indexOf("--dataDir");
+      assert.ok(dataDirIndex >= 0);
+      const invocationDataDir = invocation.args[dataDirIndex + 1]!;
+      if (invocation.args.includes("--broadcast")) {
+        broadcastRuns += 1;
+        assert.equal(invocationDataDir, liveDataDir);
+        const userOperationHash = await writeBroadcastJournal(
+          invocation,
+          preparedPayment,
+        );
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({ userOperationHash }),
+          stderr: "",
+        };
+      }
+      if (invocationDataDir === liveDataDir) {
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr: TORNADO_STALE_ROOT_OUTPUT,
+        };
+      }
+      candidateRuns += 1;
+      assert.match(
+        invocationDataDir,
+        /\/\.agent-boost-tornado-repair-[^/]+$/u,
+      );
+      assert.equal(invocation.args.includes("--broadcast"), false);
+      assert.equal(
+        repairStorePoolCheckpoint(
+          await readFile(join(invocationDataDir, "agent-boost", "tc-storage.json")),
+          "this-is-the-secret-not-the-path",
+        ),
+        "0x555d20",
+      );
+      return { exitCode: 0, stdout: preparedPayment, stderr: "" };
+    });
+    const created = await fixture(runner);
+    liveDataDir = created.dataDir;
+    const walletDir = join(liveDataDir, "agent-boost");
+    await mkdir(walletDir, { recursive: true, mode: 0o700 });
+    const original = encryptedRepairStore(created.secret);
+    await writeFile(join(walletDir, "tc-storage.json"), original, { mode: 0o600 });
+
+    const result = await created.adapter.executePrivatePayment({
+      recipient: RECIPIENT,
+      amountWei: 20_000_000_000_000_000n,
+      broadcastRequestId: "req-stale-root-shadow-repair",
+      beforeBroadcast: async () => {
+        beforeBroadcastCalls += 1;
+      },
+    });
+
+    assert.match(result.userOperationHash ?? "", /^0x[0-9a-f]{64}$/u);
+    assert.equal(candidateRuns, 1);
+    assert.equal(broadcastRuns, 1);
+    assert.equal(beforeBroadcastCalls, 1);
+    assert.deepEqual(runner.calls.map(command), ["unshield", "unshield", "unshield"]);
+    assert.equal(runner.calls[0]?.args.includes("--broadcast"), false);
+    assert.equal(runner.calls[1]?.args.includes("--broadcast"), false);
+    assert.equal(runner.calls[2]?.args.includes("--broadcast"), true);
+    assert.notDeepEqual(await readFile(join(walletDir, "tc-storage.json")), original);
+    assert.equal(
+      repairStorePoolCheckpoint(
+        await readFile(join(walletDir, "tc-storage.json")),
+        created.secret,
+      ),
+      "0x555d20",
+    );
+  });
+
+  it("ignores near-match Tornado root failures before any state repair or broadcast", async () => {
+    for (const stderr of [
+      "■  ✖ State root verification failed: root not found in Pool recent history extra\n",
+      "✖ State root verification failed: root not found in Pool recent history\n",
+      "■  ✖ State root verification failed: root not found in Pool recent history (expected=01, currentOnChain=2)\n",
+      "■  ✖ State root verification failed: root not found in Pool recent history (expected=1, currentOnChain=0x2)\n",
+    ]) {
+      let beforeBroadcastCalls = 0;
+      const runner = new FakeRunner(() => ({
+        exitCode: 47,
+        stdout: "",
+        stderr,
+      }));
+      const { adapter } = await fixture(runner);
+      await assert.rejects(
+        adapter.executePrivatePayment({
+          recipient: RECIPIENT,
+          amountWei: 20_000_000_000_000_000n,
+          broadcastRequestId: "req-stale-root-near-match",
+          beforeBroadcast: async () => {
+            beforeBroadcastCalls += 1;
+          },
+        }),
+        /unshield failed with exit code 47/u,
+      );
+      assert.equal(beforeBroadcastCalls, 0);
+      assert.equal(runner.calls.length, 1);
+      assert.equal(runner.calls[0]?.args.includes("--broadcast"), false);
+    }
+  });
+
+  it("recognizes the pinned stale-root numeric detail without exposing it", async () => {
+    let beforeBroadcastCalls = 0;
+    const privateDetails = "123456789012345678901234567890";
+    const runner = new FakeRunner(() => ({
+      exitCode: 49,
+      stdout: "",
+      stderr:
+        `■  ✖ State root verification failed: root not found in Pool recent history (expected=${privateDetails}, currentOnChain=2)\n`,
+    }));
+    const { adapter } = await fixture(runner);
+
+    await assert.rejects(
+      adapter.executePrivatePayment({
+        recipient: RECIPIENT,
+        amountWei: 20_000_000_000_000_000n,
+        broadcastRequestId: "req-stale-root-detailed-match",
+        beforeBroadcast: async () => {
+          beforeBroadcastCalls += 1;
+        },
+      }),
+      (error: unknown) => {
+        assert.match(String(error), /Tornado state repair refused unsafe wallet state/u);
+        assert.doesNotMatch(String(error), new RegExp(privateDetails, "u"));
+        return true;
+      },
+    );
+    assert.equal(beforeBroadcastCalls, 0);
+    assert.equal(runner.calls.length, 1);
+  });
+
+  it("never repairs or retries an exact stale-root failure after private broadcast starts", async () => {
+    const preparedPayment = privatePaymentPreparation();
+    let beforeBroadcastCalls = 0;
+    const runner = new FakeRunner((invocation) =>
+      invocation.args.includes("--broadcast")
+        ? {
+            exitCode: 53,
+            stdout: "",
+            stderr: TORNADO_STALE_ROOT_OUTPUT,
+          }
+        : { exitCode: 0, stdout: preparedPayment, stderr: "" }
+    );
+    const { adapter } = await fixture(runner);
+
+    await assert.rejects(
+      adapter.executePrivatePayment({
+        recipient: RECIPIENT,
+        amountWei: 20_000_000_000_000_000n,
+        broadcastRequestId: "req-stale-root-broadcast-no-repair",
+        beforeBroadcast: async () => {
+          beforeBroadcastCalls += 1;
+        },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof WalletExecutionError);
+        // The command was invoked with --broadcast, but the semantic guard
+        // produced no durable journal, proving network handoff never began.
+        assert.equal(error.mayHaveBroadcast, false);
+        assert.doesNotMatch(String(error), /State root|recent history/u);
+        return true;
+      },
+    );
+    assert.equal(beforeBroadcastCalls, 1);
+    assert.equal(runner.calls.length, 2);
+    assert.equal(runner.calls[0]?.args.includes("--broadcast"), false);
+    assert.equal(runner.calls[1]?.args.includes("--broadcast"), true);
   });
 
   it("prewarms only Tornado artifacts and uses a persisted fresh address", async () => {

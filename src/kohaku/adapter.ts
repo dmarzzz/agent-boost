@@ -23,6 +23,7 @@ import {
   type CommandResult,
   type CommandRunner,
 } from "./runner.js";
+import { repairTornadoStateWithShadow } from "./tornado-state-repair.js";
 
 const ETH_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
@@ -59,6 +60,8 @@ const MAX_PRIVATE_PAYMASTER_FEE_RESERVE_WEI = 10_000_000_000_000_000n;
 const TOR_GUARD_STATE_CORRUPTION_LINE =
   "Bootstrap failed: tor: corrupted data in persistent state: Error setting up the guard manager";
 const TOR_CACHE_RECOVERY_HINT = "Try: kohaku clear-tor-cache";
+const TORNADO_STALE_ROOT_LINE_RE =
+  /^■  ✖ State root verification failed: root not found in Pool recent history(?: \(expected=(?:0|[1-9][0-9]*), currentOnChain=(?:0|[1-9][0-9]*)\))?$/u;
 const NETWORK_GUARD_PATH = fileURLToPath(
   new URL("./network-guard.mjs", import.meta.url),
 );
@@ -1262,6 +1265,37 @@ export class KohakuWalletAdapter implements WalletAdapter {
         result = await this.#runHardened(invocation, walletName);
       }
     }
+    if (
+      result.exitCode !== 0 &&
+      isRecoverableTornadoRootFailure(result) &&
+      isRepairableTornadoPreparation(args)
+    ) {
+      // Pinned Kohaku can persist a per-pool checkpoint after an incomplete
+      // public-log tail. Rebuild only in a quarantined copy, using the exact
+      // failed preparation. The helper promotes the encrypted candidate only
+      // after that same no-broadcast invocation succeeds and the live state
+      // still matches the ciphertext we inspected.
+      result = await repairTornadoStateWithShadow({
+        dataDir: this.#dataDir,
+        walletName,
+        passwordFile: this.#passwordFile,
+        runCandidate: async ({ dataDir }) => {
+          const candidateInvocation = {
+            ...invocation,
+            args: replaceInvocationDataDir(args, this.#dataDir, dataDir),
+          };
+          const candidate = await this.#runHardened(
+            candidateInvocation,
+            walletName,
+            dataDir,
+          );
+          if (candidate.exitCode !== 0) {
+            throw new Error("Kohaku Tornado repair candidate failed");
+          }
+          return candidate;
+        },
+      });
+    }
     if (result.exitCode !== 0) {
       throw new Error(
         `Kohaku command ${args[0] ?? "unknown"} failed with exit code ${result.exitCode.toString()}`,
@@ -1273,6 +1307,7 @@ export class KohakuWalletAdapter implements WalletAdapter {
   async #runHardened(
     invocation: CommandInvocation,
     walletName: string,
+    dataDir = this.#dataDir,
   ): Promise<CommandResult> {
     let result: CommandResult;
     try {
@@ -1280,12 +1315,12 @@ export class KohakuWalletAdapter implements WalletAdapter {
     } finally {
       try {
         await redactRelayTokenFromTrafficLog(
-          this.#dataDir,
+          dataDir,
           walletName,
           this.#rpcRelayToken,
         );
       } finally {
-        await hardenTree(this.#dataDir);
+        await hardenTree(dataDir);
       }
     }
     return result;
@@ -1365,6 +1400,50 @@ function isIdempotentKohakuInvocation(args: readonly string[]): boolean {
       // notes, or mutate local state. Unknown commands therefore stay single-shot.
       return false;
   }
+}
+
+function isRecoverableTornadoRootFailure(result: CommandResult): boolean {
+  return [result.stdout, result.stderr].some((output) =>
+    output.split(/\r?\n/u).some((line) =>
+      TORNADO_STALE_ROOT_LINE_RE.test(line.trim())
+    )
+  );
+}
+
+function isRepairableTornadoPreparation(args: readonly string[]): boolean {
+  return args.length === 15 &&
+    args[0] === "unshield" &&
+    args[1] === "--wallet" &&
+    typeof args[2] === "string" &&
+    WALLET_NAME_RE.test(args[2]) &&
+    args[3] === "--password" &&
+    typeof args[4] === "string" &&
+    args[5] === "--dataDir" &&
+    typeof args[6] === "string" &&
+    args[7] === "--non-interactive" &&
+    args[8] === "--protocol" &&
+    args[9] === "tornado" &&
+    args[10] === "--next" &&
+    args[11] === "--amount-wei" &&
+    typeof args[12] === "string" &&
+    DECIMAL_UINT_RE.test(args[12]) &&
+    BigInt(args[12]) > 0n &&
+    args[13] === "--tail-calls" &&
+    typeof args[14] === "string" &&
+    args[14].length > 0;
+}
+
+function replaceInvocationDataDir(
+  args: readonly string[],
+  expectedDataDir: string,
+  replacementDataDir: string,
+): readonly string[] {
+  if (!isRepairableTornadoPreparation(args) || args[6] !== expectedDataDir) {
+    throw new Error("Kohaku Tornado repair invocation changed unexpectedly");
+  }
+  const replaced = [...args];
+  replaced[6] = replacementDataDir;
+  return replaced;
 }
 
 async function ensureSecureDirectory(path: string, label: string): Promise<void> {

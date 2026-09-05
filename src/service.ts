@@ -113,6 +113,16 @@ interface WalletLifecycleSetupResult {
   setup_phase: OnboardingRecord["phase"] | "not_started";
   setup?: WalletLifecycleSetup;
   setup_continuation_status?: "unavailable";
+  /**
+   * Internal presentation material for the MCP adapter. This is deliberately
+   * limited to the public snapshot; the durable onboarding record also holds
+   * private broadcast checkpoints and must never leave the service layer.
+   */
+  onboarding?: {
+    snapshot: PublicOnboardingSnapshot;
+    uiOpened: boolean;
+    qrPngBase64?: string;
+  };
 }
 
 const UNRESOLVED_ONBOARDING_PHASES = new Set<OnboardingRecord["phase"]>([
@@ -287,6 +297,12 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       await this.#payments.recoverInterruptedRequests();
       await this.#recovery.recoverInterruptedRequests();
       await this.#privateBalances.recoverInterruptedRequests();
+      // A named source wallet is selected while its regular transfer runs. If
+      // that transfer funded another saved wallet's unfinished onboarding,
+      // return to the recipient only after recovery has authoritatively
+      // confirmed the receipt. This also closes the restart window between a
+      // confirmed receipt and the in-process return to the recipient wallet.
+      await this.#resumeConfirmedRegularTransferRecipient().catch(() => undefined);
       await this.#onboarding.resume();
     } catch (error) {
       await this.#rpcProxy?.stop().catch(() => undefined);
@@ -1221,10 +1237,15 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     userConfirmed: boolean;
   }): Promise<RegularTransferRequest & NamedRecipientResult> {
     return this.#withWalletOperation(async () => {
-      const request = publicRegularTransferRequest(
-        await this.#regularTransfers.execute(input),
+      const request = await this.#regularTransfers.execute(input);
+      // The transfer result is authoritative. A best-effort return to an
+      // unfinished recipient setup must never turn a confirmed send into an
+      // apparent failure that could invite a duplicate transfer.
+      await this.#resumeConfirmedRegularTransferRecipient(request)
+        .catch(() => undefined);
+      return this.#decorateRequestRecipient(
+        publicRegularTransferRequest(request),
       );
-      return this.#decorateRequestRecipient(request);
     });
   }
 
@@ -1246,18 +1267,21 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   async getRegularTransferRequest(
     requestIdOrDecisionId: string,
   ): Promise<RegularTransferRequest & NamedRecipientResult> {
-    const requestId = requestIdOrDecisionId.startsWith("rwd_")
-      ? uniqueRequestIdForDecision(
-          (await this.#store.read()).regularRequests,
-          requestIdOrDecisionId,
-          "REGULAR_TRANSFER_REQUEST_NOT_FOUND",
-        )
-      : requestIdOrDecisionId;
-    return this.#decorateRequestRecipient(
-      publicRegularTransferRequest(
-        await this.#regularTransfers.getRequest(requestId),
-      ),
-    );
+    return this.#withWalletOperation(async () => {
+      const requestId = requestIdOrDecisionId.startsWith("rwd_")
+        ? uniqueRequestIdForDecision(
+            (await this.#store.read()).regularRequests,
+            requestIdOrDecisionId,
+            "REGULAR_TRANSFER_REQUEST_NOT_FOUND",
+          )
+        : requestIdOrDecisionId;
+      const request = await this.#regularTransfers.getRequest(requestId);
+      await this.#resumeConfirmedRegularTransferRecipient(request)
+        .catch(() => undefined);
+      return this.#decorateRequestRecipient(
+        publicRegularTransferRequest(request),
+      );
+    });
   }
 
   listWallets(): Promise<Record<string, unknown>> {
@@ -2088,6 +2112,61 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     await this.#continueSelectedWalletSetup(activated.current.onboarding);
   }
 
+  async #resumeConfirmedRegularTransferRecipient(
+    request?: RegularTransferRequest,
+  ): Promise<void> {
+    const state = await this.#store.read();
+    const wallet = state.wallet;
+    if (!wallet) return;
+    const active = wallet.profiles[wallet.activeWalletId];
+    if (!active) return;
+
+    const requests = request
+      ? [request]
+      : Object.values(state.regularRequests).sort((left, right) =>
+          Date.parse(right.confirmation?.checkedAt ?? right.updatedAt) -
+          Date.parse(left.confirmation?.checkedAt ?? left.updatedAt)
+        );
+    for (const candidate of requests) {
+      if (candidate.phase !== "confirmed" || !candidate.confirmation) continue;
+      const targets = Object.values(wallet.profiles).filter((profile) => {
+        if (profile.walletId === candidate.authorization.walletId ||
+          profile.status !== "available") {
+          return false;
+        }
+        const setup = profile.walletId === wallet.activeWalletId
+          ? state.onboarding
+          : profile.onboarding;
+        if (!isResumableRecipientOnboarding(setup) || !setup.address) return false;
+        return setup.address.toLowerCase() === candidate.recipient.toLowerCase();
+      });
+      // Wallet main addresses are expected to be unique, but fail closed if a
+      // migrated or externally edited registry makes the recipient ambiguous.
+      if (targets.length !== 1) continue;
+      const target = targets[0]!;
+
+      if (target.walletId === active.walletId) {
+        // Covers a crash after the durable selection changed but before the
+        // onboarding workflow was restarted.
+        await this.#onboarding.resume();
+        return;
+      }
+      const authorization = candidate.authorization;
+      if (
+        active.walletId !== authorization.walletId ||
+        active.name !== authorization.walletName ||
+        active.selectionEpoch !== authorization.selectionEpoch ||
+        active.authorizationId !== authorization.authorizationId
+      ) {
+        // A user-selected wallet, including selecting the source away and back,
+        // supersedes the automatic return because selectionEpoch is monotonic.
+        continue;
+      }
+      await this.#activateWalletForNamedOperation(target, state);
+      return;
+    }
+  }
+
   async #continueSelectedWalletSetup(
     setup: OnboardingRecord | undefined,
   ): Promise<WalletLifecycleSetupResult> {
@@ -2097,7 +2176,14 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         return walletLifecycleSetup(await this.#onboarding.getRecord());
       }
       const started = await this.#startOnboardingUnlocked();
-      return walletLifecycleSetup(started.snapshot);
+      return {
+        ...walletLifecycleSetup(started.snapshot),
+        onboarding: {
+          snapshot: started.snapshot,
+          uiOpened: started.uiOpened,
+          ...(started.qrPngBase64 ? { qrPngBase64: started.qrPngBase64 } : {}),
+        },
+      };
     } catch {
       // Adapter selection and durable profile activation already committed.
       // A nonessential startup/resume failure must not turn that success into a
@@ -2123,6 +2209,15 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     this.#recovery.resetForWalletSelection();
     this.#privateBalances.resetForWalletSelection();
   }
+}
+
+function isResumableRecipientOnboarding(
+  setup: OnboardingRecord | undefined,
+): setup is OnboardingRecord {
+  return setup !== undefined && (
+    UNRESOLVED_ONBOARDING_PHASES.has(setup.phase) ||
+    (setup.phase === "failed" && setup.error?.retryable === true)
+  );
 }
 
 function uniqueRequestIdForDecision<T extends { requestId: string; decisionId: string }>(

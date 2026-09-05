@@ -823,7 +823,13 @@ test("multi-wallet private balances persist, isolate policy, rebalance, and send
       );
     }
     assert.equal(harness.wallet.regularTransferCalls, 6);
-    assert.equal(await harness.chain.getBalanceWei(MAIN_TWO), 3n * DENOMINATION);
+    // Confirmed named-source funding now returns to the recipient wallet and
+    // resumes its onboarding immediately. By the time all six transfers land,
+    // its initial private note has already been shielded exactly once.
+    assert.equal(
+      await harness.chain.getBalanceWei(MAIN_TWO),
+      2n * DENOMINATION - REGULAR_TRANSFER_GAS_RESERVE_WEI,
+    );
 
     const loadedSecond = await runtime.selectWallet({
       walletId: createdWallet.wallet.wallet_id,
