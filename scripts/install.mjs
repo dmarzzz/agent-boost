@@ -15,6 +15,11 @@ import { configureHermesIfAvailable } from "./lib/hermes-install.mjs";
 import { installPinnedShadeTree } from "./lib/shade-tree-install.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// The release gate can run this serial suite while other builds share the
+// host. Keep the inner deadline below the gate's one-hour ceiling, but long
+// enough that a healthy, advancing pre-install test run is not killed merely
+// because the machine is busy.
+const INSTALL_TEST_TIMEOUT_MS = 30 * 60_000;
 const prefix = resolve(
   process.env.AGENT_BOOST_PREFIX ?? join(homedir(), ".local"),
 );
@@ -46,7 +51,7 @@ try {
   });
   await checked("npm", ["test"], {
     cwd: projectRoot,
-    timeoutMs: 10 * 60_000,
+    timeoutMs: INSTALL_TEST_TIMEOUT_MS,
   });
   await checked("npm", ["run", "build"], {
     cwd: projectRoot,

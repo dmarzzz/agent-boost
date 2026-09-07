@@ -12,21 +12,27 @@
     "funding_target_atomic",
     "privacy_protocol",
     "private_payment_operation",
+    "regular_transfer_operation",
     "authority",
     "security",
     "privacy",
     "adapters",
     "readiness",
-    "demo_reset"
+    "demo_reset",
+    "wallet_management",
+    "private_balance_management",
+    "regular_transfer",
+    "wallet_tree"
   ],
   "properties": {
-    "contract": {"const": "org.agentboost.wallet/1.3"},
+    "contract": {"const": "org.agentboost.wallet/1.8"},
     "chain_id": {"const": "eip155:11155111"},
     "network_name": {"const": "Sepolia"},
     "asset_type": {"const": "eip155:11155111/slip44:60"},
     "funding_target_atomic": {"$ref": "#/$defs/atomic"},
     "privacy_protocol": {"const": "tornado"},
     "private_payment_operation": {"const": "unshield_next_tail_call"},
+    "regular_transfer_operation": {"const": "public_eth_transfer"},
     "manifest_digest": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
@@ -43,7 +49,8 @@
         "max_payments",
         "default_lifetime_seconds",
         "requires_exact_verbal_confirmation",
-        "requires_user_confirmation"
+        "requires_user_confirmation",
+        "policy_editing"
       ],
       "properties": {
         "mode": {"const": "testnet_delegated"},
@@ -51,10 +58,30 @@
         "mainnet_available": {"const": false},
         "per_payment_limit_atomic": {"$ref": "#/$defs/atomic"},
         "lifetime_limit_atomic": {"$ref": "#/$defs/atomic"},
-        "max_payments": {"const": 1},
+        "max_payments": {"type": "integer", "minimum": 1, "maximum": 100},
         "default_lifetime_seconds": {"type": "integer", "minimum": 1},
         "requires_exact_verbal_confirmation": {"const": false},
-        "requires_user_confirmation": {"type": "boolean"}
+        "requires_user_confirmation": {"type": "boolean"},
+        "policy_editing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "available",
+            "requires_user_confirmation",
+            "hard_max_per_payment_atomic",
+            "hard_max_lifetime_atomic",
+            "hard_max_payments",
+            "hard_max_lifetime_seconds"
+          ],
+          "properties": {
+            "available": {"const": true},
+            "requires_user_confirmation": {"const": true},
+            "hard_max_per_payment_atomic": {"$ref": "#/$defs/atomic"},
+            "hard_max_lifetime_atomic": {"$ref": "#/$defs/atomic"},
+            "hard_max_payments": {"const": 100},
+            "hard_max_lifetime_seconds": {"const": 2592000}
+          }
+        }
       }
     },
     "security": {
@@ -88,7 +115,7 @@
             "rpc_direct_fallback": {"const": false},
             "per_payment_limit_atomic": {"$ref": "#/$defs/atomic"},
             "lifetime_limit_atomic": {"$ref": "#/$defs/atomic"},
-            "max_payments": {"const": 1}
+            "max_payments": {"const": 100}
           }
         }
       }
@@ -225,6 +252,100 @@
         "requires_user_confirmation": {"const": true},
         "archives_previous_state": {"const": true},
         "rebroadcasts_unresolved_payments": {"const": false}
+      }
+    },
+    "wallet_management": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available",
+        "managed_wallets_only",
+        "accepts_seed_or_password",
+        "selection_requires_separate_reauthorization",
+        "selection_preserves_valid_authorization",
+        "recovery_transfer_available",
+        "regular_transfer_available",
+        "multiple_profiles"
+      ],
+      "properties": {
+        "available": {"type": "boolean"},
+        "managed_wallets_only": {"const": true},
+        "accepts_seed_or_password": {"const": false},
+        "selection_requires_separate_reauthorization": {"const": false},
+        "selection_preserves_valid_authorization": {"const": true},
+        "recovery_transfer_available": {"type": "boolean"},
+        "regular_transfer_available": {"type": "boolean"},
+        "multiple_profiles": {"const": true}
+      }
+    },
+    "private_balance_management": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available",
+        "named",
+        "multiple_per_profile",
+        "create_available",
+        "fund_from_main_available",
+        "fund_from_private_balance_available",
+        "per_balance_policy_editing",
+        "public_change"
+      ],
+      "properties": {
+        "available": {"const": true},
+        "named": {"const": true},
+        "multiple_per_profile": {"const": true},
+        "create_available": {"const": true},
+        "fund_from_main_available": {"const": true},
+        "fund_from_private_balance_available": {"const": true},
+        "per_balance_policy_editing": {"const": true},
+        "public_change": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nested_under_source_private_balance",
+            "regular_transfer_source"
+          ],
+          "properties": {
+            "nested_under_source_private_balance": {"const": true},
+            "regular_transfer_source": {"const": true}
+          }
+        }
+      }
+    },
+    "regular_transfer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available", "source_kinds"],
+      "properties": {
+        "available": {"type": "boolean"},
+        "source_kinds": {
+          "const": ["main", "private_balance_public_change"]
+        }
+      }
+    },
+    "wallet_tree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available",
+        "hierarchy",
+        "account_short_names",
+        "active_balances_refreshed_live",
+        "inactive_public_balances_refreshed_live",
+        "inactive_private_balances",
+        "includes_addresses",
+        "implies_control"
+      ],
+      "properties": {
+        "available": {"const": true},
+        "hierarchy": {"const": "profile_container"},
+        "account_short_names": {"const": ["main", "private"]},
+        "active_balances_refreshed_live": {"const": true},
+        "inactive_public_balances_refreshed_live": {"const": true},
+        "inactive_private_balances": {"const": "last_known"},
+        "includes_addresses": {"const": false},
+        "implies_control": {"const": false}
       }
     }
   },

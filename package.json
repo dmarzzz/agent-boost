@@ -4,7 +4,7 @@
   "description": "Dark mode for your agent: a local wallet-first privacy sidecar.",
   "type": "module",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "engines": {
     "node": ">=22"
   },
@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
-    "check": "tsc -p tsconfig.json --noEmit",
+    "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "dev": "tsx src/cli.ts",
     "eval": "node --import tsx --test --test-concurrency=1 --test-reporter=spec test/conversation-evals.test.ts",
     "eval:live": "node scripts/live-hermes-eval.mjs",
@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "ox": "0.12.0",
     "pngjs": "5.0.0",
     "qrcode": "1.5.4",
     "tor-js": "0.4.0",

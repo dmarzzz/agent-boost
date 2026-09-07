@@ -1,0 +1,477 @@
+import { randomUUID } from "node:crypto";
+
+import {
+  MAX_POLICY_LIFETIME_LIMIT_WEI,
+  MAX_POLICY_PAYMENT_LIMIT_WEI,
+  MAX_POLICY_PAYMENTS,
+  MAX_POLICY_TTL_MS,
+  type DelegationPolicy,
+  type OnboardingRecord,
+  type PolicyUpdatePlan,
+  type PolicyUpdateReceipt,
+  type WalletAuthorizationBinding,
+  type WalletProfileRecord,
+  type WalletSelectionBinding,
+  type WalletPolicySnapshot,
+} from "./contracts.js";
+import { StateStore, type StateDocument } from "./state/store.js";
+
+const ATOMIC_PATTERN = /^(0|[1-9][0-9]*)$/;
+
+export interface PolicyClock {
+  now(): Date;
+}
+
+const SYSTEM_CLOCK: PolicyClock = { now: () => new Date() };
+
+function maxPayments(policy: DelegationPolicy): number {
+  return policy.maxPayments ?? 1;
+}
+
+function snapshot(
+  policy: DelegationPolicy,
+  paymentsUsed: number,
+): WalletPolicySnapshot {
+  const maximum = maxPayments(policy);
+  return {
+    ...policy,
+    maxPayments: maximum,
+    paymentsUsed,
+    paymentsRemaining: Math.max(0, maximum - paymentsUsed),
+  };
+}
+
+function samePolicy(
+  left: WalletPolicySnapshot,
+  right: WalletPolicySnapshot,
+): boolean {
+  return (
+    left.mode === right.mode &&
+    left.chainId === right.chainId &&
+    left.perPaymentLimitWei === right.perPaymentLimitWei &&
+    left.lifetimeLimitWei === right.lifetimeLimitWei &&
+    left.spentWei === right.spentWei &&
+    left.maxPayments === right.maxPayments &&
+    left.paymentsUsed === right.paymentsUsed &&
+    left.expiresAt === right.expiresAt &&
+    left.enabled === right.enabled
+  );
+}
+
+function requireAtomic(value: string | undefined, name: string): bigint | undefined {
+  if (value === undefined) return undefined;
+  if (!ATOMIC_PATTERN.test(value) || BigInt(value) <= 0n) {
+    throw new Error(`${name} must be a positive canonical atomic-unit string`);
+  }
+  return BigInt(value);
+}
+
+export class WalletPolicyController {
+  readonly #store: StateStore;
+  readonly #clock: PolicyClock;
+  readonly #defaultTtlMs: number;
+
+  constructor(options: {
+    store: StateStore;
+    defaultTtlMs: number;
+    clock?: PolicyClock;
+  }) {
+    this.#store = options.store;
+    this.#defaultTtlMs = options.defaultTtlMs;
+    this.#clock = options.clock ?? SYSTEM_CLOCK;
+  }
+
+  async get(walletId?: string): Promise<WalletPolicySnapshot> {
+    const state = await this.#store.read();
+    const target = walletContext(state, walletId);
+    return snapshot(
+      target.onboarding.delegation,
+      paymentsUsedByAuthorization(state, target.authorizationId),
+    );
+  }
+
+  async getPlan(decisionId: string): Promise<PolicyUpdatePlan> {
+    const plan = (await this.#store.read()).policyPlans[decisionId];
+    if (!plan) throw new Error("POLICY_DECISION_NOT_FOUND");
+    return plan;
+  }
+
+  async getLatestPlan(): Promise<PolicyUpdatePlan> {
+    const state = await this.#store.read();
+    const active = activeWalletContext(state);
+    const now = this.#clock.now().getTime();
+    const eligible = Object.values(state.policyPlans).filter((plan) =>
+      plan.decision === "allow" &&
+      !plan.appliedAt &&
+      new Date(plan.expiresAt).getTime() > now &&
+      sameWallet(plan.wallet, active.wallet) &&
+      plan.authorizationId === active.authorizationId
+    );
+    if (eligible.length === 0) throw new Error("POLICY_DECISION_NOT_FOUND");
+    if (eligible.length > 1) throw new Error("POLICY_DECISION_AMBIGUOUS");
+    return eligible[0]!;
+  }
+
+  async plan(input: {
+    walletId?: string;
+    perPaymentLimitWei?: string;
+    lifetimeLimitWei?: string;
+    maxPayments?: number;
+    ttlMs?: number;
+    enabled?: boolean;
+  }): Promise<PolicyUpdatePlan> {
+    if (
+      input.perPaymentLimitWei === undefined &&
+      input.lifetimeLimitWei === undefined &&
+      input.maxPayments === undefined &&
+      input.ttlMs === undefined &&
+      input.enabled === undefined
+    ) {
+      throw new Error("At least one wallet policy setting must change");
+    }
+    const requestedPerPayment = requireAtomic(
+      input.perPaymentLimitWei,
+      "per_payment_limit_native",
+    );
+    const requestedLifetime = requireAtomic(
+      input.lifetimeLimitWei,
+      "lifetime_limit_native",
+    );
+    if (
+      input.maxPayments !== undefined &&
+      (!Number.isSafeInteger(input.maxPayments) || input.maxPayments <= 0)
+    ) {
+      throw new Error("max_payments must be a positive integer");
+    }
+    if (
+      input.ttlMs !== undefined &&
+      (!Number.isSafeInteger(input.ttlMs) || input.ttlMs <= 0)
+    ) {
+      throw new Error("expires_in_hours must be positive");
+    }
+
+    const state = await this.#store.read();
+    const now = this.#clock.now();
+    const target = walletContext(state, input.walletId);
+    const paymentsUsed = paymentsUsedByAuthorization(state, target.authorizationId);
+    const current = snapshot(target.onboarding.delegation, paymentsUsed);
+    const perPayment = requestedPerPayment ?? BigInt(current.perPaymentLimitWei);
+    const maximumPayments = input.maxPayments ?? current.maxPayments;
+    const paymentEnvelope = perPayment * BigInt(maximumPayments);
+    const derivedLifetime =
+      input.perPaymentLimitWei !== undefined || input.maxPayments !== undefined;
+    const lifetime = requestedLifetime ?? (
+      derivedLifetime
+        ? BigInt(maxAtomic(current.spentWei, paymentEnvelope.toString()))
+        : BigInt(current.lifetimeLimitWei)
+    );
+    const currentExpired =
+      new Date(current.expiresAt).getTime() <= now.getTime();
+    const ttlMs = input.ttlMs ?? (currentExpired ? this.#defaultTtlMs : undefined);
+    const expiresAt = ttlMs === undefined
+      ? current.expiresAt
+      : new Date(now.getTime() + ttlMs).toISOString();
+    const proposed = snapshot(
+      {
+        mode: current.mode,
+        chainId: current.chainId,
+        perPaymentLimitWei: perPayment.toString(),
+        lifetimeLimitWei: lifetime.toString(),
+        spentWei: current.spentWei,
+        maxPayments: maximumPayments,
+        expiresAt,
+        enabled: input.enabled ?? current.enabled,
+      },
+      paymentsUsed,
+    );
+
+    const blockers: string[] = [];
+    if (perPayment > MAX_POLICY_PAYMENT_LIMIT_WEI) {
+      blockers.push("HARD_MAX_PER_PAYMENT_LIMIT");
+    }
+    if (maximumPayments > MAX_POLICY_PAYMENTS) {
+      blockers.push("HARD_MAX_PAYMENTS");
+    }
+    if (lifetime > MAX_POLICY_LIFETIME_LIMIT_WEI) {
+      blockers.push("HARD_MAX_LIFETIME_LIMIT");
+    }
+    if (lifetime > paymentEnvelope && lifetime !== BigInt(current.spentWei)) {
+      blockers.push("LIFETIME_EXCEEDS_PAYMENT_ENVELOPE");
+    }
+    if (lifetime < BigInt(current.spentWei)) {
+      blockers.push("LIFETIME_BELOW_SPENT");
+    }
+    if (maximumPayments < paymentsUsed) {
+      blockers.push("MAX_PAYMENTS_BELOW_USED");
+    }
+    if (new Date(expiresAt).getTime() <= now.getTime()) {
+      blockers.push("EXPIRY_IN_PAST");
+    }
+    if (new Date(expiresAt).getTime() - now.getTime() > MAX_POLICY_TTL_MS) {
+      blockers.push("HARD_MAX_EXPIRY");
+    }
+    if (proposed.enabled && !target.authorizationId) {
+      blockers.push("REAUTHORIZATION_REQUIRED");
+    }
+    if (samePolicy(current, proposed)) blockers.push("NOTHING_CHANGED");
+
+    const plan: PolicyUpdatePlan = {
+      version: 1,
+      decisionId: `wpd_${randomUUID()}`,
+      wallet: target.wallet,
+      ...(target.authorizationId ? { authorizationId: target.authorizationId } : {}),
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
+      current,
+      proposed,
+      decision: blockers.length === 0 ? "allow" : "deny",
+      blockers,
+      approval: { action: "confirm", userConfirmationRequired: true },
+    };
+    await this.#store.update((draft) => {
+      // A newer preview supersedes every older pending preview. Confirmation
+      // still requires the exact hidden ID of the card shown to the user.
+      for (const existing of Object.values(draft.policyPlans)) {
+        if (!existing.appliedAt && existing.decision === "allow") {
+          existing.decision = "deny";
+          if (!existing.blockers.includes("SUPERSEDED_BY_NEW_PREVIEW")) {
+            existing.blockers.push("SUPERSEDED_BY_NEW_PREVIEW");
+          }
+        }
+      }
+      draft.policyPlans[plan.decisionId] = plan;
+    });
+    return plan;
+  }
+
+  async cancel(decisionId: string): Promise<PolicyUpdatePlan> {
+    const state = await this.#store.update((draft) => {
+      const plan = draft.policyPlans[decisionId];
+      if (!plan) throw new Error("POLICY_DECISION_NOT_FOUND");
+      if (plan.appliedAt) throw new Error("POLICY_DECISION_ALREADY_APPLIED");
+      plan.decision = "deny";
+      if (!plan.blockers.includes("USER_CANCELLED")) plan.blockers.push("USER_CANCELLED");
+    });
+    return state.policyPlans[decisionId]!;
+  }
+
+  async apply(input: {
+    decisionId: string;
+    userConfirmed: boolean;
+  }): Promise<PolicyUpdateReceipt> {
+    if (!input.userConfirmed) {
+      throw new Error("The user must confirm the exact wallet policy update");
+    }
+    let receipt: PolicyUpdateReceipt | undefined;
+    const state = await this.#store.update((draft) => {
+      const plan = draft.policyPlans[input.decisionId];
+      if (!plan) throw new Error("POLICY_DECISION_NOT_FOUND");
+      if (plan.blockers.includes("USER_CANCELLED")) {
+        throw new Error("POLICY_DECISION_CANCELLED");
+      }
+      if (plan.decision !== "allow") throw new Error("POLICY_DECISION_DENIED");
+      if (plan.appliedAt) {
+        if (!plan.appliedPolicy) throw new Error("POLICY_RECEIPT_MISSING");
+        receipt = {
+          version: 1,
+          decisionId: plan.decisionId,
+          wallet: plan.wallet,
+          appliedAt: plan.appliedAt,
+          policy: plan.appliedPolicy,
+          authorizationEffect: "preserved",
+          counterEffect: "preserved",
+        };
+        return;
+      }
+      const now = this.#clock.now();
+      if (new Date(plan.expiresAt).getTime() <= now.getTime()) {
+        throw new Error("POLICY_DECISION_EXPIRED");
+      }
+      const target = walletContext(draft, plan.wallet.walletId);
+      if (!sameWallet(target.wallet, plan.wallet) ||
+        target.authorizationId !== plan.authorizationId) {
+        throw new Error("WALLET_SELECTION_CHANGED");
+      }
+      const live = snapshot(
+        target.onboarding.delegation,
+        paymentsUsedByAuthorization(draft, target.authorizationId),
+      );
+      if (!samePolicy(live, plan.current)) {
+        throw new Error("POLICY_CHANGED_REFRESH_PLAN");
+      }
+      const { paymentsUsed: _used, paymentsRemaining: _remaining, ...delegation } =
+        plan.proposed;
+      target.onboarding.delegation = delegation;
+      target.onboarding.revision += 1;
+      target.onboarding.updatedAt = now.toISOString();
+      synchronizeTargetPrivateBalances(
+        draft,
+        target.profile,
+        delegation,
+        now.toISOString(),
+      );
+      plan.appliedAt = now.toISOString();
+      plan.appliedPolicy = snapshot(delegation, paymentsUsedByAuthorization(
+        draft,
+        target.authorizationId,
+      ));
+      receipt = {
+        version: 1,
+        decisionId: plan.decisionId,
+        wallet: plan.wallet,
+        appliedAt: plan.appliedAt,
+        policy: plan.appliedPolicy,
+        authorizationEffect: "preserved",
+        counterEffect: "preserved",
+      };
+    });
+    if (receipt) return receipt;
+    const plan = state.policyPlans[input.decisionId];
+    if (!plan?.appliedAt) throw new Error("POLICY_UPDATE_FAILED");
+    return {
+      version: 1,
+      decisionId: plan.decisionId,
+      wallet: plan.wallet,
+      appliedAt: plan.appliedAt,
+      policy: plan.appliedPolicy ?? plan.proposed,
+      authorizationEffect: "preserved",
+      counterEffect: "preserved",
+    };
+  }
+}
+
+function activeWalletContext(state: StateDocument): {
+  wallet: WalletSelectionBinding;
+  authorizationId?: string;
+} {
+  const target = walletContext(state);
+  return {
+    wallet: target.wallet,
+    ...(target.authorizationId ? { authorizationId: target.authorizationId } : {}),
+  };
+}
+
+function walletContext(state: StateDocument, walletId?: string): {
+  profile: WalletProfileRecord;
+  onboarding: OnboardingRecord;
+  wallet: WalletSelectionBinding;
+  authorizationId?: string;
+} {
+  const registry = state.wallet;
+  const targetWalletId = walletId ?? registry?.activeWalletId;
+  const profile = targetWalletId === undefined
+    ? undefined
+    : registry?.profiles[targetWalletId];
+  if (!profile || profile.selectionEpoch < 1 || profile.status === "archived") {
+    throw new Error(walletId === undefined ? "ACTIVE_WALLET_MISSING" : "WALLET_NOT_FOUND");
+  }
+  const onboarding = profile.walletId === registry?.activeWalletId
+    ? state.onboarding
+    : profile.onboarding;
+  if (!onboarding) throw new Error("WALLET_NOT_INITIALIZED");
+  if (onboarding.delegation.enabled && !profile.authorizationId) {
+    throw new Error("WALLET_AUTHORIZATION_MISSING");
+  }
+  return {
+    profile,
+    onboarding,
+    wallet: {
+      walletId: profile.walletId,
+      walletName: profile.name,
+      selectionEpoch: profile.selectionEpoch,
+    },
+    ...(profile.authorizationId ? { authorizationId: profile.authorizationId } : {}),
+  };
+}
+
+function paymentsUsedByActiveAuthorization(
+  state: StateDocument,
+): number {
+  return paymentsUsedByAuthorization(state, activeWalletContext(state).authorizationId);
+}
+
+function paymentsUsedByAuthorization(
+  state: StateDocument,
+  authorizationId: string | undefined,
+): number {
+  if (!authorizationId) return 0;
+  return Object.values(state.requests).filter(
+    (request) => request.phase !== "failed" &&
+      request.authorization.authorizationId === authorizationId,
+  ).length + Object.values(state.regularRequests).filter(
+    (request) => request.phase !== "failed" &&
+      request.authorization.authorizationId === authorizationId,
+  ).length;
+}
+
+function sameWallet(left: WalletSelectionBinding, right: WalletSelectionBinding): boolean {
+  return left.walletId === right.walletId && left.walletName === right.walletName &&
+    left.selectionEpoch === right.selectionEpoch;
+}
+
+function synchronizeTargetPrivateBalances(
+  state: StateDocument,
+  profile: WalletProfileRecord,
+  aggregate: DelegationPolicy,
+  updatedAt: string,
+): void {
+  const explicitlyManaged = new Set(
+    Object.values(state.privateBalancePolicyUpdateRequests)
+      .filter((request) => request.phase === "applied" &&
+        request.privateBalance.walletId === profile.walletId)
+      .map((request) => request.privateBalance.privateBalanceId),
+  );
+  for (const privateBalance of Object.values(profile.privateBalances)) {
+    const next = explicitlyManaged.has(privateBalance.privateBalanceId)
+      ? clampPrivatePolicyToAggregate(privateBalance.delegation, aggregate)
+      : structuredClone(aggregate);
+    if (sameDelegation(privateBalance.delegation, next)) continue;
+    privateBalance.delegation = next;
+    privateBalance.revision += 1;
+    privateBalance.updatedAt = updatedAt;
+  }
+}
+
+function clampPrivatePolicyToAggregate(
+  policy: DelegationPolicy,
+  aggregate: DelegationPolicy,
+): DelegationPolicy {
+  const perPaymentLimitWei = minAtomic(
+    policy.perPaymentLimitWei,
+    aggregate.perPaymentLimitWei,
+  );
+  const maxPayments = Math.min(policy.maxPayments, aggregate.maxPayments);
+  const paymentEnvelopeWei = (
+    BigInt(perPaymentLimitWei) * BigInt(maxPayments)
+  ).toString();
+  const lifetimeLimitWei = maxAtomic(policy.spentWei, minAtomic(
+    policy.lifetimeLimitWei,
+    aggregate.lifetimeLimitWei,
+    paymentEnvelopeWei,
+  ));
+  return {
+    ...policy,
+    perPaymentLimitWei,
+    lifetimeLimitWei,
+    spentWei: policy.spentWei,
+    maxPayments,
+    expiresAt: Date.parse(policy.expiresAt) <= Date.parse(aggregate.expiresAt)
+      ? policy.expiresAt
+      : aggregate.expiresAt,
+    enabled: policy.enabled && aggregate.enabled,
+  };
+}
+
+function minAtomic(...values: string[]): string {
+  return values.reduce((minimum, value) =>
+    BigInt(value) < BigInt(minimum) ? value : minimum);
+}
+
+function maxAtomic(...values: string[]): string {
+  return values.reduce((maximum, value) =>
+    BigInt(value) > BigInt(maximum) ? value : maximum);
+}
+
+function sameDelegation(left: DelegationPolicy, right: DelegationPolicy): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}

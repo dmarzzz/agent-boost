@@ -1,0 +1,33 @@
+{
+  "post_characters": {
+    "post.txt": 241,
+    "reply-how-it-works.txt": 258,
+    "reply-privacy.txt": 251,
+    "reply-repo-once-public.txt": 108
+  },
+  "assets": {
+    "agent-boost-social.png": {
+      "width": 1254,
+      "height": 1254,
+      "bytes": 1581083
+    },
+    "agent-boost-banner.png": {
+      "width": 1774,
+      "height": 887,
+      "bytes": 1229495
+    }
+  },
+  "readme_words": 760,
+  "checks": [
+    "all kit files present",
+    "posts within 280 characters",
+    "alt text under 1000 characters",
+    "PNG images under 5 MB",
+    "local README links exist",
+    "coming-soon status preserved",
+    "no overflow in mobile and desktop README renders"
+  ],
+  "limitations": [
+    "Local README rendering approximates GitHub; no public deployment or engagement test."
+  ]
+}

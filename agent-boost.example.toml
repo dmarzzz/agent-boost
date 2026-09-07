@@ -24,8 +24,9 @@ auto_shield = true
 [delegation]
 mode = "testnet_delegated"
 execute = true
-payment_limit_wei = "50000000000000000"
-maximum_payments = 1
+payment_limit_wei = "1000000000000000000"
+lifetime_limit_wei = "10000000000000000000"
+maximum_payments = 10
 expires_after_hours = 168
 
 [security]

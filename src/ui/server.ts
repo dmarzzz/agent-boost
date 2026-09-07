@@ -415,6 +415,7 @@ async function publicSnapshot(
       perPaymentLimitWei: snapshot.delegation.perPaymentLimitWei,
       lifetimeLimitWei: snapshot.delegation.lifetimeLimitWei,
       spentWei: snapshot.delegation.spentWei,
+      maxPayments: snapshot.delegation.maxPayments ?? 1,
       expiresAt: snapshot.delegation.expiresAt,
       enabled: snapshot.delegation.enabled,
     },

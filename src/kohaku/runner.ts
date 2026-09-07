@@ -60,6 +60,8 @@ export class SpawnCommandRunner implements CommandRunner {
       delete childEnvironment.node_use_env_proxy;
       delete childEnvironment.NODE_OPTIONS;
       delete childEnvironment.AGENT_BOOST_RPC_URL;
+      delete childEnvironment.RPC_URL;
+      delete childEnvironment.AGENT_BOOST_ALLOWED_RPC_URL;
       if (invocation.env) Object.assign(childEnvironment, invocation.env);
       const child = spawn(invocation.executable, [...invocation.args], {
         cwd: invocation.cwd,

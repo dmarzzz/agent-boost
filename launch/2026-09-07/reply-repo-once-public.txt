@@ -1,0 +1,3 @@
+Code + setup: https://github.com/dmarzzz/agent-boost
+
+Unaudited research software. Sepolia-only; use disposable test funds.

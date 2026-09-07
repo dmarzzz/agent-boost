@@ -35,6 +35,7 @@ function snapshot(phase: OnboardingPhase = "awaiting_funding"): PublicOnboarding
       perPaymentLimitWei: "100000000000000000",
       lifetimeLimitWei: FUNDING_WEI,
       spentWei: "0",
+      maxPayments: 1,
       expiresAt: "2026-09-02T00:00:00.000Z",
       enabled: phase === "private_ready",
     },
@@ -109,7 +110,9 @@ describe("onboarding UI server", () => {
 
     const response = await fetch(first.url);
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /Dark mode for your agent/);
+    const html = await response.text();
+    assert.match(html, /Getting step 1 ready/);
+    assert.match(html, /data-step="funding"[^>]*>.*>1<.*Fund test wallet/su);
     await server.stop();
     await server.stop();
     running.splice(running.indexOf(server), 1);
@@ -195,7 +198,7 @@ describe("onboarding UI server", () => {
       fetch(`${url}/app.js`).then(async (response) => response.text()),
     ]);
 
-    assert.match(html, /aria-label="Copy wallet address"/);
+    assert.match(html, /aria-label="Copy main account address"/);
     assert.match(html, /id="copy-status" role="status" aria-live="polite"/);
     assert.match(css, /\.address-row \{[^}]*min-width: 0/);
     assert.match(css, /\.funding-facts > \* \{ min-width: 0; \}/);
@@ -206,15 +209,23 @@ describe("onboarding UI server", () => {
     assert.match(css, /\[hidden\] \{ display: none !important; \}/);
     assert.match(css, /@media \(max-width: 420px\)/);
     assert.match(script, /setAttribute\('aria-current', 'step'\)/);
+    assert.match(script, /Step 1 of 3/);
+    assert.match(script, /Step 2 of 3/);
+    assert.match(script, /Step 3 of 3/);
     assert.match(script, /Still needed on Sepolia/);
-    assert.match(script, /Wallet address copied\./);
+    assert.match(script, /Main account address copied\./);
     assert.match(script, /Tor unavailable — direct access disabled/);
     assert.match(html, /id="rpc-route-label">Checking Tor…/);
     assert.match(html, /id="hermes-handoff" role="status"/);
+    assert.match(html, /Main account balance/);
+    assert.doesNotMatch(html, /id="private-balance"|id="public-balance"/u);
     assert.match(script, /After you send, reply ✅ or say “sent”/);
     assert.match(script, /Some Sepolia ETH arrived\. Send the remaining amount shown\./);
     assert.match(script, /Return to Hermes — Agent Boost is ready/);
+    assert.doesNotMatch(script, /\.slice\(0,\s*6\)/u);
     assert.match(css, /\.hermes-handoff\[data-state="ready"\]/);
+    assert.match(css, /\.step-index \{/);
+    assert.match(css, /\.progress li\[data-status="done"\] \.step-index::after \{ content: "✓"/);
   });
 
   it("supports every onboarding phase without adding privileged actions", async () => {
