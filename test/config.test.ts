@@ -81,4 +81,23 @@ test("loadConfig is Sepolia-only, HTTPS-only, and avoids reserved ports", () => 
     () => loadConfig({ AGENT_BOOST_DELEGATION_TTL_MS: "0" }, "/tmp/home"),
     /must be a positive integer/,
   );
+  assert.throws(
+    () => loadConfig({
+      AGENT_BOOST_FUNDING_WEI: "109999999999999999",
+    }, "/tmp/home"),
+    /must cover the shield amount plus the Tornado deposit gas reserve/,
+  );
+  assert.equal(
+    loadConfig({
+      AGENT_BOOST_FUNDING_WEI: "110000000000000000",
+    }, "/tmp/home").fundingTargetWei,
+    110_000_000_000_000_000n,
+  );
+  assert.equal(
+    loadConfig({
+      AGENT_BOOST_AUTO_SHIELD: "false",
+      AGENT_BOOST_FUNDING_WEI: "1",
+    }, "/tmp/home").fundingTargetWei,
+    1n,
+  );
 });

@@ -24,9 +24,8 @@ correct decision-making, not secrets.
 2. Wallet commands are a fixed allowlist with validated fields and no shell.
 3. Mainnet and non-Sepolia RPC endpoints are rejected.
 4. Payment terms cannot change between plan and execution.
-5. Under the default policy, a payment requires explicit verbal confirmation
-   and stays within the active count, per-send, lifetime-amount, and expiry
-   limits.
+5. A payment requires an exact in-chat preview followed by a new explicit user
+   confirmation, and stays within a one-use, expiring amount delegation.
 6. Stable client IDs prevent ordinary retries from double-executing.
 7. Uncertain side effects fail safe and do not restore payment authority.
 8. The onboarding UI is local, read-only, and exposes only the public funding
@@ -37,6 +36,11 @@ correct decision-making, not secrets.
     remote hostname resolution and no direct fallback.
 12. Restart/status reconciliation can only observe receipts or balances; it
     cannot rebroadcast an unresolved request.
+13. A Hermes fallback model cannot satisfy its own chat confirmation: the turn
+    gate requires exact provenance from a preview in an earlier user turn and
+    consumes it once.
+14. Shared-session review/task forks cannot authenticate, consume, or render a
+    root conversation's pending continuation.
 
 ## Important non-goals
 
@@ -69,8 +73,8 @@ timing despite Tor.
 
 ### Real-value safety
 
-The wallet stack has not been audited. There is no seed export or guided wallet
-recovery UX, hardware signer,
+The wallet stack has not been audited. There is no seed export, whole-wallet
+sweep, hardware signer,
 multi-party approval, production fee policy, chain reorganization handling, or
 formal verification. The event boundary is disposable, valueless Sepolia ETH.
 
@@ -80,15 +84,17 @@ formal verification. The event boundary is disposable, valueless Sepolia ETH.
 | --- | --- | --- |
 | Prompt asks for mainnet payment | Hard-coded Sepolia client and capability | Same-user shell could bypass Agent Boost entirely |
 | Prompt changes recipient after approval | Decision binds exact recipient/amount | User may verbally confirm misleading text |
-| Hermes falsely reports approval | Exact `user_confirmed` gate and bounded delegation | Agent Boost does not hear speech; confirmation is Hermes-attested, not independent authentication |
-| Tool retry duplicates payment | Stable client ID and durable request | New malicious client ID is blocked only after first request exists |
+| Hermes or the MCP host falsely reports approval | Exact plan binding, `user_confirmed` gate, and bounded delegation | Chat confirmation is host-attested, not independent speaker authentication |
+| Faulty model rebinds a recoverable wallet lifecycle approval to another action or friendly name | Typed preview metadata plus the Hermes turn gate binds the exact tool/name/selection epoch across user turns and consumes it once; lifecycle changes grant no signing authority | The hook is host-local enforcement, not independent speaker authentication; a malicious same-user process can bypass it |
+| Tool retry duplicates payment | Stable client ID plus atomic one-request-per-decision enforcement | Failures before any durable request exists remain retryable |
+| Weak model answers “check again” from stale chat state or chooses a mutation | Trusted unresolved results publish a private expiring status handle; the turn gate and native adapter pin one exact getter and arguments, with no setup or execution fallback | A status handle expires and then requires a new explicit operation-specific read request |
 | Shell injection through recipient/path | Address/path validation and `shell: false` | Vulnerabilities in Node or Kohaku remain |
 | Secret appears in MCP output | Explicit public projections, stable adapter errors, URL/path redaction, and no raw upstream stderr | Same-user process inspection remains possible |
 | Concurrent MCP processes race signing | Exclusive loopback runtime-ownership lock | A local denial of service can occupy the lock port |
 | QR is framed or fetched remotely | Loopback bind, host/origin checks, CSP, no-store | Other same-user local processes can connect |
 | Shield is duplicated after restart | Persist `shielding`, then poll private balance | Crash before adapter receives command can stall setup |
 | UserOperation hash is mistaken for a transaction | Distinct durable fields; only explicit transaction hashes enter receipt lookup | Upstream adapter output changes could require parser updates |
-| Hash is mistaken for delivery | Successful receipt or recipient balance-delta verification | Concurrent unrelated transfer can produce a false balance attribution |
+| Hash is mistaken for delivery | Only a successful exact transaction/UserOperation receipt bound to the durable request and expected sender confirms a journaled broadcast | RPC receipt integrity and chain reorganization handling remain external assumptions |
 | Demo reset loses an unresolved request | Explicit confirmation plus complete private state archive; old Kohaku wallet retained | Same-user deletion or disk loss can still destroy the archive |
 | RPC observer correlates activity | HTTPS through Tor, remote DNS, fixed-origin fail-closed relay | Provider no longer sees the machine IP, but still sees exit IP, methods, addresses, payloads, and timing |
 | Local process abuses RPC relay | Loopback bind, random 256-bit path, exact Host/path, required-method allowlist, size/concurrency limits, post-call traffic-log redaction | Same-UID process/env inspection is not a custody boundary |

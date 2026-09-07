@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+- Moved Hermes pre-LLM turn authentication from a shell hook into the native
+  output-guard plugin so full parent-session provenance isolates shared-session
+  review/task forks. The installer now pins the plugin to the exact resolved
+  Agent Boost executable, retains only pre/post tool shell hooks, and migrates
+  the retired managed pre-LLM hook and approval without touching operator hooks.
+
+- Bumped the wallet capability contract to `org.agentboost.wallet/1.8` for
+  persistent named private balances, multiple saved wallets, wallet-controlled
+  public-change accounts, and regular public transfers from either main or one
+  exact private balance's public change.
+
+- Added the full persistent wallet graph: create and reload multiple parent
+  wallets, create multiple physically isolated named private balances beneath
+  each one, fund a pocket from main or a sibling pocket, edit parent and pocket
+  policies independently, and render the hierarchy as an address-free tree.
+- Journaled each private UserOperation before broadcast and made its exact
+  sender-bound receipt authoritative for restart reconciliation. Public change
+  from a confirmed private operation is retained beneath its source pocket and
+  can later fund a normal public Sepolia transfer without touching shielded
+  value.
+
+- Made Hermes approvals conversational end to end: an explicit follow-up such
+  as “confirm yes send” now executes the shown plan, while missing confirmation
+  stays pending in chat instead of opening another approval surface. Execution
+  tools tell the agent to act instead of sending the user elsewhere. The
+  operational skill is now discoverable even when Agent Boost tools are behind
+  Hermes progressive discovery.
+- Hardened tool inputs for real model behavior: regular, private, recovery,
+  policy, and affordability amounts accept safe whole JSON numbers while
+  fractional amounts remain exact decimal strings; wallet selection and
+  archival accept friendly names without exposing internal wallet IDs.
+- Made chat rejection durable for transfer, recovery, reauthorization, and
+  policy previews. Cancelled decisions cannot later execute, newer policy
+  previews supersede older ones, and confirmation requires the exact internal
+  ID preserved from the displayed preview.
+- Exposed the complete safe wallet lifecycle to Hermes: list and discover local
+  profiles, create, adopt, select, archive, separately reauthorize, and execute
+  exact recovery transfers. Loading a prior wallet restores its durable setup
+  without restoring stale signing authority.
+- Added confirmation-gated regular Sepolia ETH transfers from the selected main
+  public account, with a live balance recheck, conservative gas reserve,
+  durable idempotent requests, and strict separation from private payments.
+- Fixed multi-turn Hermes wallet actions without changing Hermes: exact
+  continuation IDs now survive compact-result rendering in private MCP
+  metadata, user-entered ETH amounts are converted server-side, and
+  affordability checks no longer confuse the main balance with private-payment
+  spendability.
+- Added a deterministic, privacy-safe wallet tree for Hermes: friendly profile
+  names with sibling main/private balances, explicit live/last-known freshness,
+  and no addresses, wallet IDs, raw atomic values, or aggregate total.
+- Hardened legacy wallet migration so old payment plans that predate the
+  approval field are retained for audit but forced to a non-executable,
+  replan-required state instead of preventing Agent Boost startup.
 - README cut to the essentials; the install details, demo walkthrough, tools,
   configuration, privacy claims, and runtime hardening notes moved to `docs/`
   with an index at `docs/README.md`.

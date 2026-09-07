@@ -1,23 +1,93 @@
+agent:
+  tool_use_enforcement: true
+  execution_guidance: false
+  task_completion_guidance: false
+  parallel_tool_call_guidance: false
+  system_prompt: |-
+    [BEGIN AGENT BOOST MANAGED ROUTING]
+    Agent Boost wallet rules:
+    - An unqualified transfer from a named wallet, profile, or main account is regular/public. For an explicit regular/public send from <parent>/<pocket>, put the parent in source and the child in source_private_balance; if only the pocket or its public change is named, use $selected as source and that child name in source_private_balance. It remains regular, not private. The word private inside a saved-wallet friendly name never selects private mode or a child pocket; only an explicit private, shielded, from-private, recovery, or unshield request does. Route mode first: regular/public -> wallet_preview_regular_transfer; private/shielded -> wallet_preview_private_transfer; recovery/private-to-main -> wallet_preview_recovery_transfer. Do this even when the source is named or inactive; never list or load it first. Treat destination names as lookups; never infer wallet creation.
+    - A private balance is a named child pocket under one saved wallet, not another top-level wallet. Use wallet_preview_private_balance_create to add one, wallet_preview_private_balance_fund to fund one, and the private-balance policy tools for its own limits. For funding, wallet_name is the parent; source=$main means that parent's public account, otherwise source is an exact sibling pocket name. Its nested public-change balance stays under that child and is regular-sendable. Use wallet_get_tree for the overview.
+    - Any preview or result that asks for approval ends this assistant turn. Continue only after a later actual user turn; all approval happens through that chat reply, never an app, popup, or other confirmation surface. Never manufacture, quote, simulate, or impersonate user input.
+    - Never put raw tool/function-call syntax (including <function> tags) or internal tool, decision, or request IDs in user-facing text.
+    - A canonical transfer execution performs one no-rebroadcast verification read itself and returns the final, unresolved, or explicitly unverified state. Do not add another tool call in that assistant turn. A matching wallet_get_*_request tool is only for a later user status request; never execute again to check.
+    - When the latest trusted Agent Boost result requested a status follow-up, a fresh user message such as check again starts a new read-only turn. Perform exactly one fresh read for that matching setup or unresolved operation; never answer from an older balance, phase, or tree. Repeating a read across user turns is allowed and required. This never permits repeating an execute, apply, create, fund, shield, or broadcast action.
+    [END AGENT BOOST MANAGED ROUTING]
+
+mcp_discovery_timeout: 60
+mcp_single_query_discovery_timeout: 60
+
+tools:
+  tool_search:
+    enabled: off
+
+display:
+  busy_input_mode: queue
+
+plugins:
+  enabled:
+    - agent-boost-output-guard
+  entries:
+    agent-boost-output-guard:
+      settings:
+        turn_gate_executable: /absolute/path/to/agent-boost
+
+hooks_auto_accept: false
+
+hooks:
+  pre_tool_call:
+    - matcher: .*
+      command: /absolute/path/to/agent-boost hermes-turn-gate
+      timeout: 5
+      fail_closed: true
+  post_tool_call:
+    - matcher: (?:mcp__agent_boost__.*|tool_call)
+      command: /absolute/path/to/agent-boost hermes-turn-gate
+      timeout: 5
+
 mcp_servers:
   agent-boost:
     command: /absolute/path/to/agent-boost
     args: [mcp, --mode, dark, --contract-major, "1"]
     enabled: true
-    timeout: 180
+    timeout: 360
     supports_parallel_tool_calls: false
     tools:
       include:
         - capabilities
         - onboarding_start
         - onboarding_status
-        - wallet_get_context
+        - wallet_get_main_balance
+        - wallet_list_saved_profiles
+        - wallet_get_tree
+        - wallet_preview_private_balance_create
+        - wallet_apply_private_balance_create
+        - wallet_preview_private_balance_fund
+        - wallet_apply_private_balance_fund
+        - wallet_get_private_balance_operation
+        - wallet_get_private_balance_policy
+        - wallet_preview_private_balance_policy_update
+        - wallet_apply_private_balance_policy_update
+        - wallet_create
+        - wallet_adopt_existing
+        - wallet_preview_saved_profile_load
+        - wallet_apply_saved_profile_load
+        - wallet_archive
+        - wallet_plan_reauthorization
+        - wallet_apply_reauthorization
         - wallet_get_policy
         - wallet_plan_policy_update
         - wallet_apply_policy_update
         - wallet_start_new_demo
-        - wallet_plan_private_payment
-        - wallet_execute_private_payment
-        - wallet_get_request
+        - wallet_preview_regular_transfer
+        - wallet_execute_regular_transfer
+        - wallet_get_regular_transfer_request
+        - wallet_preview_private_transfer
+        - wallet_execute_private_transfer
+        - wallet_get_private_transfer_request
+        - wallet_preview_recovery_transfer
+        - wallet_execute_recovery_transfer
+        - wallet_get_recovery_request
         - egress_capabilities
         - egress_status
         - egress_fetch

@@ -1,0 +1,42 @@
+{
+  "contract": "org.agentboost.trade/0.1",
+  "status": "not_configured",
+  "chain_id": "eip155:11155111",
+  "network_name": "Sepolia",
+  "operation": "swap_exact_in",
+  "mainnet_available": false,
+  "modes": {
+    "regular": {
+      "status": "not_configured",
+      "venue": null,
+      "quote_available": false,
+      "execution_available": false,
+      "signing_available": false,
+      "reason_code": "SEPOLIA_SWAP_VENUE_NOT_CONFIGURED"
+    },
+    "private": {
+      "status": "not_configured",
+      "venue": null,
+      "quote_available": false,
+      "execution_available": false,
+      "signing_available": false,
+      "privacy_design_status": "not_selected",
+      "privacy_claim_available": false,
+      "regular_fallback_allowed": false,
+      "reason_code": "PRIVATE_SWAP_DESIGN_NOT_SELECTED"
+    }
+  },
+  "hard_limits": {
+    "allowed_chain_ids": ["eip155:11155111"],
+    "cross_chain_available": false,
+    "automatic_mode_fallback": false,
+    "network_requests_enabled": false,
+    "signing_enabled": false,
+    "transaction_submission_enabled": false
+  },
+  "readiness": {
+    "regular": "not_configured",
+    "private": "not_configured",
+    "active_venue_count": 0
+  }
+}

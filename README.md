@@ -2,20 +2,20 @@
 
 # Agent Boost
 
-**Private payments for Hermes.**
+**Dark Mode for your agent.**
 
 [![ci][ci-badge]][ci-url]
 [![clean install][install-badge]][install-url]
 [![Node.js 22+][node-badge]][node-url]
-[![Hermes 0.16+][hermes-badge]][hermes-url]
+[![Hermes 0.21+][hermes-badge]][hermes-url]
 ![research preview][preview-badge]
 [![license][license-badge]][license-url]
 
-Give your agent a wallet. Keep the keys out of its context.
+give ur agent a private crypto address and tool use
 
 Agent Boost gives Hermes fresh wallet addresses and shielded Sepolia payments.
 You set spending limits and review the exact payment before submission.
-Runs locally. Powered by Kohaku.
+Runs locally. Powered by [Kohaku](https://github.com/kassandraoftroy/kohaku-cli).
 
 **Wallet: research preview. Private search and private inference: coming soon.**
 
@@ -68,6 +68,34 @@ Kohaku and reports when the private balance is ready.
 
 Next, ask for a payment:
 
+> Show me my wallets as a tree.
+
+Hermes prints one live, address-free map using friendly wallet names. Public
+balances, every named private balance, and any wallet-controlled public change
+left by a private operation stay nested beneath their saved parent wallet.
+Active balances are refreshed; inactive balances are clearly marked last known.
+
+> Create a private balance called savings under agent-boost, then fund it with 0.1 Sepolia ETH from main.
+
+Private balances are durable named pockets, not chat-only labels. You can add
+more than one beneath a wallet, fund one from its parent main account, or move a
+whole supported private denomination from one sibling pocket into another.
+Creation and funding each get their own chat preview and approval; a later
+clause never runs silently across a confirmation boundary.
+Creating a second wallet gives it its own independent set of pockets and
+policies, all restored when that wallet is loaded again.
+
+> Load my old wallet.
+
+One task-level call resolves the wording against saved profiles. If exactly one
+inactive profile fits, Hermes shows its switch preview; if several fit, it asks
+which friendly name to load. Replying with just that name opens its switch
+preview. After approval, the same flow restores that
+wallet's durable setup and returns the fresh bounded-authority preview.
+Granting authority still requires its own later chat confirmation. You can
+create, adopt, archive, and switch among local Sepolia wallets without entering
+a seed, password, key, path, or internal wallet ID.
+
 > Send 0.02 Sepolia ETH privately to 0x2222…2222.
 
 Use your intended recipient's full address. Hermes shows the amount and
@@ -89,12 +117,27 @@ See [installation details](docs/INSTALL.md) for paths, pins, and troubleshooting
 After Grove enrollment, Hermes can fetch one public HTTPS resource through
 Shade Tree over Tor, with no direct fallback. Say:
 
+> Send a regular public transfer of 0.02 Sepolia ETH to 0x2222…2222.
+
+Hermes uses the selected main account by default. If you explicitly say “from
+the savings public change,” it instead uses spendable public value nested under
+that private balance. It reserves gas, shows the exact public-transfer source,
+executes and verifies it in one task-level call, and never substitutes the
+private route. Regular and private
+sends share the same testnet delegation envelope. Your next chat reply—“yes,”
+“send it,” or ✅—confirms the shown plan; there is no separate interface or
+plan ID for you to operate.
+
 > Fetch https://example.com/data.json through covered egress.
 
 This applies to that explicit request. It is separate from the upcoming private
 search product and does not reroute the whole agent session. Supported on macOS
 Apple silicon and Ubuntu 24.04 ARM64; the current Shade Tree binary is not
 available for Intel Macs. See [covered egress](docs/COVERED-EGRESS.md).
+
+The full walkthrough, including the security policy and evals, is in
+[docs/DEMO.md](docs/DEMO.md). The MCP tools behind these conversations are
+documented in [docs/TOOLS.md](docs/TOOLS.md).
 
 </details>
 
@@ -201,7 +244,7 @@ assets or real value.
 [install-url]: https://github.com/dmarzzz/agent-boost/actions/workflows/release-matrix.yml
 [node-badge]: https://img.shields.io/badge/node-%3E%3D22-3f8f14.svg
 [node-url]: https://nodejs.org/en/download
-[hermes-badge]: https://img.shields.io/badge/hermes-0.16%2B-3f8f14.svg
+[hermes-badge]: https://img.shields.io/badge/hermes-0.21%2B-3f8f14.svg
 [hermes-url]: integrations/hermes/agent-boost/SKILL.md
 [preview-badge]: https://img.shields.io/badge/status-research%20preview-9ee01e.svg
 [license-badge]: https://img.shields.io/badge/license-MIT-blue.svg

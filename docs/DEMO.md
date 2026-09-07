@@ -52,7 +52,7 @@ the configured private-payment path. Hermes also rechecks that
 
 ## 2. Inspect or change the wallet permission
 
-New wallets start with a sane default: up to 10 private sends, 1 Sepolia ETH
+New wallets start with a sane default: up to 10 sends shared by regular and private transfers, 1 Sepolia ETH
 per send, 10 Sepolia ETH total, and seven days. Ask Hermes naturally:
 
 > What are my wallet limits?
@@ -81,15 +81,14 @@ Tell Hermes, for example:
 > Send 0.02 Sepolia ETH privately to
 > 0x2222222222222222222222222222222222222222.
 
-Hermes reads current wallet context and creates a short-lived plan itself. It
-shows the exact Sepolia ETH amount, full recipient address, and a short testnet
-privacy warning. Under the default security policy, reply ✅, `yes`, or `send
-it` to approve. Hermes owns the MCP calls, decision IDs, atomic units, and
-idempotency key; the user never types them.
-
-Agent Boost does not listen to the conversation itself. Hermes reports the
-user's confirmation with `user_confirmed: true`; this is a conversational demo
-control, not independent authentication or an out-of-band approval channel.
+Hermes reads current wallet context and creates a short-lived plan itself. Under
+the default security policy, Hermes shows the exact Sepolia ETH amount, full
+recipient address, and testnet visibility warning in chat, then ends the turn.
+Reply ✅, `yes`, or `send it`; Hermes executes the unchanged decision with
+`user_confirmed: true`. It never sends you to a native or external interface.
+Hermes owns the MCP calls, decision IDs, atomic units, and idempotency key; the
+user never types them. This is a conversational demo control, not independent
+speaker authentication or an out-of-band approval channel.
 
 After confirmation, Hermes executes the immutable plan with a stable request
 ID. The default wallet policy permits:
@@ -104,12 +103,13 @@ ID. The default wallet policy permits:
 Agent Boost asks Kohaku to unshield the `0.1` ETH note to a fresh payment
 subaccount and append the exact recipient transfer as a tail call. The main
 account is a funding source only and has no control or recovery authority over
-subaccounts. Kohaku waits for UserOperation inclusion. Agent Boost stores a recipient
-balance checkpoint before handing execution authority to Kohaku and keeps a
-UserOperation hash distinct from an Ethereum transaction hash. It reports
-`confirmed` only from Kohaku's explicit confirmation, a successful transaction
-receipt, or a sufficient recipient-balance delta. Submitted and interrupted
-requests are reconciled on restart and status reads without broadcasting again.
+subaccounts. Kohaku waits for UserOperation inclusion. Agent Boost journals the
+exact sender-bound UserOperation before Kohaku may broadcast and keeps its
+UserOperation hash distinct from an Ethereum transaction hash. Once that
+journal exists, only its successful exact UserOperation or transaction receipt
+can produce `confirmed`; a recipient balance change is never treated as
+delivery evidence. Submitted and interrupted requests are reconciled on restart
+and status reads without broadcasting again.
 If concrete evidence is unavailable, the durable result remains `submitted` or
 `indeterminate` rather than guessing.
 
@@ -119,9 +119,37 @@ deadline applies to delegated Agent Boost execution, not to the
 wallet, address, or funds. Address and balance reads remain available after it
 expires. This POC currently blocks new Agent Boost transfers under an expired
 delegation; the user can now preview and confirm a renewal conversationally.
-The current release still requires a separately designed and confirmed recovery
-transfer path before it can move those funds. Never
-interpret expiry as deletion or loss of access to the encrypted wallet.
+An exact-amount recovery transfer is separately planned and confirmed; it is
+not a whole-wallet sweep. Never interpret expiry as deletion or loss of access
+to the encrypted wallet.
+
+## Load a previous wallet
+
+Ask Hermes naturally:
+
+> Load my old wallet.
+
+Hermes calls `wallet_preview_saved_profile_load` with your natural wording. The
+tool resolves the sole eligible inactive profile itself; when several profiles
+fit, it returns the friendly-name choices and Hermes asks which one. A reply
+containing just one listed name opens that wallet's exact switch preview. After
+Hermes shows the wallet-load preview and you approve it in chat,
+`wallet_apply_saved_profile_load` archives the current workflow, restores the
+selected profile's durable setup and request state, advances its selection
+epoch, and disables stale signing. The approval
+carries the active friendly name and selection epoch from the preview, so a
+concurrent wallet change makes it fail closed instead of switching from stale
+context. For a private-ready profile that needs authority, that same apply
+result contains the exact fresh-authority preview. Hermes shows it immediately
+and asks for a second, separate reauthorization approval; it does not make an
+extra planning call. Only after `wallet_apply_reauthorization` succeeds can a
+new regular or private transfer be planned.
+
+`wallet_list_saved_profiles` also discovers unregistered local Kohaku wallets. A
+Sepolia entry can be adopted by friendly name without entering a seed, password, private key,
+or filesystem path. Named wallet creation and inactive-profile archival follow
+the same confirmation discipline. Archival retains encrypted state and is
+reversible by selecting the profile later.
 
 ## Start a fresh demo
 
@@ -197,4 +225,6 @@ npm run eval:live -- --hermes "$(command -v hermes)" --provider <provider> --mod
 
 This opt-in eval grades visible response length/content and the exact tool trace.
 It cannot touch a wallet, Tor, Sepolia, or the user's normal Hermes sessions,
-memory, rules, or MCP configuration.
+memory, rules, or MCP configuration. Its disposable Hermes profile defaults
+tool search to `off`, so the weakest-model gate exercises the full eager Agent
+Boost tool contract rather than depending on progressive schema discovery.

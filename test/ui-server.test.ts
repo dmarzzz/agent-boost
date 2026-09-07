@@ -35,6 +35,7 @@ function snapshot(phase: OnboardingPhase = "awaiting_funding"): PublicOnboarding
       perPaymentLimitWei: "100000000000000000",
       lifetimeLimitWei: FUNDING_WEI,
       spentWei: "0",
+      maxPayments: 1,
       expiresAt: "2026-09-02T00:00:00.000Z",
       enabled: phase === "private_ready",
     },
@@ -109,7 +110,9 @@ describe("onboarding UI server", () => {
 
     const response = await fetch(first.url);
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /Dark mode for your agent/);
+    const html = await response.text();
+    assert.match(html, /Getting step 1 ready/);
+    assert.match(html, /data-step="funding"[^>]*>.*>1<.*Fund test wallet/su);
     await server.stop();
     await server.stop();
     running.splice(running.indexOf(server), 1);
@@ -206,6 +209,9 @@ describe("onboarding UI server", () => {
     assert.match(css, /\[hidden\] \{ display: none !important; \}/);
     assert.match(css, /@media \(max-width: 420px\)/);
     assert.match(script, /setAttribute\('aria-current', 'step'\)/);
+    assert.match(script, /Step 1 of 3/);
+    assert.match(script, /Step 2 of 3/);
+    assert.match(script, /Step 3 of 3/);
     assert.match(script, /Still needed on Sepolia/);
     assert.match(script, /Main account address copied\./);
     assert.match(script, /Tor unavailable — direct access disabled/);
@@ -218,6 +224,8 @@ describe("onboarding UI server", () => {
     assert.match(script, /Return to Hermes — Agent Boost is ready/);
     assert.doesNotMatch(script, /\.slice\(0,\s*6\)/u);
     assert.match(css, /\.hermes-handoff\[data-state="ready"\]/);
+    assert.match(css, /\.step-index \{/);
+    assert.match(css, /\.progress li\[data-status="done"\] \.step-index::after \{ content: "✓"/);
   });
 
   it("supports every onboarding phase without adding privileged actions", async () => {

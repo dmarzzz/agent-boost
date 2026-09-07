@@ -19,16 +19,15 @@ export const INDEX_HTML = `<!doctype html>
         </header>
 
         <div class="state-copy" aria-live="polite" aria-atomic="true">
-          <p class="eyebrow">Dark mode for your agent</p>
+          <p class="eyebrow" id="step-count">Getting step 1 ready</p>
           <h1 id="state-title">Creating your wallet</h1>
           <p id="state-description" class="description">Hermes is preparing a private test wallet on this device.</p>
         </div>
 
         <ol class="progress" aria-label="Setup progress">
-          <li data-step="wallet"><span class="step-dot"></span><span>Wallet created</span></li>
-          <li data-step="funding"><span class="step-dot"></span><span>Test ETH received</span></li>
-          <li data-step="shielding"><span class="step-dot"></span><span>Privacy balance prepared</span></li>
-          <li data-step="ready"><span class="step-dot"></span><span>Ready for Hermes</span></li>
+          <li data-step="funding"><span class="step-index" aria-hidden="true">1</span><span>Fund test wallet</span></li>
+          <li data-step="shielding"><span class="step-index" aria-hidden="true">2</span><span>Prepare private balance</span></li>
+          <li data-step="ready"><span class="step-index" aria-hidden="true">3</span><span>Ready for Hermes</span></li>
         </ol>
 
         <div id="error-panel" class="error-panel" role="alert" hidden>
@@ -163,21 +162,22 @@ button, code { font: inherit; }
 .network-chip { margin-left: auto; padding: 6px 9px; border: 1px solid rgba(255, 184, 77, 0.34); border-radius: 99px; color: var(--amber); font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.05em; text-transform: uppercase; }
 
 .state-copy { margin: clamp(70px, 12vh, 132px) 0 48px; }
-.eyebrow { margin: 0 0 16px; color: var(--ultraviolet); font: 650 13px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.08em; text-transform: uppercase; }
+.eyebrow { margin: 0 0 16px; color: #a99aff; font: 650 13px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.01em; }
 h1 { max-width: 630px; margin: 0; font-family: "Arial Narrow", "Roboto Condensed", ui-sans-serif, sans-serif; font-size: clamp(43px, 6vw, 76px); font-stretch: condensed; font-weight: 760; letter-spacing: -0.055em; line-height: 0.96; text-wrap: balance; }
 .description { max-width: 560px; margin: 24px 0 0; color: var(--muted); font-size: 17px; line-height: 1.6; }
 
 .progress { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
-.progress li { position: relative; display: flex; align-items: center; gap: 16px; min-height: 44px; color: #77717f; font-size: 14px; }
-.progress li:not(:last-child)::after { content: ""; position: absolute; z-index: 0; top: 28px; bottom: -16px; left: 6px; width: 1px; background: var(--line); }
-.step-dot { z-index: 1; width: 13px; height: 13px; flex: 0 0 auto; border: 2px solid #57505f; border-radius: 50%; background: var(--carbon); }
+.progress li { position: relative; display: flex; align-items: center; gap: 14px; min-height: 50px; color: #77717f; font-size: 14px; }
+.progress li:not(:last-child)::after { content: ""; position: absolute; z-index: 0; top: 35px; bottom: -15px; left: 14px; width: 1px; background: var(--line); }
+.step-index { position: relative; z-index: 1; width: 29px; height: 29px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid #57505f; border-radius: 50%; background: var(--carbon); color: #8d8695; font: 650 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .progress li[data-status="active"] { color: var(--bone); }
-.progress li[data-status="active"] .step-dot { border-color: var(--amber); box-shadow: 0 0 0 5px rgba(255, 184, 77, 0.08); }
+.progress li[data-status="active"] .step-index { border-color: var(--amber); color: var(--amber); box-shadow: 0 0 0 5px rgba(255, 184, 77, 0.08); }
 .progress li[data-status="done"] { color: #b9b3c0; }
-.progress li[data-status="done"] .step-dot { border-color: var(--ultraviolet); background: var(--ultraviolet); }
+.progress li[data-status="done"] .step-index { border-color: var(--ultraviolet); background: var(--ultraviolet); color: transparent; }
+.progress li[data-status="done"] .step-index::after { content: "✓"; position: absolute; color: var(--bone); font-size: 13px; }
 .progress li[data-status="done"]::after { background: var(--ultraviolet); }
 .progress li[data-status="ready"] { color: var(--volt); }
-.progress li[data-status="ready"] .step-dot { border-color: var(--volt); background: var(--volt); box-shadow: 0 0 15px rgba(201, 255, 87, 0.38); }
+.progress li[data-status="ready"] .step-index { border-color: var(--volt); background: var(--volt); color: var(--soot); box-shadow: 0 0 15px rgba(201, 255, 87, 0.38); }
 
 .return-note { margin: auto 0 0; padding-top: 42px; color: var(--muted); font-size: 13px; }
 .return-note[data-ready="true"] { color: var(--volt); font-weight: 650; }
@@ -207,7 +207,7 @@ h1 { max-width: 630px; margin: 0; font-family: "Arial Narrow", "Roboto Condensed
 .funding-facts { display: grid; min-width: 0; gap: 24px; }
 .funding-facts > * { min-width: 0; }
 .primary-fact, .fact-row { padding-bottom: 20px; border-bottom: 1px solid var(--line); }
-.fact-label { display: block; margin-bottom: 8px; color: var(--muted); font: 600 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.fact-label { display: block; margin-bottom: 8px; color: var(--muted); font: 600 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .01em; }
 .primary-fact strong { color: var(--amber); font: 650 clamp(23px, 4vw, 32px)/1.1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: -.04em; }
 .address-row { display: flex; min-width: 0; align-items: center; gap: 10px; }
 .address-row code { min-width: 0; flex: 1 1 0; overflow: hidden; color: var(--bone); font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
@@ -282,6 +282,7 @@ export const APP_JS = String.raw`
 const elements = {
   title: document.querySelector('#state-title'),
   description: document.querySelector('#state-description'),
+  stepCount: document.querySelector('#step-count'),
   aperture: document.querySelector('#aperture'),
   qrStage: document.querySelector('#qr-stage'),
   qr: document.querySelector('#funding-qr'),
@@ -306,15 +307,27 @@ const elements = {
 };
 
 const viewByPhase = {
-  not_started: ['Creating your test wallet', 'Hermes is preparing a local Sepolia wallet on this device.', 0, 0],
-  creating_wallet: ['Creating your test wallet', 'A new local Sepolia wallet is being prepared for this demo.', 0, 0],
-  preparing_privacy: ['Creating your test wallet', 'Agent Boost is finishing the wallet before funding.', 1, 1],
-  awaiting_funding: ['Fund your main account', 'Scan the QR code or copy the address. Send only Sepolia ETH.', 1, 1],
-  funding_pending: ['More funding needed', 'Some Sepolia ETH arrived. Send the remaining amount shown.', 2, 2],
-  funded_public: ['Funding found', 'Your test ETH arrived. Agent Boost is preparing the private balance.', 2, 2],
-  shielding: ['Preparing your private balance', 'This can take a few minutes. No action is needed.', 3, 3],
-  private_ready: ['Ready', 'Your private test balance and Tor-routed Sepolia access are ready.', 4, 4],
-  failed: ['Setup needs attention', 'Agent Boost could not finish setup automatically.', 0, 0],
+  not_started: ['Creating your test wallet', 'Hermes is preparing a local Sepolia wallet on this device.', 0],
+  creating_wallet: ['Creating your test wallet', 'A new local Sepolia wallet is being prepared for this demo.', 0],
+  preparing_privacy: ['Creating your test wallet', 'Agent Boost is finishing the wallet before funding.', 1],
+  awaiting_funding: ['Fund your test wallet', 'Scan the QR code or copy the address. Send only Sepolia ETH.', 1],
+  funding_pending: ['More funding needed', 'Some Sepolia ETH arrived. Send the remaining amount shown.', 2],
+  funded_public: ['Preparing private balance', 'Funding found. Agent Boost is preparing the private balance.', 2],
+  shielding: ['Preparing private balance', 'Funding found. Privacy preparation can take a few minutes.', 3],
+  private_ready: ['Dark Mode online', 'Your private test balance and Tor-routed Sepolia access are ready.', 4],
+  failed: ['Setup needs attention', 'Agent Boost could not finish setup automatically.', 0],
+};
+
+const stepLabelByPhase = {
+  not_started: 'Getting step 1 ready',
+  creating_wallet: 'Getting step 1 ready',
+  preparing_privacy: 'Getting step 1 ready',
+  awaiting_funding: 'Step 1 of 3',
+  funding_pending: 'Step 1 of 3',
+  funded_public: 'Step 2 of 3',
+  shielding: 'Step 2 of 3',
+  private_ready: 'Step 3 of 3',
+  failed: 'Setup paused',
 };
 
 function formatEth(wei) {
@@ -342,14 +355,13 @@ function setProgress(phase, fullyReady) {
     for (const step of elements.steps) {
       delete step.dataset.status;
       step.removeAttribute('aria-current');
-      step.setAttribute('aria-label', step.textContent.trim() + ', status unavailable');
+      step.setAttribute('aria-label', step.lastElementChild.textContent.trim() + ', status unavailable');
     }
     return;
   }
   const statuses = {
-    wallet: phase === 'creating_wallet' || phase === 'not_started' ? 'active' : 'done',
-    funding: ['awaiting_funding', 'preparing_privacy'].includes(phase) ? 'active' : ['funding_pending', 'funded_public', 'shielding', 'private_ready'].includes(phase) ? 'done' : '',
-    shielding: phase === 'shielding' ? 'active' : phase === 'private_ready' ? 'done' : '',
+    funding: ['not_started', 'creating_wallet', 'preparing_privacy', 'awaiting_funding', 'funding_pending'].includes(phase) ? 'active' : ['funded_public', 'shielding', 'private_ready'].includes(phase) ? 'done' : '',
+    shielding: ['funded_public', 'shielding'].includes(phase) ? 'active' : phase === 'private_ready' ? 'done' : '',
     ready: fullyReady ? 'ready' : phase === 'private_ready' ? 'active' : '',
   };
   for (const step of elements.steps) {
@@ -362,7 +374,7 @@ function setProgress(phase, fullyReady) {
       delete step.dataset.status;
       step.removeAttribute('aria-current');
     }
-    const label = step.textContent.trim();
+    const label = step.lastElementChild.textContent.trim();
     const accessibleStatus = status === 'done' || status === 'ready'
       ? 'complete'
       : status === 'active'
@@ -382,6 +394,7 @@ function render(snapshot) {
     : viewByPhase[snapshot.phase] || viewByPhase.failed;
   elements.title.textContent = view[0];
   elements.description.textContent = view[1];
+  elements.stepCount.textContent = stepLabelByPhase[snapshot.phase] || 'Setup status';
   elements.aperture.dataset.progress = String(view[2]);
   setProgress(snapshot.phase, fullyReady);
 

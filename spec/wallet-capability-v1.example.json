@@ -1,11 +1,12 @@
 {
-  "contract": "org.agentboost.wallet/1.4",
+  "contract": "org.agentboost.wallet/1.8",
   "chain_id": "eip155:11155111",
   "network_name": "Sepolia",
   "asset_type": "eip155:11155111/slip44:60",
   "funding_target_atomic": "200000000000000000",
   "privacy_protocol": "tornado",
   "private_payment_operation": "unshield_next_tail_call",
+  "regular_transfer_operation": "public_eth_transfer",
   "authority": {
     "mode": "testnet_delegated",
     "can_cause_signing": true,
@@ -101,5 +102,42 @@
     "requires_user_confirmation": true,
     "archives_previous_state": true,
     "rebroadcasts_unresolved_payments": false
+  },
+  "wallet_management": {
+    "available": true,
+    "managed_wallets_only": true,
+    "accepts_seed_or_password": false,
+    "selection_requires_separate_reauthorization": false,
+    "selection_preserves_valid_authorization": true,
+    "recovery_transfer_available": true,
+    "regular_transfer_available": true,
+    "multiple_profiles": true
+  },
+  "private_balance_management": {
+    "available": true,
+    "named": true,
+    "multiple_per_profile": true,
+    "create_available": true,
+    "fund_from_main_available": true,
+    "fund_from_private_balance_available": true,
+    "per_balance_policy_editing": true,
+    "public_change": {
+      "nested_under_source_private_balance": true,
+      "regular_transfer_source": true
+    }
+  },
+  "regular_transfer": {
+    "available": true,
+    "source_kinds": ["main", "private_balance_public_change"]
+  },
+  "wallet_tree": {
+    "available": true,
+    "hierarchy": "profile_container",
+    "account_short_names": ["main", "private"],
+    "active_balances_refreshed_live": true,
+    "inactive_public_balances_refreshed_live": true,
+    "inactive_private_balances": "last_known",
+    "includes_addresses": false,
+    "implies_control": false
   }
 }

@@ -11,6 +11,7 @@ import {
   MAX_POLICY_PAYMENT_LIMIT_WEI,
   MAX_POLICY_PAYMENTS,
   MAX_POLICY_TTL_MS,
+  TORNADO_DEPOSIT_GAS_RESERVE_WEI,
   type PaymentApproval,
 } from "./contracts.js";
 import { AGENT_BOOST_RUNTIME_LOCK_PORT } from "./state/runtime-lock.js";
@@ -223,6 +224,30 @@ export function loadConfig(
   if (delegationTtlMs > MAX_POLICY_TTL_MS) {
     throw new Error("AGENT_BOOST_DELEGATION_TTL_MS exceeds the adjustable testnet bounds");
   }
+  const shieldAmountWei = unsignedBigIntEnv(
+    env.AGENT_BOOST_SHIELD_WEI,
+    DEFAULT_SHIELD_WEI,
+    "AGENT_BOOST_SHIELD_WEI",
+  );
+  if (shieldAmountWei !== DEFAULT_SHIELD_WEI) {
+    throw new Error(
+      `AGENT_BOOST_SHIELD_WEI must equal the pinned Sepolia Tornado 0.1 ETH denomination (${DEFAULT_SHIELD_WEI.toString()} wei)`,
+    );
+  }
+  const fundingTargetWei = unsignedBigIntEnv(
+    env.AGENT_BOOST_FUNDING_WEI,
+    DEFAULT_FUNDING_WEI,
+    "AGENT_BOOST_FUNDING_WEI",
+  );
+  const autoShield = booleanEnv(env.AGENT_BOOST_AUTO_SHIELD, true);
+  if (
+    autoShield &&
+    fundingTargetWei < shieldAmountWei + TORNADO_DEPOSIT_GAS_RESERVE_WEI
+  ) {
+    throw new Error(
+      "AGENT_BOOST_FUNDING_WEI must cover the shield amount plus the Tornado deposit gas reserve",
+    );
+  }
 
   return {
     stateDir,
@@ -248,22 +273,14 @@ export function loadConfig(
     rpcUrl,
     uiHost: "127.0.0.1",
     uiPort,
-    fundingTargetWei: unsignedBigIntEnv(
-      env.AGENT_BOOST_FUNDING_WEI,
-      DEFAULT_FUNDING_WEI,
-      "AGENT_BOOST_FUNDING_WEI",
-    ),
-    shieldAmountWei: unsignedBigIntEnv(
-      env.AGENT_BOOST_SHIELD_WEI,
-      DEFAULT_SHIELD_WEI,
-      "AGENT_BOOST_SHIELD_WEI",
-    ),
+    fundingTargetWei,
+    shieldAmountWei,
     paymentLimitWei,
     paymentLifetimeLimitWei,
     maxPayments,
     delegationTtlMs,
     autoOpenUi: booleanEnv(env.AGENT_BOOST_OPEN_UI, false),
-    autoShield: booleanEnv(env.AGENT_BOOST_AUTO_SHIELD, true),
+    autoShield,
     executeEnabled: booleanEnv(env.AGENT_BOOST_EXECUTE, true),
     security: {
       default: { ...DEFAULT_SECURITY },

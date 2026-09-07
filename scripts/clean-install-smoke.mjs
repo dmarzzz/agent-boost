@@ -19,6 +19,18 @@ import {
 } from "./lib/kohaku-install.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const hermesSkillNames = [
+  "agent-boost-setup",
+  "agent-boost",
+  "agent-boost-wallet-tree",
+  "agent-boost-wallets",
+  "agent-boost-policy",
+  "agent-boost-transfers",
+  "agent-boost-wallet-actions",
+  "agent-boost-authorize",
+  "agent-boost-confirm",
+  "agent-boost-covered-web",
+];
 let sandbox;
 
 try {
@@ -72,10 +84,10 @@ try {
     "README.md",
     "agent-boost.example.toml",
     "dist/cli.js",
+    "dist/hermes/turn-gate.js",
     "dist/kohaku/network-guard.mjs",
     "dist/shade-tree/runtime.js",
-    "integrations/hermes/agent-boost/SKILL.md",
-    "integrations/hermes/agent-boost-setup/SKILL.md",
+    ...hermesSkillNames.map((name) => `integrations/hermes/${name}/SKILL.md`),
   ]) {
     const metadata = await lstat(join(packageRoot, required));
     if (!metadata.isFile()) throw new Error(`Packaged artifact is missing ${required}`);
@@ -121,7 +133,7 @@ try {
       filename: basename(tarball),
       files: packageFiles.length,
       version: version.stdout.trim(),
-      hermes_skills: 2,
+      hermes_skills: hermesSkillNames.length,
     },
     checks: [
       "native_host_supported",
@@ -130,6 +142,7 @@ try {
       "runtime_config_loaded",
       "default_security_confirmed",
       "covered_egress_defaults_loaded",
+      "hermes_turn_gate_packaged",
       "hermes_skills_packaged",
       "private_notes_excluded",
     ],

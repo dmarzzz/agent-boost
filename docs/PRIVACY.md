@@ -13,6 +13,27 @@ The accurate claims for this preview are:
 
 ![What the wallet RPC route, covered HTTPS egress, and model tool boundary protect—and what remains visible](../assets/privacy-scope.svg)
 
+- Initial funding is public. The funder, destination, amount, and timing are
+  visible on Sepolia.
+- Shielding and later unshielding break the direct deposit/withdrawal link, but
+  timing, amounts, a small testnet anonymity set, and protocol activity may
+  still correlate them.
+- Agent Boost and Kohaku route Ethereum JSON-RPC over Tor with remote hostname
+  resolution and no direct fallback. This hides the machine's origin IP from
+  the RPC provider, but the provider still sees RPC methods, wallet addresses,
+  payloads, and timing.
+- Kohaku separately uses Tor for supported privacy-protocol HTTP traffic.
+  Explicit `egress_fetch` calls can use Shade Tree after enrollment. Hermes,
+  model-provider, Matrix, browser, and all other process traffic remain outside
+  that covered request.
+- A fresh or stealth address alone does not hide its funding transaction.
+- Demo reset archives prior state and retains old Kohaku wallet data locally.
+  Saved profiles can be selected again and exact private amounts can be
+  recovered after separate confirmation, but Agent Boost never exports a seed.
+- Recipient balance movement is not treated as delivery evidence. A journaled
+  broadcast is confirmed only by its exact successful transaction or
+  UserOperation receipt, including the expected sender binding.
+
 ## On-chain activity
 
 Initial funding is public. The funder, destination, amount, and timing are

@@ -6,7 +6,7 @@ conversation after installation.
 
 ## Quick install
 
-You need Git, Node.js 22 or newer, npm, and a working Hermes install. No system
+You need Git, Node.js 22 or newer, npm, and Hermes 0.21 or newer. No system
 Tor installation is required; Agent Boost embeds Arti through `tor-js`.
 
 ```console
@@ -33,7 +33,8 @@ terminal or MCP command is needed after this handoff.
 
 Every change runs the same clean-tarball install smoke on native GitHub runners
 for all three hosts. The smoke installs into an empty prefix, starts the
-packaged executable, loads runtime configuration, checks both Hermes skills,
+packaged executable, loads runtime configuration, checks the complete modular
+Hermes skill bundle,
 and rejects private planning material in the package.
 
 ## What the installer does
@@ -44,7 +45,9 @@ and rejects private planning material in the package.
 - downloads the checksummed Shade Tree v0.4.0 client when the host has a live
   release asset;
 - configures the active Hermes profile without replacing a conflicting MCP
-  entry;
+  entry, validating every file in the modular skill bundle before installing
+  any of them, writing each replacement atomically with a backup, and exposing
+  the MCP entry only once the complete bundle is present;
 - leaves covered egress in `needs_enrollment` until an operator admits the
   locally generated identity and supplies matching trust-pinned Grove values.
 
@@ -71,6 +74,12 @@ For an already-running Hermes conversation, reload instead of restarting:
 local:   /reload-skills, then /reload-mcp
 Matrix:  !reload-skills, then !reload-mcp
 ```
+
+A full restart is still required when the native pre-LLM bridge or the
+turn-gate hooks are first installed or changed: skill and MCP reload commands
+do not register plugins or hooks. After restarting, use `/new` locally or
+`!new` over Matrix so the upgraded tool contract starts in a fresh
+conversation.
 
 If the installer reports that `~/.local/bin` is not on `PATH`, add it before
 running these commands.
