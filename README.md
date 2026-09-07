@@ -100,6 +100,8 @@ available for Intel Macs. See [covered egress](docs/COVERED-EGRESS.md).
 
 ## How it works
 
+![Hermes sends intent to Agent Boost, where code enforces live facts, policy, approval, and redaction; private inference is coming soon](assets/agent-boost-boundary.svg)
+
 Hermes handles the conversation. Agent Boost is the local service that:
 
 - reads current balances and readiness;
@@ -115,6 +117,33 @@ The design rule is simple: a better model should improve the conversation;
 balances and payment rules belong in code. Read the
 [architecture](docs/ARCHITECTURE.md) and
 [product philosophy](docs/PRODUCT-PHILOSOPHY.md).
+
+### System map
+
+```mermaid
+flowchart TB
+    U[User] <-->|conversation and verbal approval| H[Hermes]
+    H <-->|MCP over stdio| A[Agent Boost sidecar]
+    A -->|loopback-only funding page| UI[QR onboarding UI]
+    A -->|bounded argv + random loopback RPC URL| K[Kohaku CLI]
+    A -->|fixed-origin JSON-RPC| T[Embedded Tor / Arti]
+    K -->|JSON-RPC via authenticated relay| T
+    K -->|supported protocol HTTP via its Tor client| E[(Sepolia + protocol services)]
+    T -->|HTTPS JSON-RPC through Tor| E
+    A -->|explicit HTTPS GET or HEAD| S[Shade Tree authenticated Proxy]
+    S -->|embedded Arti + RLN-proved CONNECT| W[(Public HTTPS destination)]
+    O[Event operator] -->|scan QR and fund| E
+    A -->|address, balances, policy, status| H
+
+    classDef person fill:#f1f1df,stroke:#536047,color:#17210f,stroke-width:2px;
+    classDef core fill:#11180c,stroke:#b9ff1d,color:#f1f1df,stroke-width:3px;
+    classDef route fill:#dff5a3,stroke:#536047,color:#17210f,stroke-width:2px;
+    classDef external fill:#fbfbef,stroke:#8b9580,color:#17210f,stroke-width:2px;
+    class U,H,O person;
+    class A core;
+    class UI,K,T,S route;
+    class E,W external;
+```
 
 ## Privacy boundaries
 
