@@ -189,8 +189,11 @@ See [Contributing](CONTRIBUTING.md) for conventions and the test layout.
 
 ## License
 
-No license has been granted yet. Treat this repository as all rights reserved
-until a license file is added.
+Released under the [MIT License](LICENSE).
+
+The wallet preview remains unaudited research software. The license grants
+permission to use the code; it does not make the software safe for mainnet
+assets or real value.
 
 [ci-badge]: https://github.com/dmarzzz/agent-boost/actions/workflows/ci.yml/badge.svg
 [ci-url]: https://github.com/dmarzzz/agent-boost/actions/workflows/ci.yml
@@ -201,5 +204,5 @@ until a license file is added.
 [hermes-badge]: https://img.shields.io/badge/hermes-0.16%2B-3f8f14.svg
 [hermes-url]: integrations/hermes/agent-boost/SKILL.md
 [preview-badge]: https://img.shields.io/badge/status-research%20preview-9ee01e.svg
-[license-badge]: https://img.shields.io/badge/license-all%20rights%20reserved-lightgrey.svg
-[license-url]: #license
+[license-badge]: https://img.shields.io/badge/license-MIT-blue.svg
+[license-url]: LICENSE
