@@ -7946,3 +7946,103 @@ test("MCP rejects any claim that the main account controls subaccounts", async (
   await client.close();
   await server.close();
 });
+
+test("a failing capability read is redacted instead of returning the raw error", async () => {
+  // Every other handler routes exceptions through redactPublicMessage. These
+  // three had no try/catch, so a state-store failure reached the SDK's default
+  // handler, which returns error.message verbatim — absolute path and all.
+  const runtime = fakeRuntime();
+  // The manifest digest is computed from these at construction time, so let
+  // the startup read succeed and fail only the later handler call.
+  const originalCapabilities = runtime.capabilities.bind(runtime);
+  const originalEgressCapabilities = runtime.egressCapabilities.bind(runtime);
+  let started = false;
+  const leak = () => {
+    throw new Error(
+      "ENOENT: no such file or directory, open '/Users/example/.agent-boost/state.json' see https://internal.example/debug",
+    );
+  };
+  runtime.capabilities = async () =>
+    started ? leak() : originalCapabilities();
+  runtime.egressCapabilities = async () =>
+    started ? leak() : originalEgressCapabilities();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client({
+    name: "capability-redaction-test",
+    version: "1.0.0",
+  }));
+  try {
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+    started = true;
+    for (const name of ["capabilities", "egress_capabilities"]) {
+      const response = await client.callTool({
+        name,
+        arguments: {},
+      }) as CallToolResult;
+      const structured = response.structuredContent as {
+        outcome: string;
+        code: string;
+        data: { message: string };
+      };
+      assert.equal(structured.outcome, "blocked", `${name} must block, not throw`);
+      assert.equal(structured.code, "REQUEST_BLOCKED");
+      assert.ok(
+        !structured.data.message.includes("/Users/"),
+        `${name} leaked an absolute path: ${structured.data.message}`,
+      );
+      assert.ok(
+        !/https?:\/\//u.test(structured.data.message),
+        `${name} leaked a url: ${structured.data.message}`,
+      );
+      assert.match(structured.data.message, /\[redacted-path\]/u);
+      assert.match(structured.data.message, /\[redacted-url\]/u);
+    }
+  } finally {
+    await server.close().catch(() => undefined);
+  }
+});
+
+test("a failing wallet capability resource read is redacted before it throws", async () => {
+  // A resource read carries no envelope, so the failure stays a throw. It must
+  // still be scrubbed: the SDK surfaces error.message as written.
+  const runtime = fakeRuntime();
+  const originalCapabilities = runtime.capabilities.bind(runtime);
+  let started = false;
+  runtime.capabilities = async () => {
+    if (!started) return originalCapabilities();
+    throw new Error(
+      "EACCES: permission denied, open '/Users/example/.agent-boost/state.json'",
+    );
+  };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await createMcpServer(runtime);
+  const client = testMcpClient(new Client({
+    name: "resource-redaction-test",
+    version: "1.0.0",
+  }));
+  try {
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+    started = true;
+    await assert.rejects(
+      () => client.readResource({ uri: "agent-boost://capabilities/wallet/v1" }),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        assert.ok(
+          !message.includes("/Users/"),
+          `the resource read leaked an absolute path: ${message}`,
+        );
+        assert.ok(message.includes("[redacted-path]"), message);
+        return true;
+      },
+    );
+  } finally {
+    await server.close().catch(() => undefined);
+  }
+});

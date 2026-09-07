@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Routed the last three unguarded handlers through the same error redaction as
+  every other one. `capabilities`, `egress_capabilities`, and the
+  `wallet-capability-v1` resource had no try/catch, so a state-store failure
+  reached the MCP SDK's default handler and returned `error.message` verbatim,
+  absolute path included. The two tools now return a blocked envelope and the
+  resource scrubs its message before rethrowing.
+
 - Moved Hermes pre-LLM turn authentication from a shell hook into the native
   output-guard plugin so full parent-session provenance isolates shared-session
   review/task forks. The installer now pins the plugin to the exact resolved
