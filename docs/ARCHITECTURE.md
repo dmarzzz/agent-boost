@@ -1,5 +1,12 @@
 # Architecture
 
+Agent Boost separates a conversational planner from the code that owns live
+facts, policy, secrets, and side effects. The local sidecar is the contract
+boundary; Kohaku owns wallet cryptography, while the Tor and Shade Tree paths
+remain deliberately narrow.
+
+## System map
+
 ```mermaid
 flowchart LR
     U[User] <-->|conversation and verbal approval| H[Hermes]
@@ -16,6 +23,15 @@ flowchart LR
     S -->|embedded Arti + RLN-proved CONNECT| W[(Public HTTPS destination)]
     O[Event operator] -->|scan QR and fund| E
     A -->|address, balances, policy, status| H
+
+    classDef person fill:#f1f1df,stroke:#536047,color:#17210f,stroke-width:2px;
+    classDef core fill:#11180c,stroke:#b9ff1d,color:#f1f1df,stroke-width:3px;
+    classDef route fill:#dff5a3,stroke:#536047,color:#17210f,stroke-width:2px;
+    classDef external fill:#fbfbef,stroke:#8b9580,color:#17210f,stroke-width:2px;
+    class U,H,O person;
+    class A core;
+    class UI,K,T,S route;
+    class E,W external;
 ```
 
 Agent Boost is a local, wallet-first sidecar between Hermes and Kohaku. It owns
@@ -37,8 +53,11 @@ seed storage, Tornado proving, signing, and broadcast.
 | Sepolia RPC client | Tor-routed chain assertion and live public balance reads |
 | State store | Atomic durable setup, plan, request, delegation, wallet-profile, and archive records |
 
-The first release contains no general agent egress or operator approval
-dashboard. Its proxy is narrowly limited to the configured Sepolia RPC origin.
+The preview contains no blanket process egress or operator approval dashboard.
+Its wallet relay is narrowly limited to the configured Sepolia RPC origin. The
+optional Shade Tree Proxy is a separate, authenticated loopback service used
+only by the three bounded covered-egress tools; it never reroutes Hermes or its
+model and Matrix traffic.
 
 ## Local surfaces
 

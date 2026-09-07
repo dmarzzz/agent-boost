@@ -149,7 +149,7 @@ the wrong workflow.
 | `wallet_get_recovery_request` | `request_id` | later/manual redacted recovery status without execution or rebroadcast |
 | `wallet_start_new_demo` | `user_confirmed` plus the preview's `expected_active_wallet_name` and `expected_active_selection_epoch` | archive ID, new setup, new QR; a stale or unbound approval changes nothing |
 
-## Anonymous egress
+## Covered egress
 
 After a Grove operator enrolls the installation, `egress_fetch` sends one
 explicit public HTTPS GET or HEAD through the authenticated loopback Shade Tree

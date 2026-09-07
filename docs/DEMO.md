@@ -1,6 +1,12 @@
 # Run the demo
 
-The full walkthrough of the three conversations the README shows, plus the security policy and the conversation evals.
+The full walkthrough of the three conversations the README shows, plus the
+security policy and the conversation evals.
+
+> [!CAUTION]
+> Use a disposable wallet and valueless Sepolia ETH only. Agent Boost is an
+> unaudited research preview, not a production custody system or anonymity
+> guarantee.
 
 ## 1. Set up the wallet
 
@@ -23,6 +29,11 @@ on mainnet or another network.
 After your acknowledgement, Hermes uses bounded status checks without flooding
 or holding the conversation in an open-ended loop:
 
+![Wallet creation, Sepolia funding, shielding, and private-ready stages](../assets/onboarding-flow.svg)
+
+<details>
+<summary>Internal onboarding phases</summary>
+
 ```text
 creating_wallet
   → preparing_privacy
@@ -32,6 +43,8 @@ creating_wallet
   → shielding
   → private_ready
 ```
+
+</details>
 
 When `private_ready` appears, at least `0.1` Sepolia ETH is spendable through
 the configured private-payment path. Hermes also rechecks that

@@ -1,0 +1,18 @@
+Use case: ads-marketing.
+Asset type: Final square Twitter/X launch graphic, 1600x1600 or 2048x2048, designed to be clearly readable when displayed only 400px wide.
+Input image is a BRAND REFERENCE and redesign source: Agent Boost's existing green phosphor banner. This is a substantial redesign authorized by the user to maximize legibility and immediate comprehension for builders/operators of Hermes agents, especially in crypto/privacy. Preserve the recognizable green switch with black spiked eye/sun emblem, lime palette, and pixel-style AGENT BOOST wordmark. All other layout can change.
+
+One memorable visual: an oversized green ON toggle crossing a clean light-to-dark boundary. Use the switch as the single illustration, large and tactile, with restrained phosphor glow. Eliminate the complex circuit diagram, tiny icons, logos for other products, glowing feature boxes, tiny status meters, decorative microtext, and busy scanline overlays. No Hermes or OpenClaw logos. The brand is Agent Boost.
+
+Hierarchy and composition, with generous 90px safe margins:
+1. Top left: the AGENT BOOST wordmark, recognizable pixel lettering, medium sized.
+2. The dominant headline, VERY LARGE, left aligned, broken across two or three short lines: "Dark mode for your agent." Use strong clean display typography that remains readable at thumbnail size. Do not make this a tiny footer.
+3. Large recognizable ON toggle in the central area. It can sit across a narrow pale-green-to-near-black transition to embody dark mode.
+4. Under the main headline/illustration, large plain sans-serif text: "Private payments for Hermes."
+5. Next line, also comfortably readable: "Keys stay out of model prompts."
+6. The bottom area cleanly separates the future features in two simple text rows. Exact text: "Private search — Coming soon" and "Private inference — Coming soon". Give "Coming soon" a restrained outlined badge or otherwise unambiguous status treatment. No ON status for these.
+7. A quiet but still readable footer: "Research preview · Sepolia testnet".
+
+Palette based on source: deep black #010301, phosphor lime #C9FF57, pale green #D6E6BF, crisp near-white #F3F8E8. Limit the bright glow to the switch. Body lettering should be crisp, high contrast, and free of CRT blur; minimum body size around 52px on a 1600px canvas. Typography and reading order matter more than decorations. Keep ample breathing room between text blocks.
+
+Only include the exact copy above, and "ON" on the toggle. No additional slogans, invented features, claims, URLs, hashtags, logos, fine print, watermarks, or UI screenshots. This should feel like a distinctive polished product poster, not a dashboard or generic AI cyberpunk artwork.

@@ -1,8 +1,8 @@
 # Threat model
 
 Agent Boost is an unaudited Sepolia demonstration. Its goal is to reduce secret
-exposure in an agent tool interface and constrain one testnet payment—not to
-provide a production custody boundary or guaranteed anonymity.
+exposure in an agent tool interface and constrain bounded testnet payments—not
+to provide a production custody boundary or guaranteed anonymity.
 
 ## Protected data
 

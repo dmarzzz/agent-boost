@@ -1,0 +1,7 @@
+After install, tell Hermes: “Set up Agent Boost for me.”
+
+Scan the funding QR and send test ETH. Agent Boost shields 0.1 Sepolia ETH through Kohaku.
+
+Then ask it to pay someone. Review the amount + recipient and approve.
+
+Sepolia only. Disposable test funds.
