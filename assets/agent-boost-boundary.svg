@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="600" viewBox="0 0 1440 600" role="img" aria-labelledby="title desc">
   <title id="title">Agent Boost trust boundary</title>
-  <desc id="desc">Hermes sends user intent to the local Agent Boost sidecar, which enforces live facts, policy, approval, and redaction before using private payment, covered egress, or private inference paths. Signing material never enters the model conversation.</desc>
+  <desc id="desc">Hermes sends user intent to the local Agent Boost sidecar, which enforces live facts, policy, approval, and redaction before using private payment or covered egress paths. Private inference is coming soon. Signing material never enters the model conversation.</desc>
   <defs>
     <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
       <path d="M28 0H0V28" fill="none" stroke="#182111" stroke-opacity=".07"/>
@@ -96,7 +96,7 @@
     <circle cx="55" cy="63" r="25" fill="#17210f"/>
     <path d="M55 46L59 58L71 63L59 68L55 80L51 68L39 63L51 58Z" fill="#b9ff1d"/>
     <text x="96" y="53" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="21" font-weight="750">Private inference</text>
-    <text x="96" y="82" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Experimental · attested compute</text>
+    <text x="96" y="82" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Coming soon · attested compute</text>
   </g>
 
   <rect x="64" y="510" width="856" height="52" rx="14" fill="#dff5a3"/>
