@@ -23,7 +23,29 @@ Runs locally. Powered by Kohaku.
 > never send mainnet assets or real value.
 
 **[Get started](#get-started)** · [Payment walkthrough](docs/DEMO.md) ·
-[Privacy boundaries](#privacy-boundaries) · [All docs](docs/README.md)
+[Future work](#future-work) · [Privacy boundaries](#privacy-boundaries) ·
+[All docs](docs/README.md)
+
+## Future work
+
+- **Kohaku integration: research preview.** Wallet setup, fresh addresses,
+  shielding, and private Sepolia test payments are implemented through Kohaku.
+  See the [architecture](docs/ARCHITECTURE.md).
+- **MCP/policy framework: research preview.** Hermes connects through MCP;
+  spending limits, expiry, approval rules, and duplicate-execution protection
+  are enforced in code. See the [integration](docs/INTEGRATION.md) and
+  [capability contract](docs/CAPABILITY-CONTRACT.md).
+- **Anonymous inference: next, coming soon.** We plan to support the draft
+  [Attested Confidential Inference (ACI) standard](https://github.com/Dstack-TEE/private-ai-gateway/blob/main/spec/aci.md)
+  for attested confidential execution and
+  [ZK API usage credits](https://ethresear.ch/t/zk-api-usage-credits-llms-and-beyond/24104)
+  for anonymous paid access.
+- **Private search: after anonymous inference, coming soon.** Planned work
+  draws on the [Tiptoe paper](https://eprint.iacr.org/2023/1438) and our
+  [private-re-search research and prototypes](https://github.com/dmarzzz/private-re-search).
+  We plan to extend the same
+  [ZK API usage credits](https://ethresear.ch/t/zk-api-usage-credits-llms-and-beyond/24104)
+  approach to anonymous paid search.
 
 ## Get started
 
