@@ -1,76 +1,85 @@
-# Agent Boost — Twitter post kit
+# Agent Boost posting kit
 
-Prepared for September 7, 2026, America/New_York.
+## Post this
 
-## Ready to post
+1. Copy **post.txt**.
+2. Attach **agent-boost-social.png** — the square version made for the feed.
+3. Use **alt-text.txt** as the image description.
+4. Add **reply-how-it-works.txt** if you want to show the flow in a first reply.
 
-1. Copy `post.txt` into Twitter/X.
-2. Attach `agent-boost-coming-soon.png`.
-3. Paste `alt-text.txt` into the image description.
-4. Optionally add `reply-how-it-works.txt` as a reply.
+The post asks what people would have Hermes pay for. That gives agent builders
+one concrete thing to respond to.
 
-The main post stands on its own and does not require a public repository link.
+## Other surfaces
 
-## Repository link
+- **agent-boost-banner.png**: the wide version for the README or repository
+  social preview. Use **banner-alt-text.txt** for its description.
+- **reusable-copy.md**: tagline, plain-language descriptor, short introduction,
+  technical introduction, and prepared GitHub description.
+- **reply-privacy.txt**: a concise answer when someone asks about privacy scope.
+- **reply-repo-once-public.txt**: the repository link reply, for a public release.
 
-`dmarzzz/agent-boost` was verified as **private** during preparation. Use
-`reply-repo-once-public.txt` only after the repository is public and its link
-opens while signed out. Making the repository public is a separate publishing
-decision; no visibility change is included in this preparation.
+## The message
 
-The repository currently has no open-source license. The copy therefore does
-not call the project open source.
+**Agent Boost. Dark mode for your agent.**
 
-## Feature wording
+Explain it immediately: **Private payments for Hermes.**
 
-- Private payment and identity: the current research preview, using fresh
-  Ethereum accounts and shielded Sepolia test payments through Kohaku.
-- Private search: **coming soon**.
-- Private inference: **coming soon**.
-- Covered HTTPS egress: a separate research-preview capability that requires
-  Grove enrollment. It is not the upcoming private search product.
-- The copy names Hermes, the integration documented in the current repository.
-  The existing graphic retains its Hermes and OpenClaw branding; this kit does
-  not claim a verified OpenClaw installation flow.
+The supporting memory cue: **Give your agent a wallet. Keep the keys out of its
+context.**
 
-## Prepared replies to likely questions
+The graphic carries one visual idea: the green dark-mode switch. Wallet
+addresses and test payments are the preview. Private search and private
+inference each retain an explicit **Coming soon** label.
 
-**What does private identity mean here?**
+The launch names Hermes, the integration documented in this repository. The
+new graphics focus on Agent Boost and omit integration-logo clutter. Technical
+terms such as MCP, sidecar, and Kohaku appear after the plain-language pitch.
 
-Fresh wallet accounts/addresses for the agent. It isn't a claim that the whole
-agent session is anonymous; funding, timing, and other activity can still be
-correlated.
+## Questions you may get
 
-**Does it make all of Hermes private?**
+**What does private identity mean?**
 
-No. These are scoped capabilities. Covered HTTPS fetches are explicit, and the
-model provider, browser, and other process traffic aren't automatically routed
-through them.
+Fresh wallet addresses in this preview. Initial funding is public, and timing
+or amounts can still correlate activity. It isn't whole-agent anonymity.
+
+**Are the keys inaccessible to the agent?**
+
+They stay out of model prompts and wallet tool results. Hermes and Agent Boost
+currently share an OS user, so this isn't a custody boundary against a
+privileged local process.
 
 **Can I use real funds?**
 
-This preview is Sepolia-only, unaudited research software. Use disposable test
-funds.
+This is an unaudited Sepolia research preview. Use disposable test funds only.
 
-**When do search and inference arrive?**
+**When do search and inference ship?**
 
-They're coming soon. I don't have a release date to share yet.
+They're coming soon; no release date is announced in this kit.
 
-## Local repo preparation
+## Repository release
 
-The matching README status changes and corrected banner are prepared in this
-checkout on `codex/agent-boost-launch-prep`, based on `origin/main` at `6ec26fe`.
-The README distinguishes the upcoming features from the existing wallet and
-covered-egress preview. This kit does not publish a post, schedule a post,
-change repository visibility, or claim a fresh end-to-end wallet test.
+The repository was verified as **private** during this preparation. The main
+post therefore works without a public link. Publish the link reply only after
+the repository opens while signed out. The prepared README and banner changes
+should land before sharing that link.
 
-For a public repository launch, land the prepared README/banner changes before
-posting its link. The upstream main checks were green when inspected (Node 22
-and 24; clean installs on macOS ARM64, macOS Intel, and Ubuntu 24.04 ARM64).
+A GitHub description is prepared in **reusable-copy.md**. The repository has no
+open-source license, so the copy does not describe it as open source.
 
-## Asset provenance
+These are local launch assets and documentation changes, not a published or
+scheduled post, a visibility change, or a fresh wallet execution test.
 
-The graphic uses the original high-resolution phosphor banner from
-`/Users/halcyon/agent-boost-branding/agent-boost-hero-phosphor-short@2x.png`.
-The edit is made with the built-in image generation tool. Its exact prompt is
-saved in `image-edit-prompt.txt`.
+## Asset provenance and review
+
+The square and wide assets were created with the built-in image generation
+tool from the existing Agent Boost brand graphic. Exact prompts are saved in
+**image-social-prompt.txt**, **image-social-refinement-prompt.txt**, and
+**image-banner-prompt.txt**. The refinement gives the small text a solid
+background and larger, filled Coming soon badges.
+
+The square was reviewed at 400 pixels wide. The README was rendered locally
+at mobile and desktop widths; this approximates GitHub typography and does not
+represent a deployed GitHub page. Review captures are in the checkout's
+**review/** directory. No engagement or user-comprehension measurements are
+claimed.

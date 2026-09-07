@@ -1,5 +1,7 @@
-The agent handles intent. Agent Boost handles live balances, payment plans, limits, approvals, and submission.
+After install, tell Hermes: “Set up Agent Boost for me.”
 
-Privacy shouldn't depend on the model remembering the rules.
+Scan the funding QR and send test ETH. Agent Boost shields 0.1 Sepolia ETH through Kohaku.
 
-Today's preview is Hermes + Sepolia. Private search and inference are coming soon.
+Then ask it to pay someone. Review the amount + recipient and approve.
+
+Sepolia only. Disposable test funds.

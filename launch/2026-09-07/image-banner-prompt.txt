@@ -1,0 +1,26 @@
+Use case: ads-marketing.
+Asset type: Agent Boost README / GitHub social-preview banner. Wide landscape 2:1 aspect ratio, ideally 1920x960. This is a complementary wide adaptation of the provided square launch poster.
+Reference image: the provided Agent Boost square design. Preserve its pixel AGENT BOOST wordmark, oversized modern headline, pale-green/near-black palette, and luminous green ON switch containing the black spiked eye/sun symbol. Simplify and recompose for an efficient readable README header.
+
+Layout:
+- Upper content area about 75% of canvas height. LEFT roughly 65% is a UNIFORM pale green #D6E6BF; RIGHT roughly 35% is near-black #010301 with a crisp vertical boundary. All left-side text must fit ENTIRELY on the pale-green field; no letter crosses the boundary and no text has blended/inverted colors.
+- Top left a medium AGENT BOOST pixel wordmark, dark green.
+- Dominant headline below it in enormous clean dark type: "Dark mode" on line one and "for your agent." on line two.
+- Below headline, a large crisp subline: "Private payments for Hermes."
+- A large green ON toggle on the right, with the black spiked eye/sun emblem. The switch can cross the light/dark boundary, but it must NOT overlap text.
+- Bottom 25% is a solid dark full-width footer. At bottom-left in very legible near-white text: "Sepolia research preview".
+- At bottom-right two generous lines of near-white text: "Private search — Coming soon" and "Private inference — Coming soon". Both statuses must explicitly be COMING SOON, and the wording must fit cleanly. These lines can use sentence case exactly as quoted.
+- Minimum informational text around 48px at 1920px output width; at least 72px outside safe margins. Text must remain legible when the image is displayed 700px wide.
+- Crisp text, no scanline or glow overlay on lettering. The switch alone may glow. No outlined feature cards, extra badges, tiny typography, supporting diagrams, other product logos, photos, UI screenshots, additional text, invented claims, URLs, or watermarks.
+
+Exact visible text only:
+"AGENT BOOST"
+"Dark mode"
+"for your agent."
+"Private payments for Hermes."
+"ON"
+"Sepolia research preview"
+"Private search — Coming soon"
+"Private inference — Coming soon"
+
+Prioritize optical balance, immediate readability, and the memorable switch. Produce one polished finished banner.
