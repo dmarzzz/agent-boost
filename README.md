@@ -4,6 +4,13 @@
 
 **Private payments for Hermes.**
 
+[![ci][ci-badge]][ci-url]
+[![clean install][install-badge]][install-url]
+[![Node.js 22+][node-badge]][node-url]
+[![Hermes 0.16+][hermes-badge]][hermes-url]
+![research preview][preview-badge]
+[![license][license-badge]][license-url]
+
 Give your agent a wallet. Keep the keys out of its context.
 
 Agent Boost gives Hermes fresh wallet addresses and shielded Sepolia payments.
@@ -119,9 +126,6 @@ Read the full [privacy claims](docs/PRIVACY.md) and
 | [All docs](docs/README.md) | Full documentation index |
 
 ## Development
-
-[![ci][ci-badge]][ci-url]
-[![clean install][install-badge]][install-url]
 
 ```console
 npm ci
