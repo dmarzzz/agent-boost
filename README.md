@@ -1,4 +1,4 @@
-![Agent Boost banner: two agents, one switch, four private lanes](assets/agent-boost-readme-banner.webp)
+![Agent Boost: private payment and identity marked on; private inference and private search marked coming soon](assets/agent-boost-readme-banner.webp)
 
 # Agent Boost
 
@@ -19,9 +19,10 @@ Agent Boost is a local privacy sidecar for Hermes. It gives an agent tightly
 scoped private capabilities while deterministic software—not the model—owns
 live facts, policy, approval, secrets, and side effects.
 
-The public preview centers on a shielded Sepolia wallet and explicitly scoped
-Shade Tree egress. Private inference is a separate experimental lane, not a
-blanket-private Hermes session.
+The research preview centers on a shielded Sepolia wallet and explicitly scoped
+Shade Tree egress. **Private search and private inference are coming soon.**
+Covered HTTPS egress is a separate, explicitly invoked capability; it does not
+provide a private search product or a blanket-private Hermes session.
 
 > [!CAUTION]
 > Unaudited research software. The wallet is Sepolia-only and intended for
@@ -30,9 +31,12 @@ blanket-private Hermes session.
 
 ## What it adds
 
-| Private payment and identity | Covered egress | Private inference |
+| Capability | Status | What it covers |
 | --- | --- | --- |
-| Fresh Ethereum accounts and shielded test payments through Kohaku. Hermes sees the address, balance, and status—never the keys. | Explicit public HTTPS reads through a Shade Tree over Tor. The route is bounded, independently enrolled, and has no direct fallback. | An experimental opt-in path for discrete subproblems sent to attested confidential compute, with a verified response receipt. |
+| Private payment and identity | Research preview | Fresh Ethereum accounts and shielded Sepolia test payments through Kohaku. Wallet tool results expose addresses, balances, and status, while keeping signing material out of the model conversation. |
+| Covered egress | Research preview; Grove enrollment required | Explicit public HTTPS reads through a Shade Tree over Tor. The route is bounded and has no direct fallback. |
+| Private search | Coming soon | A future search capability; distinct from the covered HTTPS reads available in the preview. |
+| Private inference | Coming soon | A planned opt-in path for discrete subproblems sent to attested confidential compute, with a verified response receipt. |
 
 These are independent lanes. Enabling one does not silently reroute the others.
 

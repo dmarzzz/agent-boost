@@ -1,0 +1,10 @@
+Use case: text-localization.
+Asset type: Agent Boost Twitter announcement graphic / README banner.
+Input image 1 is the edit target. Preserve this existing wide 2.5:1 retro green phosphor graphic, ideally at its original 2960x1184 resolution. Preserve the AGENT BOOST title, HERMES and OPENCLAW logos/names, central glowing ON toggle, split light/dark background, layout, typography, circuit traces, texture, and bottom slogan "DARK MODE FOR YOUR AGENT.".
+
+Make ONLY the following localized changes inside the feature panel on the right:
+- Keep the top two rows "PRIVATE PAYMENT" and "PRIVATE IDENTITY" exactly as they are, with their ON status.
+- On row three "PRIVATE INFERENCE" and row four "PRIVATE SEARCH", replace the signal-meter bars AND the ON badges with a clear outlined status badge reading exactly "COMING SOON". Keep the feature names visible and spelled exactly.
+- To fit the full words comfortably, arrange only those two future-feature rows with the feature name on a first line and the "COMING SOON" badge on a second line, modestly increasing row height and shifting the fourth row slightly lower into the existing free space if necessary. Or use a compact single line if all text fits without crowding. Preserve alignment to the feature panel.
+- Give both future-feature rows a slightly dimmer border and less glow than the two active rows, but keep all lettering high-contrast and easy to read. Their status must unambiguously say COMING SOON and must not also show ON or illuminated active signal bars.
+Do not add any other text, icons, labels, logos, or objects. Keep the overall composition and established design unchanged. Produce one clean, polished final image.

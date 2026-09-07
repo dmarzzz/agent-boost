@@ -1,0 +1,7 @@
+Agent Boost: dark mode for your agent.
+
+A local sidecar for Hermes with fresh wallet identities and shielded Sepolia payments. Keys stay out of model prompts.
+
+Private search + private inference are coming soon.
+
+Research preview. Test funds only.

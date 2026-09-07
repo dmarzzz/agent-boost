@@ -1,0 +1,5 @@
+The agent handles intent. Agent Boost handles live balances, payment plans, limits, approvals, and submission.
+
+Privacy shouldn't depend on the model remembering the rules.
+
+Today's preview is Hermes + Sepolia. Private search and inference are coming soon.
