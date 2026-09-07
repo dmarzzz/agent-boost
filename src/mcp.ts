@@ -4711,10 +4711,18 @@ async function registerMcpServer(
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async () =>
-      result(
-        envelope(digest, "ready", "CAPABILITIES", await runtime.capabilities()),
-      ),
+    async () => {
+      try {
+        return result(
+          envelope(digest, "ready", "CAPABILITIES", await runtime.capabilities()),
+        );
+      } catch (error) {
+        // A capability read still touches durable state, so it can fail like
+        // any other handler. Without this the SDK returns error.message
+        // verbatim, which is the one path that skips redactPublicMessage.
+        return domainError(digest, error);
+      }
+    },
   );
 
   registerTool(
@@ -4858,15 +4866,20 @@ async function registerMcpServer(
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async () =>
-      result(
-        envelope(
-          egressDigest,
-          "ready",
-          "EGRESS_CAPABILITIES",
-          await runtime.egressCapabilities(),
-        ),
-      ),
+    async () => {
+      try {
+        return result(
+          envelope(
+            egressDigest,
+            "ready",
+            "EGRESS_CAPABILITIES",
+            await runtime.egressCapabilities(),
+          ),
+        );
+      } catch (error) {
+        return domainError(egressDigest, error);
+      }
+    },
   );
 
   registerTool(
@@ -6779,18 +6792,29 @@ async function registerMcpServer(
       description: "Descriptive Sepolia wallet support and authority limits.",
       mimeType: "application/json",
     },
-    async (uri) => ({
-      contents: [
-        {
-          uri: uri.href,
-          mimeType: "application/json",
-          text: JSON.stringify({
-            ...(await runtime.capabilities()),
-            manifest_digest: digest,
-          }),
-        },
-      ],
-    }),
+    async (uri) => {
+      try {
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: "application/json",
+              text: JSON.stringify({
+                ...(await runtime.capabilities()),
+                manifest_digest: digest,
+              }),
+            },
+          ],
+        };
+      } catch (error) {
+        // A resource read carries no envelope, so the failure has to stay a
+        // throw. Scrub it first: the SDK surfaces error.message as written,
+        // and a raw fs error names an absolute path.
+        throw new Error(
+          redactPublicMessage(error instanceof Error ? error.message : String(error)),
+        );
+      }
+    },
   );
 
   registerResource(

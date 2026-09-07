@@ -10,7 +10,7 @@ Dark mode for your agent.
 
 ## Plain-language descriptor
 
-Private payments for Hermes.
+give ur agent a private crypto address and tool use
 
 ## Memorable supporting line
 
@@ -18,7 +18,7 @@ Give your agent a wallet. Keep the keys out of its context.
 
 ## GitHub description
 
-Dark mode for your agent. Private payments for Hermes. Sepolia research preview; private search and inference coming soon.
+Dark mode for your agent. Give ur agent a private crypto address and tool use. Sepolia research preview; private search and inference coming soon.
 
 ## Short introduction
 

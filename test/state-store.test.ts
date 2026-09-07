@@ -1162,3 +1162,89 @@ test("reauthorization renews unmanaged pockets and preserves explicit child poli
     renewedProfile.authorizationId,
   );
 });
+
+test("a reauthorization decision that was never planned is refused", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-boost-state-reauth-forged-"));
+  const store = new StateStore(root);
+  await store.initialize();
+  await store.ensureWalletProfile("alpha");
+  await store.update((draft) => {
+    draft.onboarding = onboarding();
+  });
+
+  await assert.rejects(
+    () => store.applyReauthorizationPlan("wra_never_planned"),
+    /REAUTHORIZATION_DECISION_NOT_FOUND/u,
+    "a decision id the store never issued must not renew authority",
+  );
+});
+
+test("an applied reauthorization decision replays without minting a second renewal", async () => {
+  // Reauthorization resets the spend and payment counters by design, under a
+  // confirmed plan. Replaying the same decision must therefore be idempotent:
+  // if it renewed twice, one confirmation would buy two fresh envelopes.
+  const root = await mkdtemp(join(tmpdir(), "agent-boost-state-reauth-replay-"));
+  const store = new StateStore(root);
+  await store.initialize();
+  await store.ensureWalletProfile("alpha");
+
+  const expiredAt = new Date(0).toISOString();
+  const expired = delegation({ spentWei: "30", expiresAt: expiredAt });
+  await store.update((draft) => {
+    draft.onboarding = onboarding({ delegation: expired });
+  });
+
+  const initialized = await store.read();
+  const profile = initialized.wallet!.profiles[initialized.wallet!.activeWalletId]!;
+  const renewed = delegation({
+    spentWei: "0",
+    expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+  });
+  await store.storeReauthorizationPlan({
+    version: 1,
+    decisionId: "wra_replay",
+    wallet: {
+      walletId: profile.walletId,
+      walletName: profile.name,
+      selectionEpoch: profile.selectionEpoch,
+    },
+    ...(profile.authorizationId
+      ? { priorAuthorizationId: profile.authorizationId }
+      : {}),
+    currentPolicy: {
+      ...expired,
+      paymentsUsed: 0,
+      paymentsRemaining: expired.maxPayments,
+    },
+    proposedPolicy: {
+      ...renewed,
+      paymentsUsed: 0,
+      paymentsRemaining: renewed.maxPayments,
+    },
+    authorizationEffect: "replace",
+    counterEffect: "reset_spend_and_payment_count",
+    intentDigest: `sha256:${"9".repeat(64)}`,
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    decision: "allow",
+    blockers: [],
+    approval: { action: "confirm", userConfirmationRequired: true },
+  });
+
+  const first = await store.applyReauthorizationPlan("wra_replay");
+  const firstAuthorization = first.profile.authorizationId;
+  assert.ok(firstAuthorization, "the first apply must issue an authorization");
+
+  const second = await store.applyReauthorizationPlan("wra_replay");
+  assert.equal(
+    second.profile.authorizationId,
+    firstAuthorization,
+    "a replayed decision must not mint a second authorization",
+  );
+  const after = await store.read();
+  assert.equal(
+    after.reauthorizationPlans.wra_replay!.appliedAuthorizationId,
+    firstAuthorization,
+    "the receipt must stay bound to the single authorization it produced",
+  );
+});

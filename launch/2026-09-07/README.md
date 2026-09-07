@@ -23,7 +23,7 @@ one concrete thing to respond to.
 
 **Agent Boost. Dark mode for your agent.**
 
-Explain it immediately: **Private payments for Hermes.**
+Explain it immediately: **give ur agent a private crypto address and tool use**
 
 The supporting memory cue: **Give your agent a wallet. Keep the keys out of its
 context.**
