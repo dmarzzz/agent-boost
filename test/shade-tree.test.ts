@@ -193,3 +193,27 @@ test(
     }
   },
 );
+
+test("covered egress rejects obfuscated spellings of a loopback or private address", () => {
+  // Node's URL parser normalizes shorthand, hex, decimal and octal IPv4 into a
+  // real literal, which the isIP() check then refuses. These are the forms an
+  // attacker reaches for first, and a future rewrite of the hostname check
+  // could silently reopen them, so pin the whole table.
+  for (const target of [
+    "https://127.1/",                 // IPv4 shorthand
+    "https://0x7f000001/",            // hex
+    "https://2130706433/",            // decimal
+    "https://0177.0.0.1/",            // octal
+    "https://[::ffff:127.0.0.1]/",    // IPv4-mapped IPv6
+    "https://169.254.169.254/",       // cloud metadata
+    "https://10.0.0.1/",              // RFC1918
+    "https://172.16.0.1/",
+    "https://192.168.1.1/",
+  ]) {
+    assert.throws(
+      () => validateCoveredUrl(target),
+      /COVERED_EGRESS_POLICY_DENIED/u,
+      `${target} must not reach the network`,
+    );
+  }
+});

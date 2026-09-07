@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="690" viewBox="0 0 1440 690" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Boost privacy scope</title>
+  <desc id="desc">A comparison of what the wallet RPC route, covered HTTPS egress, and model tool boundary protect and what remains visible.</desc>
+  <defs>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0V28" fill="none" stroke="#182111" stroke-opacity=".065"/>
+    </pattern>
+  </defs>
+
+  <rect width="1440" height="690" rx="34" fill="#f1f1df"/>
+  <rect width="1440" height="690" rx="34" fill="url(#grid)"/>
+  <text x="60" y="64" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="30" font-weight="780">Privacy has a shape.</text>
+  <text x="1380" y="62" text-anchor="end" fill="#536047" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">PROTECTED ≠ INVISIBLE</text>
+
+  <text x="385" y="116" fill="#536047" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" font-weight="700" letter-spacing="2">PROTECTS</text>
+  <text x="900" y="116" fill="#536047" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" font-weight="700" letter-spacing="2">STILL VISIBLE</text>
+
+  <g transform="translate(60 142)">
+    <rect width="1320" height="144" rx="22" fill="#fbfbef" stroke="#c8cdb9" stroke-width="2"/>
+    <rect width="10" height="144" rx="5" fill="#b9ff1d"/>
+    <circle cx="61" cy="54" r="24" fill="#17210f"/>
+    <path d="M48 54H74M61 41C53 49 53 59 61 67M61 41C69 49 69 59 61 67" fill="none" stroke="#b9ff1d" stroke-width="2.5"/>
+    <text x="101" y="49" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="22" font-weight="760">Wallet RPC over Tor</text>
+    <text x="101" y="78" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">fixed origin · no direct fallback</text>
+    <line x1="360" y1="24" x2="360" y2="120" stroke="#d9ddcf" stroke-width="2"/>
+    <text x="385" y="55" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700">Machine origin IP</text>
+    <text x="385" y="82" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">from the RPC provider</text>
+    <line x1="835" y1="24" x2="835" y2="120" stroke="#d9ddcf" stroke-width="2"/>
+    <text x="860" y="50" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700">Exit IP, methods, addresses,</text>
+    <text x="860" y="77" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">payloads, timing, and public</text>
+    <text x="860" y="102" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">on-chain activity</text>
+  </g>
+
+  <g transform="translate(60 306)">
+    <rect width="1320" height="144" rx="22" fill="#fbfbef" stroke="#c8cdb9" stroke-width="2"/>
+    <rect width="10" height="144" rx="5" fill="#b9ff1d"/>
+    <circle cx="61" cy="54" r="24" fill="#17210f"/>
+    <path d="M48 54H74M61 41C53 49 53 59 61 67M61 41C69 49 69 59 61 67" fill="none" stroke="#b9ff1d" stroke-width="2.5"/>
+    <text x="101" y="49" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="22" font-weight="760">Covered HTTPS egress</text>
+    <text x="101" y="78" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">explicit request · Shade Tree</text>
+    <line x1="360" y1="24" x2="360" y2="120" stroke="#d9ddcf" stroke-width="2"/>
+    <text x="385" y="50" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700">Origin IP from destination;</text>
+    <text x="385" y="77" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">TLS path, query, and body</text>
+    <text x="385" y="102" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">from the Shade Tree node</text>
+    <line x1="835" y1="24" x2="835" y2="120" stroke="#d9ddcf" stroke-width="2"/>
+    <text x="860" y="50" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700">Hostname, port, timing,</text>
+    <text x="860" y="77" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">traffic shape, and every other</text>
+    <text x="860" y="102" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Hermes network path</text>
+  </g>
+
+  <g transform="translate(60 470)">
+    <rect width="1320" height="144" rx="22" fill="#fbfbef" stroke="#c8cdb9" stroke-width="2"/>
+    <rect width="10" height="144" rx="5" fill="#b9ff1d"/>
+    <circle cx="61" cy="54" r="24" fill="#17210f"/>
+    <path d="M46 47H76V66H62L54 74V66H46Z" fill="none" stroke="#b9ff1d" stroke-width="2.5" stroke-linejoin="round"/>
+    <text x="101" y="49" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="22" font-weight="760">Model / tool boundary</text>
+    <text x="101" y="78" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">minimum public result</text>
+    <line x1="360" y1="24" x2="360" y2="120" stroke="#d9ddcf" stroke-width="2"/>
+    <text x="385" y="50" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700">Keys, password, notes, proofs,</text>
+    <text x="385" y="77" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">raw signed transactions, and</text>
+    <text x="385" y="102" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">credential-bearing RPC URLs</text>
+    <line x1="835" y1="24" x2="835" y2="120" stroke="#d9ddcf" stroke-width="2"/>
+    <text x="860" y="50" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700">Public address, balance, policy,</text>
+    <text x="860" y="77" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">status, request terms, and</text>
+    <text x="860" y="102" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">returned public content</text>
+  </g>
+
+  <rect x="60" y="638" width="1320" height="34" rx="12" fill="#dff5a3"/>
+  <text x="720" y="661" text-anchor="middle" fill="#17210f" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" font-weight="700">PRIVACY-IMPROVING ≠ ANONYMOUS · NO LANE PRIVATIZES HERMES AS A WHOLE</text>
+</svg>

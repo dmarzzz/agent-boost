@@ -28,7 +28,10 @@ import {
   validateOnboardingStatus,
   validatePersistence,
   verifyInstalledHermes,
+  verifyInstalledTurnGate,
   verifySensitivePermissions,
+  AGENT_BOOST_MCP_TOOL_COUNT,
+  HERMES_NATIVE_TOOLS,
 } from "./lib/release-gate.mjs";
 
 const scriptRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -135,11 +138,35 @@ export async function runReleaseGate(options) {
     hermesHome: paths.hermesHome,
     candidateRoot,
   });
+  const turnGateSmoke = await verifyInstalledTurnGate({
+    executable: verifiedInstall.executable,
+    environment,
+    stateDirectory: join(options.sandboxRoot, "turn-gate-smoke"),
+  });
 
   const capabilitiesAndFirst = await withMcp(
     verifiedInstall.executable,
     environment,
     async (client, transport) => {
+      const listed = await client.listTools();
+      const toolNames = listed.tools.map((tool) => tool.name);
+      if (
+        toolNames.length !== AGENT_BOOST_MCP_TOOL_COUNT ||
+        new Set(toolNames).size !== AGENT_BOOST_MCP_TOOL_COUNT
+      ) {
+        throw new Error(
+          `Installed MCP exposed ${toolNames.length} tools (${new Set(toolNames).size} unique), expected ${AGENT_BOOST_MCP_TOOL_COUNT}`,
+        );
+      }
+      const missingCanonicalTools = HERMES_NATIVE_TOOLS.filter(
+        (name) => !toolNames.includes(name),
+      );
+      if (missingCanonicalTools.length > 0) {
+        throw new Error(
+          `Installed MCP is missing canonical Hermes tools: ${missingCanonicalTools.join(", ")}`,
+        );
+      }
+
       const capabilities = await callTool(client, "capabilities", {});
       assertNoPublicLeaks(capabilities);
       const capabilitiesData = capabilities?.structuredContent?.data;
@@ -156,11 +183,44 @@ export async function runReleaseGate(options) {
       const repeated = validateOnboardingResult(repeatedResult, { expectUiOpened: false });
       validatePersistence(first, repeated, "repeated onboarding_start");
 
+      const policyBefore = await callTool(client, "wallet_get_policy", {});
+      expectToolCode(policyBefore, "WALLET_POLICY", "wallet_get_policy before cancellation");
+      const policyPlan = await callTool(client, "wallet_plan_policy_update", {
+        max_payments: 2,
+        per_payment_limit_native: "0.01",
+        lifetime_limit_native: "0.02",
+        expires_in_hours: 1,
+        enabled: true,
+      });
+      expectToolCode(policyPlan, "POLICY_UPDATE_PLANNED", "canonical policy planner");
+      const decisionId = policyPlan?.structuredContent?.data?.plan?.decisionId;
+      if (typeof decisionId !== "string" || !decisionId.startsWith("wpd_")) {
+        throw new Error("Canonical policy planner did not return its internal decision ID");
+      }
+      const cancelledPolicy = await callTool(client, "wallet_apply_policy_update", {
+        decision_id: decisionId,
+        user_confirmed: false,
+      });
+      expectToolCode(cancelledPolicy, "POLICY_UPDATE_CANCELLED", "policy cancellation");
+      const policyAfter = await callTool(client, "wallet_get_policy", {});
+      expectToolCode(policyAfter, "WALLET_POLICY", "wallet_get_policy after cancellation");
+      if (
+        JSON.stringify(policyBefore?.structuredContent?.data?.policy) !==
+        JSON.stringify(policyAfter?.structuredContent?.data?.policy)
+      ) {
+        throw new Error("Cancelling the installed policy preview changed active permission");
+      }
+
       const pid = transport.pid;
       if (!pid) throw new Error("MCP transport did not expose its child process ID");
       process.kill(pid, "SIGKILL");
       await waitForProcessExit(pid, 10_000);
-      return { first, repeated };
+      return {
+        first,
+        repeated,
+        toolSurface: { total: toolNames.length, canonical: HERMES_NATIVE_TOOLS.length },
+        policyPreviewCancelled: true,
+      };
     },
     { crashOnReturn: true },
   );
@@ -202,6 +262,10 @@ export async function runReleaseGate(options) {
       kohaku_commit: verifiedInstall.kohakuCommit,
       hermes_version: verifiedInstall.hermesVersion,
       isolated_config_and_skills: true,
+      packaged_turn_gate_verified: true,
+      turn_gate_hooks_verified: true,
+      mcp_tools_total: capabilitiesAndFirst.toolSurface.total,
+      hermes_canonical_tools: capabilitiesAndFirst.toolSurface.canonical,
     },
     onboarding: {
       setup_id: restarted.setupId,
@@ -214,10 +278,30 @@ export async function runReleaseGate(options) {
       process_restart_preserved_wallet: true,
       loopback_url_exposed: false,
     },
+    safe_tool_flows: {
+      policy_preview_cancelled: capabilitiesAndFirst.policyPreviewCancelled,
+      active_policy_unchanged: capabilitiesAndFirst.policyPreviewCancelled,
+      turn_gate_same_turn_blocked: turnGateSmoke.sameTurnBlocked,
+      turn_gate_exact_continuation_allowed: turnGateSmoke.exactContinuationAllowed,
+      turn_gate_continuation_consumed: turnGateSmoke.continuationConsumed,
+      turn_gate_direct_confirmation_blocked: turnGateSmoke.directConfirmationBlocked,
+      turn_gate_unrelated_call_allowed: turnGateSmoke.unrelatedCallAllowed,
+      turn_gate_bridged_direct_confirmation_blocked:
+        turnGateSmoke.bridgedDirectConfirmationBlocked,
+      turn_gate_bridged_exact_continuation_allowed:
+        turnGateSmoke.bridgedExactContinuationAllowed,
+      turn_gate_bridged_continuation_consumed:
+        turnGateSmoke.bridgedContinuationConsumed,
+    },
     checks: [
       "candidate_packaged_and_installed",
       "pinned_kohaku_verified",
       "hermes_config_and_skills_verified",
+      "packaged_turn_gate_verified",
+      "installed_turn_gate_hooks_and_allowlist_verified",
+      "installed_turn_gate_multi_flow_smoke_verified",
+      "installed_mcp_54_tool_surface_verified",
+      "canonical_policy_plan_cancel_status_verified",
       "exact_funding_projection_verified",
       "png_qr_attachment_verified",
       "wallet_persistence_verified",
@@ -264,6 +348,13 @@ function callTool(client, name, args) {
     undefined,
     { timeout: TOOL_TIMEOUT_MS, maxTotalTimeout: TOOL_TIMEOUT_MS },
   );
+}
+
+function expectToolCode(response, expected, label) {
+  const code = response?.structuredContent?.code;
+  if (response?.isError === true || code !== expected) {
+    throw new Error(`${label} returned ${String(code)}, expected ${expected}`);
+  }
 }
 
 function parseArguments(args) {

@@ -1,0 +1,13 @@
+name: agent-boost-output-guard
+version: "1.0.0"
+manifest_version: 2
+description: Native pre-LLM turn gate and deterministic, redacted final-response rendering for Agent Boost conversations
+provides_hooks:
+  - pre_llm_call
+  - post_tool_call
+  - transform_llm_output
+config_schema:
+  turn_gate_executable:
+    type: string
+    required: true
+    description: Fully resolved absolute path to the Agent Boost executable

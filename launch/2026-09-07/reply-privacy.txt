@@ -1,0 +1,3 @@
+The preview covers wallet operations and explicit HTTPS fetches through Shade Tree after enrollment.
+
+It doesn't make the entire agent session private. Funding is public; timing can still correlate activity. Private search + inference are coming soon.

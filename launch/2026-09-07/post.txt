@@ -1,0 +1,10 @@
+Give your agent a wallet.
+Keep the keys out of its context.
+
+Agent Boost: dark mode for your agent.
+
+Private payments for Hermes. Sepolia testnet preview.
+
+Private search + private inference: coming soon.
+
+What would you have Hermes pay for?

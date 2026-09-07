@@ -1,0 +1,63 @@
+![An open technical field guide showing the modular Agent Boost system](../assets/docs-field-guide.webp)
+
+# Agent Boost docs
+
+Agent Boost is a local privacy sidecar for Hermes. These docs cover the
+participant experience, the deterministic contracts underneath it, and the
+limits that keep a Sepolia research preview from being mistaken for production
+custody or whole-agent anonymity.
+
+[Back to the project README](../README.md) · [Run the demo](DEMO.md) ·
+[Review the privacy boundary](PRIVACY.md)
+
+> [!IMPORTANT]
+> Start with [Install](INSTALL.md) and [Run the demo](DEMO.md) if you want to use
+> Agent Boost. Start with [Architecture](ARCHITECTURE.md) and the
+> [Threat model](THREAT-MODEL.md) if you are evaluating the design.
+
+## Choose a path
+
+| Goal | Read in this order | What you will learn |
+| --- | --- | --- |
+| **Try the research preview** | [Install](INSTALL.md) → [Run the demo](DEMO.md) → [Privacy](PRIVACY.md) | Supported hosts, funding flow, private test payments, covered fetches, and the claims you can safely make |
+| **Integrate Hermes** | [Integration](INTEGRATION.md) → [Tools](TOOLS.md) → [Capability contract](CAPABILITY-CONTRACT.md) | MCP wiring, skill behavior, tool order, structured results, and authority boundaries |
+| **Review security** | [Architecture](ARCHITECTURE.md) → [Threat model](THREAT-MODEL.md) → [Product philosophy](PRODUCT-PHILOSOPHY.md) | Process boundaries, failure behavior, residual risk, and why deterministic code—not the model—owns correctness |
+| **Operate covered egress** | [Covered egress](COVERED-EGRESS.md) → [Configuration](CONFIGURATION.md) → [Privacy](PRIVACY.md) | Enrollment, request policy, local state, platform support, and what Shade Tree does not hide |
+
+## The four ideas to keep straight
+
+1. **The model is not the integrity boundary.** Hermes handles language and
+   intent; Agent Boost re-reads facts and enforces policy, approval, redaction,
+   and side effects in deterministic code.
+2. **Permission is not liquidity.** A spending limit, an account balance, and a
+   supported transfer route are separate facts.
+3. **Each privacy lane is scoped.** Wallet RPC over Tor, covered HTTPS egress,
+   and the model/tool boundary protect different information. None privatizes
+   Hermes as a whole.
+4. **Uncertainty stays uncertain.** An unresolved payment is reconciled by
+   observation and is never replaced with an automatic rebroadcast.
+
+## Reference
+
+| Document | Use it when you need… |
+| --- | --- |
+| [Product philosophy](PRODUCT-PHILOSOPHY.md) | Weak-model-safe correctness, privacy-first presentation, and the definition of shipped |
+| [Install](INSTALL.md) | Supported hosts, what the installer pins and verifies, state paths, Hermes hookup |
+| [Run the demo](DEMO.md) | Wallet setup, configurable private payments, fresh demo, covered fetch, security policy, evals |
+| [Tools](TOOLS.md) | The MCP tools, in call order, with inputs and returns |
+| [Configuration](CONFIGURATION.md) | Environment variables and defaults |
+| [Architecture](ARCHITECTURE.md) | Components, local surfaces, hardening |
+| [Capability contract](CAPABILITY-CONTRACT.md) | The `org.agentboost.wallet/1.8` and egress contracts, envelope, authority |
+| [Covered egress](COVERED-EGRESS.md) | The Shade Tree module in detail |
+| [Privacy claims and limits](PRIVACY.md) | What is and is not private, and the local security boundary |
+| [Threat model](THREAT-MODEL.md) | Protected data, security goals, non-goals, attacks and mitigations |
+| [Integration](INTEGRATION.md) | Hermes skills and MCP wiring |
+
+
+## Sources of truth
+
+The prose explains the product, but it does not grant authority. The checked-in
+schemas under [`spec/`](../spec/), structured MCP results, durable local state,
+and runtime checks are authoritative for what Agent Boost can do. When a claim
+and the running capability document disagree, treat the runtime as unavailable
+or degraded and investigate—do not widen the claim.

@@ -43,6 +43,62 @@
         "safe_with_same_arguments": {"type": "boolean"}
       }
     },
+    "presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "kind", "title", "state"],
+      "properties": {
+        "version": {"const": "1.0"},
+        "kind": {"enum": ["progress", "confirmation", "receipt", "status"]},
+        "title": {"type": "string", "minLength": 1},
+        "state": {"enum": ["pending", "active", "complete", "attention", "cancelled"]},
+        "step": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["current", "total", "label"],
+          "properties": {
+            "current": {"type": "integer", "minimum": 1},
+            "total": {"type": "integer", "minimum": 1},
+            "label": {"type": "string", "minLength": 1}
+          }
+        },
+        "markers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["state", "label"],
+            "properties": {
+              "state": {"enum": ["pending", "active", "complete", "attention", "cancelled"]},
+              "label": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "value"],
+            "properties": {
+              "label": {"type": "string", "minLength": 1},
+              "value": {"type": "string"},
+              "format": {"enum": ["amount", "address", "text"]}
+            }
+          }
+        },
+        "notice": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tone", "text"],
+          "properties": {
+            "tone": {"enum": ["info", "warning"]},
+            "text": {"type": "string", "minLength": 1}
+          }
+        },
+        "next_action": {"type": "string", "minLength": 1}
+      }
+    },
     "data": {"type": "object"}
   }
 }

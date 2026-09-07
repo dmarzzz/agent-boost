@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import Ajv2020 from "ajv/dist/2020.js";
+import { Ajv2020 } from "ajv/dist/2020.js";
 
 import { loadConfig } from "../src/config.js";
 import type { ChainClient, WalletAdapter } from "../src/contracts.js";
@@ -22,7 +22,9 @@ const wallet: WalletAdapter = {
   async getPrivateBalanceWei() {
     return 0n;
   },
-  async executePrivatePayment() {
+  async executePrivatePayment(input) {
+    assert.match(input.broadcastRequestId, /^req_/u);
+    await input.beforeBroadcast();
     return {};
   },
 };
@@ -40,7 +42,16 @@ test("checked-in example and runtime capabilities satisfy the v1 schema", async 
     readFile(new URL("../spec/wallet-capability-v1.example.json", import.meta.url), "utf8"),
   ]);
   const validate = new Ajv2020({ allErrors: true }).compile(JSON.parse(schema));
-  assert.equal(validate(JSON.parse(example)), true, JSON.stringify(validate.errors));
+  const parsedExample = JSON.parse(example) as Record<string, unknown>;
+  assert.equal(validate(parsedExample), true, JSON.stringify(validate.errors));
+  assert.equal(parsedExample.contract, "org.agentboost.wallet/1.8");
+  const legacyVersion = structuredClone(parsedExample);
+  legacyVersion.contract = "org.agentboost.wallet/1.7";
+  assert.equal(
+    validate(legacyVersion),
+    false,
+    "the exact 1.8 capability expansion must not masquerade as the strict 1.7 contract",
+  );
 
   const root = await mkdtemp(join(tmpdir(), "agent-boost-capability-"));
   const runtime = await createLocalRuntime(
@@ -53,6 +64,29 @@ test("checked-in example and runtime capabilities satisfy the v1 schema", async 
       validate(capabilities),
       true,
       JSON.stringify(validate.errors),
+    );
+    assert.equal(capabilities.contract, "org.agentboost.wallet/1.8");
+    assert.deepEqual(capabilities.private_balance_management, {
+      available: true,
+      named: true,
+      multiple_per_profile: true,
+      create_available: true,
+      fund_from_main_available: true,
+      fund_from_private_balance_available: true,
+      per_balance_policy_editing: true,
+      public_change: {
+        nested_under_source_private_balance: true,
+        regular_transfer_source: true,
+      },
+    });
+    assert.deepEqual(capabilities.regular_transfer, {
+      available: false,
+      source_kinds: ["main", "private_balance_public_change"],
+    });
+    assert.equal(
+      (capabilities.wallet_management as { multiple_profiles: boolean })
+        .multiple_profiles,
+      true,
     );
     assert.deepEqual((capabilities.security as { overrides: object }).overrides, {});
   } finally {

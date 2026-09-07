@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-boost:schema:trade-capability:v1",
+  "title": "Agent Boost trade capability v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "status",
+    "chain_id",
+    "network_name",
+    "operation",
+    "mainnet_available",
+    "modes",
+    "hard_limits",
+    "readiness"
+  ],
+  "properties": {
+    "contract": {"const": "org.agentboost.trade/0.1"},
+    "status": {"const": "not_configured"},
+    "chain_id": {"const": "eip155:11155111"},
+    "network_name": {"const": "Sepolia"},
+    "operation": {"const": "swap_exact_in"},
+    "mainnet_available": {"const": false},
+    "manifest_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "modes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["regular", "private"],
+      "properties": {
+        "regular": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "venue",
+            "quote_available",
+            "execution_available",
+            "signing_available",
+            "reason_code"
+          ],
+          "properties": {
+            "status": {"const": "not_configured"},
+            "venue": {"type": "null"},
+            "quote_available": {"const": false},
+            "execution_available": {"const": false},
+            "signing_available": {"const": false},
+            "reason_code": {"const": "SEPOLIA_SWAP_VENUE_NOT_CONFIGURED"}
+          }
+        },
+        "private": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "venue",
+            "quote_available",
+            "execution_available",
+            "signing_available",
+            "privacy_design_status",
+            "privacy_claim_available",
+            "regular_fallback_allowed",
+            "reason_code"
+          ],
+          "properties": {
+            "status": {"const": "not_configured"},
+            "venue": {"type": "null"},
+            "quote_available": {"const": false},
+            "execution_available": {"const": false},
+            "signing_available": {"const": false},
+            "privacy_design_status": {"const": "not_selected"},
+            "privacy_claim_available": {"const": false},
+            "regular_fallback_allowed": {"const": false},
+            "reason_code": {"const": "PRIVATE_SWAP_DESIGN_NOT_SELECTED"}
+          }
+        }
+      }
+    },
+    "hard_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowed_chain_ids",
+        "cross_chain_available",
+        "automatic_mode_fallback",
+        "network_requests_enabled",
+        "signing_enabled",
+        "transaction_submission_enabled"
+      ],
+      "properties": {
+        "allowed_chain_ids": {"const": ["eip155:11155111"]},
+        "cross_chain_available": {"const": false},
+        "automatic_mode_fallback": {"const": false},
+        "network_requests_enabled": {"const": false},
+        "signing_enabled": {"const": false},
+        "transaction_submission_enabled": {"const": false}
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["regular", "private", "active_venue_count"],
+      "properties": {
+        "regular": {"const": "not_configured"},
+        "private": {"const": "not_configured"},
+        "active_venue_count": {"const": 0}
+      }
+    }
+  }
+}

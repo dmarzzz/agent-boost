@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="480" viewBox="0 0 1440 480" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Boost onboarding flow</title>
+  <desc id="desc">Four stages take a user from wallet creation through Sepolia funding and shielding to a private-ready wallet. Partial funding updates the QR and restarts resume durable state without duplicating the shield.</desc>
+  <defs>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0V28" fill="none" stroke="#f1f1df" stroke-opacity=".045"/>
+    </pattern>
+  </defs>
+
+  <rect width="1440" height="480" rx="34" fill="#11180c"/>
+  <rect width="1440" height="480" rx="34" fill="url(#grid)"/>
+  <text x="60" y="62" fill="#b9ff1d" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700" letter-spacing="3">ZERO → PRIVATE-READY</text>
+  <text x="1380" y="62" text-anchor="end" fill="#aeb9a4" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">ONE CONVERSATION</text>
+
+  <g fill="none" stroke="#b9ff1d" stroke-width="3">
+    <path d="M354 224H382"/>
+    <path d="M679 224H707"/>
+    <path d="M1004 224H1032"/>
+  </g>
+  <g fill="#b9ff1d">
+    <path d="M374 216L386 224L374 232Z"/>
+    <path d="M699 216L711 224L699 232Z"/>
+    <path d="M1024 216L1036 224L1024 232Z"/>
+  </g>
+
+  <g transform="translate(60 108)">
+    <rect width="294" height="232" rx="22" fill="#f1f1df"/>
+    <rect width="294" height="8" rx="4" fill="#b9ff1d"/>
+    <text x="24" y="48" fill="#536047" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" font-weight="700" letter-spacing="2">01 · CREATE</text>
+    <circle cx="48" cy="95" r="22" fill="#17210f"/>
+    <path d="M39 96H57M43 88V104M53 88V104" stroke="#b9ff1d" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="24" y="146" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="24" font-weight="760">Wallet created</text>
+    <text x="24" y="181" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Encrypted local wallet</text>
+    <text x="24" y="206" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">+ fresh funding address</text>
+  </g>
+
+  <g transform="translate(386 108)">
+    <rect width="293" height="232" rx="22" fill="#f1f1df"/>
+    <rect width="293" height="8" rx="4" fill="#b9ff1d"/>
+    <text x="24" y="48" fill="#536047" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" font-weight="700" letter-spacing="2">02 · FUND</text>
+    <rect x="26" y="73" width="44" height="44" rx="6" fill="#17210f"/>
+    <g fill="#b9ff1d">
+      <rect x="33" y="80" width="10" height="10"/><rect x="53" y="80" width="10" height="10"/>
+      <rect x="33" y="100" width="10" height="10"/><rect x="48" y="95" width="7" height="7"/><rect x="58" y="100" width="5" height="10"/>
+    </g>
+    <text x="24" y="146" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="24" font-weight="760">Fund on Sepolia</text>
+    <text x="24" y="181" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">QR tracks the exact</text>
+    <text x="24" y="206" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">test ETH still needed</text>
+  </g>
+
+  <g transform="translate(711 108)">
+    <rect width="293" height="232" rx="22" fill="#f1f1df"/>
+    <rect width="293" height="8" rx="4" fill="#b9ff1d"/>
+    <text x="24" y="48" fill="#536047" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" font-weight="700" letter-spacing="2">03 · SHIELD</text>
+    <circle cx="48" cy="95" r="22" fill="#17210f"/>
+    <path d="M48 78L53 89L65 95L53 101L48 112L43 101L31 95L43 89Z" fill="#b9ff1d"/>
+    <text x="24" y="146" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="24" font-weight="760">Prepare privacy</text>
+    <text x="24" y="181" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Shield 0.1 Sepolia ETH</text>
+    <text x="24" y="206" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">through pinned Kohaku</text>
+  </g>
+
+  <g transform="translate(1036 108)">
+    <rect width="344" height="232" rx="22" fill="#dff5a3"/>
+    <rect width="344" height="8" rx="4" fill="#b9ff1d"/>
+    <text x="24" y="48" fill="#536047" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" font-weight="700" letter-spacing="2">04 · READY</text>
+    <circle cx="48" cy="95" r="22" fill="#17210f"/>
+    <path d="M37 95L45 103L60 86" fill="none" stroke="#b9ff1d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="24" y="146" fill="#17210f" font-family="ui-sans-serif, system-ui, sans-serif" font-size="24" font-weight="760">Private-ready</text>
+    <text x="24" y="181" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Spendable private balance</text>
+    <text x="24" y="206" fill="#536047" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">+ live Tor RPC route</text>
+  </g>
+
+  <rect x="60" y="376" width="1320" height="52" rx="14" fill="#202b18" stroke="#536047"/>
+  <circle cx="88" cy="402" r="6" fill="#b9ff1d"/>
+  <text x="108" y="408" fill="#dfe9d5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="700">PARTIAL FUNDING UPDATES THE QR · RESTARTS RESUME DURABLE STATE · NO AUTOMATIC DUPLICATE SHIELD</text>
+</svg>
