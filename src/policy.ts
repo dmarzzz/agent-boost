@@ -6,13 +6,15 @@ import {
   MAX_POLICY_PAYMENTS,
   MAX_POLICY_TTL_MS,
   type DelegationPolicy,
+  type OnboardingRecord,
   type PolicyUpdatePlan,
   type PolicyUpdateReceipt,
   type WalletAuthorizationBinding,
+  type WalletProfileRecord,
   type WalletSelectionBinding,
   type WalletPolicySnapshot,
 } from "./contracts.js";
-import { StateStore } from "./state/store.js";
+import { StateStore, type StateDocument } from "./state/store.js";
 
 const ATOMIC_PATTERN = /^(0|[1-9][0-9]*)$/;
 
@@ -79,10 +81,13 @@ export class WalletPolicyController {
     this.#clock = options.clock ?? SYSTEM_CLOCK;
   }
 
-  async get(): Promise<WalletPolicySnapshot> {
+  async get(walletId?: string): Promise<WalletPolicySnapshot> {
     const state = await this.#store.read();
-    if (!state.onboarding) throw new Error("WALLET_NOT_INITIALIZED");
-    return snapshot(state.onboarding.delegation, paymentsUsedByActiveAuthorization(state));
+    const target = walletContext(state, walletId);
+    return snapshot(
+      target.onboarding.delegation,
+      paymentsUsedByAuthorization(state, target.authorizationId),
+    );
   }
 
   async getPlan(decisionId: string): Promise<PolicyUpdatePlan> {
@@ -108,6 +113,7 @@ export class WalletPolicyController {
   }
 
   async plan(input: {
+    walletId?: string;
     perPaymentLimitWei?: string;
     lifetimeLimitWei?: string;
     maxPayments?: number;
@@ -145,18 +151,18 @@ export class WalletPolicyController {
     }
 
     const state = await this.#store.read();
-    if (!state.onboarding) throw new Error("WALLET_NOT_INITIALIZED");
     const now = this.#clock.now();
-    const active = activeWalletContext(state);
-    const paymentsUsed = paymentsUsedByAuthorization(state, active.authorizationId);
-    const current = snapshot(state.onboarding.delegation, paymentsUsed);
+    const target = walletContext(state, input.walletId);
+    const paymentsUsed = paymentsUsedByAuthorization(state, target.authorizationId);
+    const current = snapshot(target.onboarding.delegation, paymentsUsed);
     const perPayment = requestedPerPayment ?? BigInt(current.perPaymentLimitWei);
     const maximumPayments = input.maxPayments ?? current.maxPayments;
+    const paymentEnvelope = perPayment * BigInt(maximumPayments);
     const derivedLifetime =
       input.perPaymentLimitWei !== undefined || input.maxPayments !== undefined;
     const lifetime = requestedLifetime ?? (
       derivedLifetime
-        ? perPayment * BigInt(maximumPayments)
+        ? BigInt(maxAtomic(current.spentWei, paymentEnvelope.toString()))
         : BigInt(current.lifetimeLimitWei)
     );
     const currentExpired =
@@ -189,7 +195,7 @@ export class WalletPolicyController {
     if (lifetime > MAX_POLICY_LIFETIME_LIMIT_WEI) {
       blockers.push("HARD_MAX_LIFETIME_LIMIT");
     }
-    if (lifetime > perPayment * BigInt(maximumPayments)) {
+    if (lifetime > paymentEnvelope && lifetime !== BigInt(current.spentWei)) {
       blockers.push("LIFETIME_EXCEEDS_PAYMENT_ENVELOPE");
     }
     if (lifetime < BigInt(current.spentWei)) {
@@ -204,7 +210,7 @@ export class WalletPolicyController {
     if (new Date(expiresAt).getTime() - now.getTime() > MAX_POLICY_TTL_MS) {
       blockers.push("HARD_MAX_EXPIRY");
     }
-    if (proposed.enabled && !active.authorizationId) {
+    if (proposed.enabled && !target.authorizationId) {
       blockers.push("REAUTHORIZATION_REQUIRED");
     }
     if (samePolicy(current, proposed)) blockers.push("NOTHING_CHANGED");
@@ -212,8 +218,8 @@ export class WalletPolicyController {
     const plan: PolicyUpdatePlan = {
       version: 1,
       decisionId: `wpd_${randomUUID()}`,
-      wallet: active.wallet,
-      ...(active.authorizationId ? { authorizationId: active.authorizationId } : {}),
+      wallet: target.wallet,
+      ...(target.authorizationId ? { authorizationId: target.authorizationId } : {}),
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
       current,
@@ -281,28 +287,33 @@ export class WalletPolicyController {
       if (new Date(plan.expiresAt).getTime() <= now.getTime()) {
         throw new Error("POLICY_DECISION_EXPIRED");
       }
-      if (!draft.onboarding) throw new Error("WALLET_NOT_INITIALIZED");
-      const active = activeWalletContext(draft);
-      if (!sameWallet(active.wallet, plan.wallet) ||
-        active.authorizationId !== plan.authorizationId) {
+      const target = walletContext(draft, plan.wallet.walletId);
+      if (!sameWallet(target.wallet, plan.wallet) ||
+        target.authorizationId !== plan.authorizationId) {
         throw new Error("WALLET_SELECTION_CHANGED");
       }
       const live = snapshot(
-        draft.onboarding.delegation,
-        paymentsUsedByAuthorization(draft, active.authorizationId),
+        target.onboarding.delegation,
+        paymentsUsedByAuthorization(draft, target.authorizationId),
       );
       if (!samePolicy(live, plan.current)) {
         throw new Error("POLICY_CHANGED_REFRESH_PLAN");
       }
       const { paymentsUsed: _used, paymentsRemaining: _remaining, ...delegation } =
         plan.proposed;
-      draft.onboarding.delegation = delegation;
-      draft.onboarding.revision += 1;
-      draft.onboarding.updatedAt = now.toISOString();
+      target.onboarding.delegation = delegation;
+      target.onboarding.revision += 1;
+      target.onboarding.updatedAt = now.toISOString();
+      synchronizeTargetPrivateBalances(
+        draft,
+        target.profile,
+        delegation,
+        now.toISOString(),
+      );
       plan.appliedAt = now.toISOString();
       plan.appliedPolicy = snapshot(delegation, paymentsUsedByAuthorization(
         draft,
-        active.authorizationId,
+        target.authorizationId,
       ));
       receipt = {
         version: 1,
@@ -329,17 +340,41 @@ export class WalletPolicyController {
   }
 }
 
-function activeWalletContext(state: Awaited<ReturnType<StateStore["read"]>>): {
+function activeWalletContext(state: StateDocument): {
+  wallet: WalletSelectionBinding;
+  authorizationId?: string;
+} {
+  const target = walletContext(state);
+  return {
+    wallet: target.wallet,
+    ...(target.authorizationId ? { authorizationId: target.authorizationId } : {}),
+  };
+}
+
+function walletContext(state: StateDocument, walletId?: string): {
+  profile: WalletProfileRecord;
+  onboarding: OnboardingRecord;
   wallet: WalletSelectionBinding;
   authorizationId?: string;
 } {
   const registry = state.wallet;
-  const profile = registry?.profiles[registry.activeWalletId];
-  if (!profile || profile.selectionEpoch < 1) throw new Error("ACTIVE_WALLET_MISSING");
-  if (state.onboarding?.delegation.enabled && !profile.authorizationId) {
-    throw new Error("ACTIVE_WALLET_AUTHORIZATION_MISSING");
+  const targetWalletId = walletId ?? registry?.activeWalletId;
+  const profile = targetWalletId === undefined
+    ? undefined
+    : registry?.profiles[targetWalletId];
+  if (!profile || profile.selectionEpoch < 1 || profile.status === "archived") {
+    throw new Error(walletId === undefined ? "ACTIVE_WALLET_MISSING" : "WALLET_NOT_FOUND");
+  }
+  const onboarding = profile.walletId === registry?.activeWalletId
+    ? state.onboarding
+    : profile.onboarding;
+  if (!onboarding) throw new Error("WALLET_NOT_INITIALIZED");
+  if (onboarding.delegation.enabled && !profile.authorizationId) {
+    throw new Error("WALLET_AUTHORIZATION_MISSING");
   }
   return {
+    profile,
+    onboarding,
     wallet: {
       walletId: profile.walletId,
       walletName: profile.name,
@@ -350,24 +385,93 @@ function activeWalletContext(state: Awaited<ReturnType<StateStore["read"]>>): {
 }
 
 function paymentsUsedByActiveAuthorization(
-  state: Awaited<ReturnType<StateStore["read"]>>,
+  state: StateDocument,
 ): number {
   return paymentsUsedByAuthorization(state, activeWalletContext(state).authorizationId);
 }
 
 function paymentsUsedByAuthorization(
-  state: Awaited<ReturnType<StateStore["read"]>>,
+  state: StateDocument,
   authorizationId: string | undefined,
 ): number {
   if (!authorizationId) return 0;
   return Object.values(state.requests).filter(
-    (request) => request.authorization.authorizationId === authorizationId,
+    (request) => request.phase !== "failed" &&
+      request.authorization.authorizationId === authorizationId,
   ).length + Object.values(state.regularRequests).filter(
-    (request) => request.authorization.authorizationId === authorizationId,
+    (request) => request.phase !== "failed" &&
+      request.authorization.authorizationId === authorizationId,
   ).length;
 }
 
 function sameWallet(left: WalletSelectionBinding, right: WalletSelectionBinding): boolean {
   return left.walletId === right.walletId && left.walletName === right.walletName &&
     left.selectionEpoch === right.selectionEpoch;
+}
+
+function synchronizeTargetPrivateBalances(
+  state: StateDocument,
+  profile: WalletProfileRecord,
+  aggregate: DelegationPolicy,
+  updatedAt: string,
+): void {
+  const explicitlyManaged = new Set(
+    Object.values(state.privateBalancePolicyUpdateRequests)
+      .filter((request) => request.phase === "applied" &&
+        request.privateBalance.walletId === profile.walletId)
+      .map((request) => request.privateBalance.privateBalanceId),
+  );
+  for (const privateBalance of Object.values(profile.privateBalances)) {
+    const next = explicitlyManaged.has(privateBalance.privateBalanceId)
+      ? clampPrivatePolicyToAggregate(privateBalance.delegation, aggregate)
+      : structuredClone(aggregate);
+    if (sameDelegation(privateBalance.delegation, next)) continue;
+    privateBalance.delegation = next;
+    privateBalance.revision += 1;
+    privateBalance.updatedAt = updatedAt;
+  }
+}
+
+function clampPrivatePolicyToAggregate(
+  policy: DelegationPolicy,
+  aggregate: DelegationPolicy,
+): DelegationPolicy {
+  const perPaymentLimitWei = minAtomic(
+    policy.perPaymentLimitWei,
+    aggregate.perPaymentLimitWei,
+  );
+  const maxPayments = Math.min(policy.maxPayments, aggregate.maxPayments);
+  const paymentEnvelopeWei = (
+    BigInt(perPaymentLimitWei) * BigInt(maxPayments)
+  ).toString();
+  const lifetimeLimitWei = maxAtomic(policy.spentWei, minAtomic(
+    policy.lifetimeLimitWei,
+    aggregate.lifetimeLimitWei,
+    paymentEnvelopeWei,
+  ));
+  return {
+    ...policy,
+    perPaymentLimitWei,
+    lifetimeLimitWei,
+    spentWei: policy.spentWei,
+    maxPayments,
+    expiresAt: Date.parse(policy.expiresAt) <= Date.parse(aggregate.expiresAt)
+      ? policy.expiresAt
+      : aggregate.expiresAt,
+    enabled: policy.enabled && aggregate.enabled,
+  };
+}
+
+function minAtomic(...values: string[]): string {
+  return values.reduce((minimum, value) =>
+    BigInt(value) < BigInt(minimum) ? value : minimum);
+}
+
+function maxAtomic(...values: string[]): string {
+  return values.reduce((maximum, value) =>
+    BigInt(value) > BigInt(maximum) ? value : maximum);
+}
+
+function sameDelegation(left: DelegationPolicy, right: DelegationPolicy): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }

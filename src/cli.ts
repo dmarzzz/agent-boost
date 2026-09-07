@@ -2,22 +2,8 @@
 
 import { readFile, realpath } from "node:fs/promises";
 
-import { loadConfig } from "./config.js";
-import { installHermesIntegration } from "./hermes/index.js";
-import {
-  assessSupportedHost,
-  inspectPinnedKohaku,
-  SpawnCommandRunner,
-} from "./kohaku/index.js";
-import { runStdioMcp } from "./mcp.js";
-import { SepoliaRpcClient } from "./rpc/index.js";
-import { ShadeTreeEgress } from "./shade-tree/index.js";
-import {
-  createLocalRuntime,
-  readLocalStatus,
-  type LocalAgentBoostRuntime,
-} from "./service.js";
-import { TorRpcProxy, TorRpcRoute } from "./tor/index.js";
+import type { HermesInstallError } from "./hermes/index.js";
+import type { LocalAgentBoostRuntime } from "./service.js";
 
 const VERSION = "0.1.0";
 
@@ -26,6 +12,7 @@ function usage(): string {
 
 Usage:
   agent-boost install-hermes [--executable /absolute/path/to/agent-boost]
+  agent-boost hermes-turn-gate
   agent-boost mcp [--mode dark] [--contract-major 1]
   agent-boost onboard
   agent-boost status [--json]
@@ -62,7 +49,17 @@ function currentExitCode(): number {
 async function withRuntime(
   operation: (runtime: LocalAgentBoostRuntime) => Promise<void>,
 ): Promise<void> {
-  const runtime = await createLocalRuntime(loadConfig());
+  const [{ loadConfig }, { createLocalRuntime }] = await Promise.all([
+    import("./config.js"),
+    import("./service.js"),
+  ]);
+  return withManagedRuntime(await createLocalRuntime(loadConfig()), operation);
+}
+
+async function withManagedRuntime(
+  runtime: LocalAgentBoostRuntime,
+  operation: (runtime: LocalAgentBoostRuntime) => Promise<void>,
+): Promise<void> {
   let stopping = false;
   const stop = (): void => {
     if (stopping) return;
@@ -80,7 +77,41 @@ async function withRuntime(
   }
 }
 
+async function withRegistrationFirstMcpRuntime(): Promise<void> {
+  const [{ loadConfig }, { runStdioMcp }, { LocalAgentBoostRuntime }] =
+    await Promise.all([
+      import("./config.js"),
+      import("./mcp.js"),
+      import("./service.js"),
+    ]);
+  const runtime = new LocalAgentBoostRuntime(loadConfig());
+  let stopping = false;
+  const stop = (): void => {
+    if (stopping) return;
+    stopping = true;
+    void runtime.shutdown().finally(() => process.exit(0));
+  };
+  try {
+    await runStdioMcp(runtime, async () => {
+      await runtime.initialize();
+      // Do not install graceful shutdown handlers until initialization is
+      // complete. Before this point the process keeps Node's default signal
+      // behavior, avoiding shutdown racing Tor bootstrap or crash recovery.
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+    });
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+    await runtime.shutdown();
+  }
+}
+
 async function installHermes(args: readonly string[]): Promise<void> {
+  const [{ installHermesIntegration }, { SpawnCommandRunner }] = await Promise.all([
+    import("./hermes/index.js"),
+    import("./kohaku/index.js"),
+  ]);
   const requested = flagValue(args, "--executable");
   const executablePath = await realpath(requested ?? process.argv[1] ?? "");
   const runner = new SpawnCommandRunner({ defaultTimeoutMs: 3 * 60_000 });
@@ -93,16 +124,77 @@ async function installHermes(args: readonly string[]): Promise<void> {
     installed: true,
     config_path: result.configPath,
     config_changed: result.configChanged,
+    ...(result.configBackupPath === undefined
+      ? {}
+      : { config_backup_path: result.configBackupPath }),
+    turn_gate: {
+      command: result.turnGateCommand,
+      allowlist_path: result.hookAllowlistPath,
+      allowlist_changed: result.hookAllowlistChanged,
+      ...(result.hookAllowlistBackupPath === undefined
+        ? {}
+        : { allowlist_backup_path: result.hookAllowlistBackupPath }),
+    },
+    output_guard: {
+      plugin_path: result.outputGuardPluginPath,
+      changed: result.outputGuardPluginChanged,
+      backup_paths: result.outputGuardPluginBackupPaths,
+      validated: result.outputGuardPluginTest.exitCode === 0,
+    },
     skills: result.skills.map((skill) => ({
       name: skill.name,
       path: skill.path,
       changed: skill.changed,
+      ...(skill.backupPath === undefined
+        ? {}
+        : { backup_path: skill.backupPath }),
     })),
     next: result.recommendation,
   });
 }
 
+function safeCliError(error: HermesInstallError): Record<string, unknown> {
+  const details = error.details;
+  return {
+    code: error.code,
+    message: error.message,
+    ...(details.rollback === undefined ? {} : { rollback: details.rollback }),
+    ...(details.lockCleanup === undefined
+      ? {}
+      : { lock_cleanup: details.lockCleanup }),
+    ...(details.committed === true ? { committed: true } : {}),
+    ...(typeof details.recommendation === "string"
+      ? { recommendation: details.recommendation }
+      : {}),
+    ...(typeof details.lockPath === "string"
+      ? { lock_path: details.lockPath }
+      : {}),
+    ...(typeof details.path === "string"
+      ? { target_path: details.path }
+      : {}),
+    ...(typeof details.ownerPid === "number"
+      ? { owner_pid: details.ownerPid }
+      : {}),
+    ...(typeof details.remediation === "string"
+      ? { remediation: details.remediation }
+      : {}),
+  };
+}
+
 async function doctor(): Promise<void> {
+  const [
+    { loadConfig },
+    { assessSupportedHost, inspectPinnedKohaku, SpawnCommandRunner },
+    { SepoliaRpcClient },
+    { ShadeTreeEgress },
+    { TorRpcProxy, TorRpcRoute },
+  ] = await Promise.all([
+    import("./config.js"),
+    import("./kohaku/index.js"),
+    import("./rpc/index.js"),
+    import("./shade-tree/index.js"),
+    import("./tor/index.js"),
+  ]);
   const config = loadConfig();
   const checks: Array<{
     name: string;
@@ -235,12 +327,25 @@ async function main(): Promise<void> {
     case "install-hermes":
       await installHermes(args);
       return;
+    case "hermes-turn-gate": {
+      // Keep this safety-critical hook on a deliberately tiny startup path.
+      // Loading the wallet, Tor, MCP, or installer graphs here can consume
+      // Hermes' entire shell-hook timeout before the gate reads stdin.
+      const { runHermesTurnGate } = await import("./hermes/turn-gate.js");
+      await runHermesTurnGate();
+      return exitAfterFlush(currentExitCode());
+    }
     case "doctor":
       await doctor();
       return exitAfterFlush(currentExitCode());
-    case "status":
+    case "status": {
+      const [{ loadConfig }, { readLocalStatus }] = await Promise.all([
+        import("./config.js"),
+        import("./service.js"),
+      ]);
       print(await readLocalStatus(loadConfig()));
       return;
+    }
     case "onboard":
       await withRuntime(async (runtime) => {
         const started = await runtime.startOnboarding();
@@ -269,7 +374,7 @@ async function main(): Promise<void> {
       if (mode !== "dark" || contractMajor !== "1") {
         throw new Error("The POC supports only --mode dark --contract-major 1");
       }
-      await withRuntime((runtime) => runStdioMcp(runtime));
+      await withRegistrationFirstMcpRuntime();
       return exitAfterFlush(currentExitCode());
     }
     default:
@@ -277,7 +382,15 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
+main().catch(async (error: unknown) => {
+  const { HermesInstallError } = await import("./hermes/index.js");
+  if (error instanceof HermesInstallError) {
+    process.stderr.write(
+      `agent-boost: ${JSON.stringify(safeCliError(error), null, 2)}\n`,
+      () => process.exit(1),
+    );
+    return;
+  }
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`agent-boost: ${message}\n`, () => process.exit(1));
 });

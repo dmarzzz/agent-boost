@@ -20,10 +20,12 @@
     "readiness",
     "demo_reset",
     "wallet_management",
+    "private_balance_management",
+    "regular_transfer",
     "wallet_tree"
   ],
   "properties": {
-    "contract": {"const": "org.agentboost.wallet/1.7"},
+    "contract": {"const": "org.agentboost.wallet/1.8"},
     "chain_id": {"const": "eip155:11155111"},
     "network_name": {"const": "Sepolia"},
     "asset_type": {"const": "eip155:11155111/slip44:60"},
@@ -260,16 +262,66 @@
         "managed_wallets_only",
         "accepts_seed_or_password",
         "selection_requires_separate_reauthorization",
+        "selection_preserves_valid_authorization",
         "recovery_transfer_available",
-        "regular_transfer_available"
+        "regular_transfer_available",
+        "multiple_profiles"
       ],
       "properties": {
         "available": {"type": "boolean"},
         "managed_wallets_only": {"const": true},
         "accepts_seed_or_password": {"const": false},
-        "selection_requires_separate_reauthorization": {"const": true},
+        "selection_requires_separate_reauthorization": {"const": false},
+        "selection_preserves_valid_authorization": {"const": true},
         "recovery_transfer_available": {"type": "boolean"},
-        "regular_transfer_available": {"type": "boolean"}
+        "regular_transfer_available": {"type": "boolean"},
+        "multiple_profiles": {"const": true}
+      }
+    },
+    "private_balance_management": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available",
+        "named",
+        "multiple_per_profile",
+        "create_available",
+        "fund_from_main_available",
+        "fund_from_private_balance_available",
+        "per_balance_policy_editing",
+        "public_change"
+      ],
+      "properties": {
+        "available": {"const": true},
+        "named": {"const": true},
+        "multiple_per_profile": {"const": true},
+        "create_available": {"const": true},
+        "fund_from_main_available": {"const": true},
+        "fund_from_private_balance_available": {"const": true},
+        "per_balance_policy_editing": {"const": true},
+        "public_change": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nested_under_source_private_balance",
+            "regular_transfer_source"
+          ],
+          "properties": {
+            "nested_under_source_private_balance": {"const": true},
+            "regular_transfer_source": {"const": true}
+          }
+        }
+      }
+    },
+    "regular_transfer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available", "source_kinds"],
+      "properties": {
+        "available": {"type": "boolean"},
+        "source_kinds": {
+          "const": ["main", "private_balance_public_change"]
+        }
       }
     },
     "wallet_tree": {

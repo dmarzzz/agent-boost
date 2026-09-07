@@ -6,6 +6,7 @@ import test from "node:test";
 
 import type {
   ChainClient,
+  PrivateBroadcastCheckpoint,
   WalletAdapter,
   WalletReauthorizationPlan,
 } from "../src/contracts.js";
@@ -17,29 +18,67 @@ import { StateStore } from "../src/state/store.js";
 
 const MAIN = "0x1111111111111111111111111111111111111111";
 const RECIPIENT = "0x2222222222222222222222222222222222222222";
+const CHANGE_SENDER = "0x3333333333333333333333333333333333333333";
+const ENTRY_POINT_V08 = "0x4337084d9e255ff0702461cf8895ce9e3b5ff108";
 
 class CancellationWallet implements WalletAdapter {
   privateCalls = 0;
   regularCalls = 0;
   recoveryCalls = 0;
+  checkpoint?: PrivateBroadcastCheckpoint;
+  changeAccountCalls: Array<{ walletName: string; expectedAddress: string }> = [];
+  failChangeAccountRecovery = false;
 
   async ensureWallet(): Promise<void> {}
   async nextFreshAddress(): Promise<string> { return MAIN; }
   async prewarmPrivacy(): Promise<void> {}
   async shieldWei(): Promise<Record<string, never>> { return {}; }
   async getPrivateBalanceWei(): Promise<bigint> { return 100n; }
+  async getPrivateBroadcastCheckpoint(
+    _requestId: string,
+  ): Promise<PrivateBroadcastCheckpoint | undefined> {
+    return this.checkpoint;
+  }
+  async ensurePrivateChangeAccount(
+    walletName: string,
+    expectedAddress: string,
+  ): Promise<void> {
+    this.changeAccountCalls.push({ walletName, expectedAddress });
+    if (this.failChangeAccountRecovery) {
+      throw new Error("private change account recovery failed");
+    }
+  }
 
-  async executePrivatePayment(): Promise<{ confirmed: boolean }> {
+  async executePrivatePayment(input: {
+    recipient: string;
+    amountWei: bigint;
+    broadcastRequestId: string;
+    beforeBroadcast: () => Promise<void>;
+  }): Promise<{ confirmed: boolean }> {
+    assert.match(input.broadcastRequestId, /^req_/u);
+    await input.beforeBroadcast();
     this.privateCalls += 1;
     return { confirmed: true };
   }
 
-  async executeRegularTransfer(): Promise<{ confirmed: boolean }> {
+  async executeRegularTransfer(input: {
+    recipient: string;
+    amountWei: bigint;
+    beforeBroadcast: () => Promise<void>;
+  }): Promise<{ confirmed: boolean }> {
+    await input.beforeBroadcast();
     this.regularCalls += 1;
     return { confirmed: true };
   }
 
-  async executeRecoveryTransfer(): Promise<{ confirmed: boolean }> {
+  async executeRecoveryTransfer(input: {
+    recipient: string;
+    amountWei: bigint;
+    broadcastRequestId: string;
+    beforeBroadcast: () => Promise<void>;
+  }): Promise<{ confirmed: boolean }> {
+    assert.match(input.broadcastRequestId, /^wrr_/u);
+    await input.beforeBroadcast();
     this.recoveryCalls += 1;
     return { confirmed: true };
   }
@@ -92,6 +131,7 @@ test("a declined private-payment plan stays cancelled across a later approval", 
   const controller = new PaymentController({
     store,
     wallet,
+    withdrawalAmountWei: 100n,
     clock: { now: () => new Date(1_000) },
   });
   const plan = await controller.plan({ recipient: RECIPIENT, amountWei: "10" });
@@ -169,6 +209,288 @@ test("a declined recovery plan stays cancelled across a later approval", async (
   );
   assert.equal(wallet.recoveryCalls, 0);
   assert.equal(Object.keys((await store.read()).recoveryRequests).length, 0);
+});
+
+test("recovery confirms only from its exact UserOperation event receipt", async () => {
+  const store = await readyStore();
+  const wallet = new CancellationWallet();
+  const userOperationHash = `0x${"41".repeat(32)}`;
+  const transactionHash = `0x${"42".repeat(32)}`;
+  wallet.executeRecoveryTransfer = async ({ beforeBroadcast }) => {
+    await beforeBroadcast();
+    wallet.recoveryCalls += 1;
+    return { userOperationHash, confirmed: false };
+  };
+  let receipt:
+    | { status: "pending" }
+    | { status: "success"; transactionHash: string } = { status: "pending" };
+  const controller = new RecoveryTransferController({
+    store,
+    wallet,
+    chain: {
+      async assertSepolia() {},
+      async getBalanceWei(address) { return address === MAIN ? 1_000n : 90n; },
+      async getUserOperationReceiptStatus(hash) {
+        assert.equal(hash, userOperationHash);
+        return receipt;
+      },
+    },
+    withdrawalAmountWei: 100n,
+    feeReserveWei: 10n,
+    clock: { now: () => new Date(1_000) },
+  });
+  const plan = await controller.plan({ recipient: RECIPIENT, amountWei: "90" });
+  const submitted = await controller.execute({
+    decisionId: plan.decisionId,
+    clientRequestId: "recovery-user-operation",
+    userConfirmed: true,
+  });
+  assert.equal(submitted.phase, "submitted");
+  assert.equal((await controller.getRequest(submitted.requestId)).phase, "submitted");
+  receipt = { status: "success", transactionHash };
+  const confirmed = await controller.getRequest(submitted.requestId);
+  assert.equal(confirmed.phase, "confirmed");
+  assert.equal(confirmed.transactionHash, transactionHash);
+  assert.equal(confirmed.confirmation?.method, "user_operation_receipt");
+  assert.equal(wallet.recoveryCalls, 1);
+});
+
+test("adapter-confirmed recovery with a journal waits for exact receipt and change recovery", async () => {
+  const store = await readyStore();
+  const wallet = new CancellationWallet();
+  const userOperationHash = `0x${"45".repeat(32)}`;
+  const transactionHash = `0x${"46".repeat(32)}`;
+  wallet.executeRecoveryTransfer = async ({ broadcastRequestId, beforeBroadcast }) => {
+    await beforeBroadcast();
+    wallet.recoveryCalls += 1;
+    wallet.checkpoint = {
+      version: 1,
+      requestId: broadcastRequestId,
+      userOperationHash,
+      sender: CHANGE_SENDER,
+      entryPointAddress: ENTRY_POINT_V08,
+      journaledAt: new Date(1_000).toISOString(),
+    };
+    return { transactionHash, userOperationHash, confirmed: true };
+  };
+  let receipt:
+    | { status: "pending" }
+    | { status: "success"; transactionHash: string } = { status: "pending" };
+  const controller = new RecoveryTransferController({
+    store,
+    wallet,
+    chain: {
+      async assertSepolia() {},
+      async getBalanceWei(address) {
+        if (address.toLowerCase() === CHANGE_SENDER.toLowerCase()) return 17n;
+        return address === MAIN ? 1_000n : 90n;
+      },
+      async getUserOperationReceiptStatus(hash, expectedSender) {
+        assert.equal(hash, userOperationHash);
+        assert.equal(expectedSender, CHANGE_SENDER);
+        return receipt;
+      },
+      async getTransactionReceiptStatus() {
+        throw new Error("outer transaction receipt must not confirm a journaled UserOperation");
+      },
+    },
+    withdrawalAmountWei: 100n,
+    feeReserveWei: 10n,
+    clock: { now: () => new Date(1_000) },
+  });
+  const plan = await controller.plan({ recipient: RECIPIENT, amountWei: "90" });
+  const submitted = await controller.execute({
+    decisionId: plan.decisionId,
+    clientRequestId: "adapter-confirmed-journaled-recovery",
+    userConfirmed: true,
+  });
+  assert.equal(submitted.phase, "submitted");
+  assert.equal(submitted.confirmation, undefined);
+  assert.equal(submitted.publicChangeWei, undefined);
+  assert.equal(wallet.changeAccountCalls.length, 0);
+  assert.equal((await controller.getRequest(submitted.requestId)).phase, "submitted");
+
+  receipt = { status: "success", transactionHash };
+  const confirmed = await controller.getRequest(submitted.requestId);
+  assert.equal(confirmed.phase, "confirmed");
+  assert.equal(confirmed.confirmation?.method, "user_operation_receipt");
+  assert.equal(confirmed.publicChangeWei, "17");
+  assert.deepEqual(wallet.changeAccountCalls, [{
+    walletName: "agent-boost",
+    expectedAddress: CHANGE_SENDER,
+  }]);
+  const state = await store.read();
+  const profile = state.wallet!.profiles[state.wallet!.activeWalletId]!;
+  assert.equal(
+    profile.privateBalances[confirmed.privateBalanceId!]!.publicChangeAccounts?.[
+      CHANGE_SENDER.toLowerCase()
+    ]?.sourceRequestId,
+    submitted.requestId,
+  );
+});
+
+test("recovery reuses durable success evidence after change recovery and receipt RPC fail", async () => {
+  const store = await readyStore();
+  const wallet = new CancellationWallet();
+  const userOperationHash = `0x${"47".repeat(32)}`;
+  const transactionHash = `0x${"48".repeat(32)}`;
+  let receiptReads = 0;
+  wallet.executeRecoveryTransfer = async ({ broadcastRequestId, beforeBroadcast }) => {
+    await beforeBroadcast();
+    wallet.recoveryCalls += 1;
+    wallet.checkpoint = {
+      version: 1,
+      requestId: broadcastRequestId,
+      userOperationHash,
+      sender: CHANGE_SENDER,
+      entryPointAddress: ENTRY_POINT_V08,
+      journaledAt: new Date(1_000).toISOString(),
+    };
+    return { userOperationHash, confirmed: false };
+  };
+  const chain: ChainClient = {
+    async assertSepolia() {},
+    async getBalanceWei(address) {
+      if (address.toLowerCase() === CHANGE_SENDER.toLowerCase()) return 19n;
+      return address === MAIN ? 1_000n : 90n;
+    },
+    async getUserOperationReceiptStatus(hash, expectedSender) {
+      receiptReads += 1;
+      assert.equal(hash, userOperationHash);
+      assert.equal(expectedSender, CHANGE_SENDER);
+      return { status: "success", transactionHash };
+    },
+  };
+  const controller = new RecoveryTransferController({
+    store,
+    wallet,
+    chain,
+    withdrawalAmountWei: 100n,
+    feeReserveWei: 10n,
+    clock: { now: () => new Date(1_000) },
+  });
+  const plan = await controller.plan({ recipient: RECIPIENT, amountWei: "90" });
+  const submitted = await controller.execute({
+    decisionId: plan.decisionId,
+    clientRequestId: "recovery-evidence-retry",
+    userConfirmed: true,
+  });
+  wallet.failChangeAccountRecovery = true;
+  const waitingForChange = await controller.getRequest(submitted.requestId);
+  assert.equal(waitingForChange.phase, "submitted");
+  assert.equal(waitingForChange.error?.code, "PUBLIC_CHANGE_TRACKING_PENDING");
+  assert.deepEqual(waitingForChange.userOperationReceiptEvidence, {
+    version: 1,
+    status: "success",
+    userOperationHash,
+    transactionHash,
+    observedAt: new Date(1_000).toISOString(),
+  });
+  assert.equal(receiptReads, 1);
+
+  wallet.failChangeAccountRecovery = false;
+  const restartedStore = new StateStore(join(store.path, ".."));
+  await restartedStore.initialize();
+  const restarted = new RecoveryTransferController({
+    store: restartedStore,
+    wallet,
+    chain: {
+      async assertSepolia() {},
+      async getBalanceWei(address) {
+        if (address.toLowerCase() === CHANGE_SENDER.toLowerCase()) return 19n;
+        return address === MAIN ? 1_000n : 90n;
+      },
+      async getUserOperationReceiptStatus() {
+        receiptReads += 1;
+        throw new Error("receipt provider unavailable after restart");
+      },
+    },
+    withdrawalAmountWei: 100n,
+    feeReserveWei: 10n,
+    clock: { now: () => new Date(2_000) },
+  });
+  const confirmed = await restarted.getRequest(submitted.requestId);
+  assert.equal(confirmed.phase, "confirmed");
+  assert.equal(confirmed.publicChangeWei, "19");
+  assert.equal(confirmed.confirmation?.method, "user_operation_receipt");
+  assert.equal(receiptReads, 1);
+  assert.equal(wallet.recoveryCalls, 1);
+  assert.deepEqual(await restarted.getRequest(submitted.requestId), confirmed);
+  const state = await store.read();
+  const profile = state.wallet!.profiles[state.wallet!.activeWalletId]!;
+  const pocket = profile.privateBalances[confirmed.privateBalanceId!]!;
+  assert.equal(pocket.balanceWei, "0");
+  assert.equal(Object.keys(pocket.publicChangeAccounts ?? {}).length, 1);
+});
+
+test("recovery hydrates a crash-journal hash and restores a reverted reservation once", async () => {
+  const store = await readyStore();
+  const wallet = new CancellationWallet();
+  const userOperationHash = `0x${"43".repeat(32)}`;
+  const transactionHash = `0x${"44".repeat(32)}`;
+  wallet.executeRecoveryTransfer = async ({ broadcastRequestId, beforeBroadcast }) => {
+    await beforeBroadcast();
+    wallet.recoveryCalls += 1;
+    wallet.checkpoint = {
+      version: 1,
+      requestId: broadcastRequestId,
+      userOperationHash,
+      sender: CHANGE_SENDER,
+      entryPointAddress: ENTRY_POINT_V08,
+      journaledAt: new Date(1_000).toISOString(),
+    };
+    return { confirmed: false };
+  };
+  const controller = new RecoveryTransferController({
+    store,
+    wallet,
+    chain: {
+      async assertSepolia() {},
+      async getBalanceWei(address) { return address === MAIN ? 1_000n : 0n; },
+      async getUserOperationReceiptStatus(hash, expectedSender) {
+        assert.equal(hash, userOperationHash);
+        assert.equal(expectedSender, CHANGE_SENDER);
+        return { status: "reverted", transactionHash };
+      },
+    },
+    withdrawalAmountWei: 100n,
+    feeReserveWei: 10n,
+    clock: { now: () => new Date(1_000) },
+  });
+  const plan = await controller.plan({ recipient: RECIPIENT, amountWei: "90" });
+  const interrupted = await controller.execute({
+    decisionId: plan.decisionId,
+    clientRequestId: "journaled-reverted-recovery",
+    userConfirmed: true,
+  });
+  assert.equal(interrupted.phase, "indeterminate");
+  assert.equal(interrupted.userOperationHash, undefined);
+
+  const failed = await controller.getRequest(interrupted.requestId);
+  assert.equal(failed.phase, "failed");
+  assert.equal(failed.userOperationHash, userOperationHash);
+  assert.equal(failed.transactionHash, transactionHash);
+  assert.deepEqual(failed.userOperationReceiptEvidence, {
+    version: 1,
+    status: "reverted",
+    userOperationHash,
+    transactionHash,
+    observedAt: new Date(1_000).toISOString(),
+  });
+  assert.equal(failed.error?.code, "RECOVERY_TRANSACTION_REVERTED");
+  assert.ok(failed.privateBalanceRestoredAt);
+  const restoredAt = failed.privateBalanceRestoredAt;
+  assert.equal(
+    (await controller.getRequest(interrupted.requestId)).privateBalanceRestoredAt,
+    restoredAt,
+  );
+  const state = await store.read();
+  const profile = state.wallet!.profiles[state.wallet!.activeWalletId]!;
+  assert.equal(
+    profile.privateBalances[profile.defaultPrivateBalanceId]?.balanceWei,
+    "100",
+  );
+  assert.equal(wallet.recoveryCalls, 1);
 });
 
 test("a newer policy preview supersedes the old exact decision", async () => {
@@ -267,6 +589,7 @@ test("a private-payment decision is single-use across client request IDs", async
   const controller = new PaymentController({
     store,
     wallet,
+    withdrawalAmountWei: 100n,
     clock: { now: () => new Date(1_000) },
   });
   const plan = await controller.plan({ recipient: RECIPIENT, amountWei: "10" });

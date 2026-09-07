@@ -5,11 +5,19 @@ import { dirname } from "node:path";
 import type { AgentBoostConfig } from "./config.js";
 import type {
   ChainClient,
+  DelegationPolicy,
   OnboardingRecord,
   PaymentPlan,
   PaymentRequest,
   PolicyUpdatePlan,
   PolicyUpdateReceipt,
+  PrivateBalanceCreationPlan,
+  PrivateBalanceCreationRequest,
+  PrivateBalanceFundingPlan,
+  PrivateBalanceFundingRequest,
+  PrivateBalancePolicyUpdatePlan,
+  PrivateBalancePolicyUpdateRequest,
+  PrivateBalanceRecord,
   PublicOnboardingSnapshot,
   RegularTransferPlan,
   RegularTransferRequest,
@@ -19,6 +27,7 @@ import type {
   WalletProfileRecord,
   WalletReauthorizationPlan,
   WalletSelectionBinding,
+  WalletTreePolicySnapshot,
   WalletTreeSnapshot,
 } from "./contracts.js";
 import {
@@ -26,12 +35,20 @@ import {
   MAX_POLICY_PAYMENT_LIMIT_WEI,
   MAX_POLICY_PAYMENTS,
   MAX_POLICY_TTL_MS,
+  SEPOLIA_CHAIN_ID,
 } from "./contracts.js";
+import { AgentBoostRequestError } from "./errors.js";
 import { KohakuWalletAdapter } from "./kohaku/index.js";
-import type { AgentBoostRuntime } from "./mcp.js";
+import type { AgentBoostRuntime, NamedRecipientResult } from "./mcp.js";
 import { OnboardingController } from "./onboarding.js";
 import { PaymentController } from "./payment.js";
+import { PrivateBalanceController } from "./private-balance.js";
+import { PrivateBalancePolicyController } from "./private-balance-policy.js";
 import { WalletPolicyController } from "./policy.js";
+import {
+  publicChangeBalanceWei,
+  refreshPublicChangeAccount,
+} from "./public-change.js";
 import { RegularTransferController } from "./regular-transfer.js";
 import { RecoveryTransferController } from "./recovery.js";
 import { SepoliaRpcClient } from "./rpc/index.js";
@@ -74,6 +91,74 @@ interface NewDemoResult {
   qrPngBase64?: string;
 }
 
+interface TransferPlanningReferenceInput {
+  recipient?: string;
+  recipientWalletName?: string;
+  sourceWalletName?: string;
+  sourcePrivateBalanceName?: string;
+  amountWei: string;
+}
+
+interface ExpectedActiveWalletInput {
+  expectedActiveWalletName?: string;
+  expectedActiveSelectionEpoch?: number;
+}
+
+type WalletLifecycleSetup = Pick<
+  OnboardingRecord,
+  "setupId" | "revision" | "phase"
+>;
+
+interface WalletLifecycleSetupResult {
+  setup_phase: OnboardingRecord["phase"] | "not_started";
+  setup?: WalletLifecycleSetup;
+  setup_continuation_status?: "unavailable";
+  /**
+   * Internal presentation material for the MCP adapter. This is deliberately
+   * limited to the public snapshot; the durable onboarding record also holds
+   * private broadcast checkpoints and must never leave the service layer.
+   */
+  onboarding?: {
+    snapshot: PublicOnboardingSnapshot;
+    uiOpened: boolean;
+    qrPngBase64?: string;
+  };
+}
+
+const UNRESOLVED_ONBOARDING_PHASES = new Set<OnboardingRecord["phase"]>([
+  "not_started",
+  "creating_wallet",
+  "preparing_privacy",
+  "awaiting_funding",
+  "funding_pending",
+  "funded_public",
+  "shielding",
+]);
+
+function walletLifecycleSetup(
+  setup: WalletLifecycleSetup,
+): WalletLifecycleSetupResult {
+  return {
+    setup_phase: setup.phase,
+    ...(UNRESOLVED_ONBOARDING_PHASES.has(setup.phase)
+      ? {
+          setup: {
+            setupId: setup.setupId,
+            revision: setup.revision,
+            phase: setup.phase,
+          },
+        }
+      : {}),
+  };
+}
+
+// These labels exist only to keep a just-planned friendly name visible across
+// the confirmation turn. Durable plans remain strict version-2 records, and a
+// restarted runtime derives the label again from the saved public address.
+const TRANSIENT_RECIPIENT_LABEL_LIMIT = 256;
+
+type TransferPlanningKind = "regular" | "private" | "recovery";
+
 export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   readonly #config: AgentBoostConfig;
   readonly #store: StateStore;
@@ -86,12 +171,14 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   readonly #payments: PaymentController;
   readonly #regularTransfers: RegularTransferController;
   readonly #policy: WalletPolicyController;
+  readonly #privateBalances: PrivateBalanceController;
+  readonly #privateBalancePolicy: PrivateBalancePolicyController;
   readonly #recovery: RecoveryTransferController;
   readonly #ui: OnboardingUiServer;
   readonly #openBrowser: (url: string) => Promise<boolean>;
   readonly #egress: CoveredEgressPort;
-  #reset: Promise<NewDemoResult> | undefined;
   #walletOperationQueue: Promise<unknown> = Promise.resolve();
+  readonly #recipientWalletNamesByDecision = new Map<string, string>();
   #shuttingDown = false;
 
   constructor(config: AgentBoostConfig, dependencies: RuntimeDependencies = {}) {
@@ -149,6 +236,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       executeEnabled: config.executeEnabled,
       executionLimitWei: MAX_POLICY_PAYMENT_LIMIT_WEI,
       paymentApproval: config.security.effective["payment.execute"],
+      withdrawalAmountWei: config.shieldAmountWei,
     });
     this.#regularTransfers = new RegularTransferController({
       store: this.#store,
@@ -159,6 +247,17 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       paymentApproval: config.security.effective["payment.execute"],
     });
     this.#policy = new WalletPolicyController({
+      store: this.#store,
+      defaultTtlMs: config.delegationTtlMs,
+    });
+    this.#privateBalances = new PrivateBalanceController({
+      store: this.#store,
+      wallet: this.#wallet,
+      chain: this.#chain,
+      shieldDenominationWei: config.shieldAmountWei,
+      executeEnabled: config.executeEnabled,
+    });
+    this.#privateBalancePolicy = new PrivateBalancePolicyController({
       store: this.#store,
       defaultTtlMs: config.delegationTtlMs,
     });
@@ -197,6 +296,13 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       await this.#regularTransfers.recoverInterruptedRequests();
       await this.#payments.recoverInterruptedRequests();
       await this.#recovery.recoverInterruptedRequests();
+      await this.#privateBalances.recoverInterruptedRequests();
+      // A named source wallet is selected while its regular transfer runs. If
+      // that transfer funded another saved wallet's unfinished onboarding,
+      // return to the recipient only after recovery has authoritatively
+      // confirmed the receipt. This also closes the restart window between a
+      // confirmed receipt and the in-process return to the recipient wallet.
+      await this.#resumeConfirmedRegularTransferRecipient().catch(() => undefined);
       await this.#onboarding.resume();
     } catch (error) {
       await this.#rpcProxy?.stop().catch(() => undefined);
@@ -209,13 +315,13 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
 
   async shutdown(): Promise<void> {
     this.#shuttingDown = true;
-    await this.#reset?.catch(() => undefined);
     await this.#walletOperationQueue.catch(() => undefined);
     await Promise.allSettled([
       this.#onboarding.stop(),
       this.#payments.stop(),
       this.#regularTransfers.stop(),
       this.#recovery.stop(),
+      this.#privateBalances.stop(),
       this.#ui.stop(),
       this.#egress.stop(),
     ]);
@@ -229,7 +335,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     const setup = state.onboarding;
     const egress = await this.#egress.status();
     return {
-      contract: "org.agentboost.wallet/1.7",
+      contract: "org.agentboost.wallet/1.8",
       chain_id: "eip155:11155111",
       network_name: "Sepolia",
       asset_type: "eip155:11155111/slip44:60",
@@ -336,11 +442,30 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
           this.#wallet.listWallets !== undefined,
         managed_wallets_only: true,
         accepts_seed_or_password: false,
-        selection_requires_separate_reauthorization: true,
+        selection_requires_separate_reauthorization: false,
+        selection_preserves_valid_authorization: true,
+        multiple_profiles: true,
         recovery_transfer_available:
           this.#wallet.executeRecoveryTransfer !== undefined,
         regular_transfer_available:
           this.#wallet.executeRegularTransfer !== undefined,
+      },
+      private_balance_management: {
+        available: true,
+        named: true,
+        multiple_per_profile: true,
+        create_available: true,
+        fund_from_main_available: true,
+        fund_from_private_balance_available: true,
+        per_balance_policy_editing: true,
+        public_change: {
+          nested_under_source_private_balance: true,
+          regular_transfer_source: true,
+        },
+      },
+      regular_transfer: {
+        available: this.#wallet.executeRegularTransfer !== undefined,
+        source_kinds: ["main", "private_balance_public_change"],
       },
       wallet_tree: {
         available: true,
@@ -512,12 +637,50 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     }));
 
     const activeOnboarding = before.onboarding;
-    let activePrivateBalanceWei: string | undefined;
-    if (activeOnboarding?.phase === "private_ready") {
-      try {
-        activePrivateBalanceWei = (await this.#wallet.getPrivateBalanceWei()).toString();
-      } catch {
-        // The tree remains useful while marking this one balance unavailable.
+    const activeProfile = before.wallet.profiles[activeWalletId];
+    const reservedPrivateBalanceIds = unresolvedPrivateBalanceIds(before);
+    const activePrivateSamples = new Map<string, string>();
+    const activePublicChangeSamples = new Map<string, Map<string, string>>();
+    if (activeProfile && activeOnboarding?.phase === "private_ready") {
+      for (const privateBalance of Object.values(activeProfile.privateBalances)) {
+        if (privateBalance.status !== "available" ||
+          reservedPrivateBalanceIds.has(privateBalance.privateBalanceId)) continue;
+        try {
+          const balance = this.#wallet.getPrivateBalanceWeiForWallet
+            ? await this.#wallet.getPrivateBalanceWeiForWallet(
+                privateBalance.backendWalletName,
+              )
+            : privateBalance.privateBalanceId === activeProfile.defaultPrivateBalanceId
+              ? await this.#wallet.getPrivateBalanceWei()
+              : undefined;
+          if (balance !== undefined) {
+            activePrivateSamples.set(
+              privateBalance.privateBalanceId,
+              balance.toString(),
+            );
+          }
+        } catch {
+          // Preserve this pocket's last-known balance and continue rendering
+          // the rest of the hierarchy when one backend sync is unavailable.
+        }
+        const publicSamples = new Map<string, string>();
+        await Promise.all(Object.values(privateBalance.publicChangeAccounts ?? {}).map(
+          async (account) => {
+            try {
+              const balance = await this.#chain.getBalanceWei(account.address);
+              publicSamples.set(account.address.toLowerCase(), balance.toString());
+            } catch {
+              // Preserve this account's last-known balance. A public-change
+              // read is never confirmation evidence for the originating send.
+            }
+          },
+        ));
+        if (publicSamples.size > 0) {
+          activePublicChangeSamples.set(
+            privateBalance.privateBalanceId,
+            publicSamples,
+          );
+        }
       }
     }
 
@@ -541,17 +704,40 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
           onboarding.updatedAt = observedAt;
         }
       }
-      if (
-        draft.wallet.activeWalletId === activeWalletId &&
-        draft.onboarding &&
-        activeOnboarding &&
-        draft.onboarding.setupId === activeOnboarding.setupId &&
-        activePrivateBalanceWei !== undefined &&
-        draft.onboarding.privateBalanceWei !== activePrivateBalanceWei
-      ) {
-        draft.onboarding.privateBalanceWei = activePrivateBalanceWei;
-        draft.onboarding.revision += 1;
-        draft.onboarding.updatedAt = observedAt;
+      if (draft.wallet.activeWalletId === activeWalletId && draft.onboarding &&
+        activeOnboarding && draft.onboarding.setupId === activeOnboarding.setupId) {
+        const profile = draft.wallet.profiles[activeWalletId];
+        if (!profile) return;
+        let pocketChanged = false;
+        for (const [privateBalanceId, balanceWei] of activePrivateSamples) {
+          const pocket = profile.privateBalances[privateBalanceId];
+          if (!pocket || pocket.balanceWei === balanceWei) continue;
+          pocket.balanceWei = balanceWei;
+          pocket.revision += 1;
+          pocket.updatedAt = observedAt;
+          pocketChanged = true;
+        }
+        for (const [privateBalanceId, samples] of activePublicChangeSamples) {
+          for (const [address, balanceWei] of samples) {
+            const pocket = profile.privateBalances[privateBalanceId];
+            const account = pocket?.publicChangeAccounts?.[address];
+            if (!pocket || !account || account.balanceWei === balanceWei) continue;
+            refreshPublicChangeAccount({
+              profile,
+              privateBalanceId,
+              address,
+              balanceWei: BigInt(balanceWei),
+              observedAt,
+            });
+            pocketChanged = true;
+          }
+        }
+        const aggregate = sumPrivateBalanceRecordsWei(profile).toString();
+        if (draft.onboarding.privateBalanceWei !== aggregate || pocketChanged) {
+          draft.onboarding.privateBalanceWei = aggregate;
+          draft.onboarding.revision += 1;
+          draft.onboarding.updatedAt = observedAt;
+        }
       }
     });
 
@@ -573,19 +759,24 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
           onboarding.address === publicSample.address,
         );
         const privateStatus = walletTreePrivateStatus(onboarding);
-        const privateIsLive = active &&
-          onboarding?.phase === "private_ready" &&
-          activePrivateBalanceWei !== undefined;
-        const privateIsLastKnown = !active && onboarding?.phase === "private_ready";
-        const privateBalanceWei = privateIsLive
-          ? activePrivateBalanceWei
-          : privateIsLastKnown
-            ? onboarding.privateBalanceWei
-            : undefined;
+        const privateBalances = Object.values(profile.privateBalances)
+          .filter((privateBalance) => privateBalance.status === "available")
+          .sort((left, right) => {
+            if (left.privateBalanceId === profile.defaultPrivateBalanceId) return -1;
+            if (right.privateBalanceId === profile.defaultPrivateBalanceId) return 1;
+            return left.name.localeCompare(right.name);
+          });
         return {
           shortName: profile.name,
           active,
           setupPhase: onboarding?.phase ?? "not_started",
+          ...(onboarding ? {
+            policy: walletTreePolicySnapshot(
+              onboarding.delegation,
+              walletTreeWalletPaymentsUsed(current, profile.authorizationId),
+              active,
+            ),
+          } : {}),
           main: {
             shortName: "main" as const,
             role: "main_funding_source" as const,
@@ -597,21 +788,49 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
               : "not_created" as const,
             freshness: publicIsLive ? "live" as const : "unavailable" as const,
           },
-          subwallets: [{
-            shortName: "private" as const,
-            role: "private_payment_pocket" as const,
-            ...(privateBalanceWei !== undefined
-              ? { balanceWei: privateBalanceWei }
-              : {}),
-            status: privateIsLive || privateIsLastKnown
-              ? "ready" as const
-              : privateStatus,
-            freshness: privateIsLive
-              ? "live" as const
-              : privateIsLastKnown
-                ? "last_known" as const
-                : "unavailable" as const,
-          }],
+          subwallets: privateBalances.map((privateBalance) => {
+            const liveBalance = active
+              ? activePrivateSamples.get(privateBalance.privateBalanceId)
+              : undefined;
+            const trackedPublicAccounts = Object.values(
+              privateBalance.publicChangeAccounts ?? {},
+            );
+            const livePublicAccounts = activePublicChangeSamples.get(
+              privateBalance.privateBalanceId,
+            );
+            const publicChangeWei = publicChangeBalanceWei(privateBalance);
+            const hasUsableBackend = onboarding?.phase === "private_ready" ||
+              privateBalance.privateBalanceId !== profile.defaultPrivateBalanceId;
+            return {
+              shortName: privateBalance.name,
+              role: "private_payment_pocket" as const,
+              policy: walletTreePolicySnapshot(
+                privateBalance.delegation,
+                walletTreePrivateBalancePaymentsUsed(
+                  current,
+                  privateBalance.privateBalanceId,
+                  profile.authorizationId,
+                ),
+                active,
+              ),
+              ...(hasUsableBackend ? {
+                balanceWei: liveBalance ?? privateBalance.balanceWei,
+              } : {}),
+              status: hasUsableBackend ? "ready" as const : privateStatus,
+              freshness: liveBalance !== undefined
+                ? "live" as const
+                : hasUsableBackend
+                  ? "last_known" as const
+                  : "unavailable" as const,
+              ...(trackedPublicAccounts.length > 0 ? {
+                publicChangeWei: publicChangeWei.toString(),
+                publicChangeFreshness: active &&
+                    livePublicAccounts?.size === trackedPublicAccounts.length
+                  ? "live" as const
+                  : "last_known" as const,
+              } : {}),
+            };
+          }),
         };
       });
 
@@ -625,6 +844,221 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         .filter((profile) => profile.status === "archived").length,
       relationship: { type: "profile_container", impliesControl: false },
     };
+  }
+
+  previewPrivateBalanceCreation(input: {
+    name: string;
+    walletName?: string;
+  }): Promise<Record<string, unknown>> {
+    return this.#withWalletOperation(async () => {
+      await this.#activateNamedWalletIfNeeded(input.walletName);
+      return publicPrivateBalanceCreationPlan(
+        await this.#privateBalances.previewCreation({ name: input.name }),
+      );
+    });
+  }
+
+  async getPrivateBalanceCreation(
+    decisionId: string,
+  ): Promise<Record<string, unknown>> {
+    return publicPrivateBalanceCreationPlan(
+      await this.#privateBalances.getCreation(decisionId),
+    );
+  }
+
+  applyPrivateBalanceCreation(input: {
+    decisionId: string;
+    clientRequestId: string;
+    userConfirmed: boolean;
+  }): Promise<Record<string, unknown>> {
+    return this.#withWalletOperation(async () => {
+      if (!input.userConfirmed) {
+        return publicPrivateBalanceCreationPlan(
+          await this.#privateBalances.cancelCreation(input.decisionId),
+        );
+      }
+      return publicPrivateBalanceCreationRequest(
+        await this.#privateBalances.applyCreation(input),
+      );
+    });
+  }
+
+  async getPrivateBalanceCreationRequest(
+    requestIdOrDecisionId: string,
+  ): Promise<Record<string, unknown>> {
+    const requestId = requestIdOrDecisionId.startsWith("pbc_")
+      ? uniqueRequestIdForDecision(
+          (await this.#store.read()).privateBalanceCreationRequests,
+          requestIdOrDecisionId,
+          "PRIVATE_BALANCE_CREATION_REQUEST_NOT_FOUND",
+        )
+      : requestIdOrDecisionId;
+    return publicPrivateBalanceCreationRequest(
+      await this.#privateBalances.creationStatus(requestId),
+    );
+  }
+
+  previewPrivateBalanceFunding(input: {
+    walletName?: string;
+    sourcePrivateBalanceName?: string;
+    targetPrivateBalanceName: string;
+    amountWei: string;
+  }): Promise<Record<string, unknown>> {
+    return this.#withWalletOperation(async () => {
+      await this.#activateNamedWalletIfNeeded(input.walletName);
+      return publicPrivateBalanceFundingPlan(
+        await this.#privateBalances.previewFunding({
+          source: input.sourcePrivateBalanceName === undefined
+            ? { kind: "main" }
+            : {
+                kind: "private_balance",
+                privateBalance: input.sourcePrivateBalanceName,
+              },
+          targetPrivateBalance: input.targetPrivateBalanceName,
+          amountWei: input.amountWei,
+        }),
+      );
+    });
+  }
+
+  async getPrivateBalanceFunding(
+    decisionId: string,
+  ): Promise<Record<string, unknown>> {
+    return publicPrivateBalanceFundingPlan(
+      await this.#privateBalances.getFunding(decisionId),
+    );
+  }
+
+  applyPrivateBalanceFunding(input: {
+    decisionId: string;
+    clientRequestId: string;
+    userConfirmed: boolean;
+  }): Promise<Record<string, unknown>> {
+    return this.#withWalletOperation(async () => {
+      if (!input.userConfirmed) {
+        return publicPrivateBalanceFundingPlan(
+          await this.#privateBalances.cancelFunding(input.decisionId),
+        );
+      }
+      return publicPrivateBalanceFundingRequest(
+        await this.#privateBalances.executeFunding(input),
+      );
+    });
+  }
+
+  async getPrivateBalanceFundingRequest(
+    requestIdOrDecisionId: string,
+  ): Promise<Record<string, unknown>> {
+    const requestId = requestIdOrDecisionId.startsWith("pbf_")
+      ? uniqueRequestIdForDecision(
+          (await this.#store.read()).privateBalanceFundingRequests,
+          requestIdOrDecisionId,
+          "PRIVATE_BALANCE_FUNDING_REQUEST_NOT_FOUND",
+        )
+      : requestIdOrDecisionId;
+    return publicPrivateBalanceFundingRequest(
+      await this.#privateBalances.fundingStatus(requestId),
+    );
+  }
+
+  privateBalancePolicy(input: {
+    walletName?: string;
+    privateBalanceName?: string;
+  }): Promise<Record<string, unknown>> {
+    return this.#withWalletOperation(async () => {
+      const state = await this.#store.read();
+      const profile = this.#resolveNamedWalletProfile(state, input.walletName);
+      const privateBalance = resolvePrivateBalanceRecord(
+        profile,
+        input.privateBalanceName,
+      );
+      const result = await this.#privateBalancePolicy.get({
+        walletId: profile.walletId,
+        privateBalanceId: privateBalance.privateBalanceId,
+      });
+      return {
+        wallet_name: profile.name,
+        private_balance_name: result.privateBalance.privateBalanceName,
+        policy: result.policy,
+      };
+    });
+  }
+
+  planPrivateBalancePolicyUpdate(input: {
+    walletName?: string;
+    privateBalanceName?: string;
+    perPaymentLimitWei?: string;
+    lifetimeLimitWei?: string;
+    maxPayments?: number;
+    ttlMs?: number;
+    enabled?: boolean;
+  }): Promise<Record<string, unknown>> {
+    return this.#withWalletOperation(async () => {
+      const state = await this.#store.read();
+      const profile = this.#resolveNamedWalletProfile(state, input.walletName);
+      const privateBalance = resolvePrivateBalanceRecord(
+        profile,
+        input.privateBalanceName,
+      );
+      return publicPrivateBalancePolicyPlan(
+        await this.#privateBalancePolicy.plan({
+          walletId: profile.walletId,
+          privateBalanceId: privateBalance.privateBalanceId,
+          ...(input.perPaymentLimitWei === undefined ? {} : {
+            perPaymentLimitWei: input.perPaymentLimitWei,
+          }),
+          ...(input.lifetimeLimitWei === undefined ? {} : {
+            lifetimeLimitWei: input.lifetimeLimitWei,
+          }),
+          ...(input.maxPayments === undefined ? {} : {
+            maxPayments: input.maxPayments,
+          }),
+          ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
+          ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
+        }),
+      );
+    });
+  }
+
+  async getPrivateBalancePolicyUpdate(
+    decisionId: string,
+  ): Promise<Record<string, unknown>> {
+    return publicPrivateBalancePolicyPlan(
+      await this.#privateBalancePolicy.getPlan(decisionId),
+    );
+  }
+
+  applyPrivateBalancePolicyUpdate(input: {
+    decisionId: string;
+    clientRequestId: string;
+    userConfirmed: boolean;
+  }): Promise<Record<string, unknown>> {
+    return this.#withWalletOperation(async () => {
+      if (!input.userConfirmed) {
+        return publicPrivateBalancePolicyPlan(
+          await this.#privateBalancePolicy.cancel(input.decisionId),
+        );
+      }
+      return publicPrivateBalancePolicyRequest(
+        await this.#privateBalancePolicy.apply(input),
+      );
+    });
+  }
+
+  async getPrivateBalancePolicyUpdateRequest(
+    requestIdOrDecisionId: string,
+  ): Promise<Record<string, unknown>> {
+    const state = await this.#store.read();
+    const requestId = requestIdOrDecisionId.startsWith("pbp_")
+      ? uniqueRequestIdForDecision(
+          state.privateBalancePolicyUpdateRequests,
+          requestIdOrDecisionId,
+          "PRIVATE_BALANCE_POLICY_REQUEST_NOT_FOUND",
+        )
+      : requestIdOrDecisionId;
+    const request = state.privateBalancePolicyUpdateRequests[requestId];
+    if (!request) throw new Error("PRIVATE_BALANCE_POLICY_REQUEST_NOT_FOUND");
+    return publicPrivateBalancePolicyRequest(request);
   }
 
   egressCapabilities(): Promise<Record<string, unknown>> {
@@ -643,32 +1077,92 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return this.#egress.fetch(input);
   }
 
-  planPrivatePayment(input: {
-    recipient: string;
-    amountWei: string;
-  }): Promise<PaymentPlan> {
-    return this.#withWalletOperation(() => this.#payments.plan(input));
+  planPrivatePayment(
+    input: TransferPlanningReferenceInput,
+  ): Promise<PaymentPlan & NamedRecipientResult> {
+    return this.#withWalletOperation(async () => {
+      const resolved = await this.#resolveTransferPlanningInput(input, "private");
+      const state = await this.#store.read();
+      const profile = state.wallet?.profiles[state.wallet.activeWalletId];
+      if (!profile) throw new Error("ACTIVE_WALLET_PROFILE_MISSING");
+      const privateBalance = resolvePrivateBalanceRecord(
+        profile,
+        input.sourcePrivateBalanceName,
+      );
+      const plan = await this.#payments.plan({
+        recipient: resolved.recipient,
+        amountWei: resolved.amountWei,
+        privateBalanceId: privateBalance.privateBalanceId,
+      });
+      return this.#decorateDecisionRecipient(plan, resolved.recipientWalletName);
+    });
   }
 
-  planRegularTransfer(input: {
-    recipient: string;
-    amountWei: string;
-  }): Promise<RegularTransferPlan> {
-    return this.#withWalletOperation(() => this.#regularTransfers.plan(input));
+  planRegularTransfer(
+    input: TransferPlanningReferenceInput,
+  ): Promise<RegularTransferPlan & NamedRecipientResult> {
+    return this.#withWalletOperation(async () => {
+      const resolved = await this.#resolveTransferPlanningInput(input, "regular");
+      const state = await this.#store.read();
+      const profile = state.wallet?.profiles[state.wallet.activeWalletId];
+      if (!profile) throw new Error("ACTIVE_WALLET_PROFILE_MISSING");
+      const sourcePrivateBalance = input.sourcePrivateBalanceName === undefined
+        ? undefined
+        : resolvePrivateBalanceRecord(profile, input.sourcePrivateBalanceName);
+      const plan = await this.#regularTransfers.plan({
+        recipient: resolved.recipient,
+        amountWei: resolved.amountWei,
+        ...(sourcePrivateBalance === undefined
+          ? {}
+          : { sourcePrivateBalanceId: sourcePrivateBalance.privateBalanceId }),
+      });
+      return publicRegularTransferPlan(
+        this.#decorateDecisionRecipient(plan, resolved.recipientWalletName),
+      );
+    });
   }
 
-  walletPolicy() {
-    return this.#policy.get();
+  walletPolicy(input: { walletName?: string } = {}) {
+    return this.#withWalletOperation(async () => {
+      const state = await this.#store.read();
+      const profile = this.#resolveNamedWalletProfile(state, input.walletName);
+      return {
+        ...(await this.#policy.get(profile.walletId)),
+        wallet: {
+          walletId: profile.walletId,
+          walletName: profile.name,
+          selectionEpoch: profile.selectionEpoch,
+        },
+      };
+    });
   }
 
   planPolicyUpdate(input: {
+    walletName?: string;
     perPaymentLimitWei?: string;
     lifetimeLimitWei?: string;
     maxPayments?: number;
     ttlMs?: number;
     enabled?: boolean;
   }): Promise<PolicyUpdatePlan> {
-    return this.#withWalletOperation(() => this.#policy.plan(input));
+    return this.#withWalletOperation(async () => {
+      const state = await this.#store.read();
+      const profile = this.#resolveNamedWalletProfile(state, input.walletName);
+      return this.#policy.plan({
+        walletId: profile.walletId,
+        ...(input.perPaymentLimitWei === undefined ? {} : {
+          perPaymentLimitWei: input.perPaymentLimitWei,
+        }),
+        ...(input.lifetimeLimitWei === undefined ? {} : {
+          lifetimeLimitWei: input.lifetimeLimitWei,
+        }),
+        ...(input.maxPayments === undefined ? {} : {
+          maxPayments: input.maxPayments,
+        }),
+        ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
+        ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
+      });
+    });
   }
 
   getPolicyUpdatePlan(decisionId: string): Promise<PolicyUpdatePlan> {
@@ -690,48 +1184,104 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return this.#withWalletOperation(() => this.#policy.apply(input));
   }
 
-  getPaymentPlan(decisionId: string): Promise<PaymentPlan> {
-    return this.#payments.getPlan(decisionId);
+  async getPaymentPlan(
+    decisionId: string,
+  ): Promise<PaymentPlan & NamedRecipientResult> {
+    return this.#decorateStoredRecipient(await this.#payments.getPlan(decisionId));
   }
 
-  cancelPrivatePaymentPlan(decisionId: string): Promise<PaymentPlan> {
-    return this.#withWalletOperation(() => this.#payments.cancel(decisionId));
+  cancelPrivatePaymentPlan(
+    decisionId: string,
+  ): Promise<PaymentPlan & NamedRecipientResult> {
+    return this.#withWalletOperation(async () =>
+      this.#decorateStoredRecipient(await this.#payments.cancel(decisionId))
+    );
   }
 
-  getRegularTransferPlan(decisionId: string): Promise<RegularTransferPlan> {
-    return this.#regularTransfers.getPlan(decisionId);
+  async getRegularTransferPlan(
+    decisionId: string,
+  ): Promise<RegularTransferPlan & NamedRecipientResult> {
+    return publicRegularTransferPlan(
+      await this.#decorateStoredRecipient(
+        await this.#regularTransfers.getPlan(decisionId),
+      ),
+    );
   }
 
-  cancelRegularTransferPlan(decisionId: string): Promise<RegularTransferPlan> {
-    return this.#withWalletOperation(() => this.#regularTransfers.cancel(decisionId));
+  cancelRegularTransferPlan(
+    decisionId: string,
+  ): Promise<RegularTransferPlan & NamedRecipientResult> {
+    return this.#withWalletOperation(async () =>
+      publicRegularTransferPlan(
+        await this.#decorateStoredRecipient(
+          await this.#regularTransfers.cancel(decisionId),
+        ),
+      )
+    );
   }
 
   executePrivatePayment(input: {
     decisionId: string;
     clientRequestId: string;
     userConfirmed: boolean;
-  }): Promise<PaymentRequest> {
-    return this.#withWalletOperation(() =>
-      this.#payments.execute(input).then(publicPaymentRequest)
-    );
+  }): Promise<PaymentRequest & NamedRecipientResult> {
+    return this.#withWalletOperation(async () => {
+      const request = publicPaymentRequest(await this.#payments.execute(input));
+      return this.#decorateRequestRecipient(request);
+    });
   }
 
   executeRegularTransfer(input: {
     decisionId: string;
     clientRequestId: string;
     userConfirmed: boolean;
-  }): Promise<RegularTransferRequest> {
-    return this.#withWalletOperation(() =>
-      this.#regularTransfers.execute(input).then(publicRegularTransferRequest)
+  }): Promise<RegularTransferRequest & NamedRecipientResult> {
+    return this.#withWalletOperation(async () => {
+      const request = await this.#regularTransfers.execute(input);
+      // The transfer result is authoritative. A best-effort return to an
+      // unfinished recipient setup must never turn a confirmed send into an
+      // apparent failure that could invite a duplicate transfer.
+      await this.#resumeConfirmedRegularTransferRecipient(request)
+        .catch(() => undefined);
+      return this.#decorateRequestRecipient(
+        publicRegularTransferRequest(request),
+      );
+    });
+  }
+
+  async getRequest(
+    requestIdOrDecisionId: string,
+  ): Promise<PaymentRequest & NamedRecipientResult> {
+    const requestId = requestIdOrDecisionId.startsWith("wd_")
+      ? uniqueRequestIdForDecision(
+          (await this.#store.read()).requests,
+          requestIdOrDecisionId,
+          "REQUEST_NOT_FOUND",
+        )
+      : requestIdOrDecisionId;
+    return this.#decorateRequestRecipient(
+      publicPaymentRequest(await this.#payments.getRequest(requestId)),
     );
   }
 
-  getRequest(requestId: string): Promise<PaymentRequest> {
-    return this.#payments.getRequest(requestId).then(publicPaymentRequest);
-  }
-
-  getRegularTransferRequest(requestId: string): Promise<RegularTransferRequest> {
-    return this.#regularTransfers.getRequest(requestId).then(publicRegularTransferRequest);
+  async getRegularTransferRequest(
+    requestIdOrDecisionId: string,
+  ): Promise<RegularTransferRequest & NamedRecipientResult> {
+    return this.#withWalletOperation(async () => {
+      const requestId = requestIdOrDecisionId.startsWith("rwd_")
+        ? uniqueRequestIdForDecision(
+            (await this.#store.read()).regularRequests,
+            requestIdOrDecisionId,
+            "REGULAR_TRANSFER_REQUEST_NOT_FOUND",
+          )
+        : requestIdOrDecisionId;
+      const request = await this.#regularTransfers.getRequest(requestId);
+      await this.#resumeConfirmedRegularTransferRecipient(request)
+        .catch(() => undefined);
+      return this.#decorateRequestRecipient(
+        publicRegularTransferRequest(request),
+      );
+    });
   }
 
   listWallets(): Promise<Record<string, unknown>> {
@@ -748,6 +1298,11 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     });
     const wallets = profiles.map((profile) => publicWalletProfile(profile, state));
     const registeredNames = new Set(profiles.map((profile) => profile.name));
+    const privateBackendNames = new Set(profiles.flatMap((profile) =>
+      Object.values(profile.privateBalances).map(
+        (privateBalance) => privateBalance.backendWalletName,
+      )
+    ));
     let localInventoryStatus: "ready" | "unavailable" | "unsupported" = "unsupported";
     let unregisteredLocalWallets: Array<{
       name: string;
@@ -759,7 +1314,10 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         const inventory = await this.#wallet.listWallets();
         localInventoryStatus = "ready";
         unregisteredLocalWallets = inventory
-          .filter((wallet) => !registeredNames.has(wallet.name))
+          .filter((wallet) =>
+            !registeredNames.has(wallet.name) &&
+            !privateBackendNames.has(wallet.name)
+          )
           .sort((left, right) => left.name.localeCompare(right.name))
           .map((wallet) => ({
             name: wallet.name,
@@ -790,7 +1348,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   async createWallet(input: {
     name: string;
     userConfirmed: boolean;
-  }): Promise<Record<string, unknown>> {
+  } & ExpectedActiveWalletInput): Promise<Record<string, unknown>> {
     if (!input.userConfirmed) {
       throw new Error("The user must confirm creating and selecting a new wallet");
     }
@@ -798,11 +1356,17 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       throw new Error("WALLET_MANAGEMENT_UNAVAILABLE");
     }
     return this.#withWalletOperation(async () => {
+      const before = await this.#store.read();
+      assertExpectedActiveWallet(
+        before,
+        input,
+        "create a wallet",
+      );
       const inventory = await this.#wallet.listWallets!();
       if (inventory.some((wallet) => wallet.name === input.name)) {
         throw new Error("WALLET_NAME_ALREADY_EXISTS");
       }
-      const previousName = (await this.#store.read()).wallet?.activeName ??
+      const previousName = before.wallet?.activeName ??
         this.#config.kohakuWalletName;
       await this.#stopWalletWork();
       this.#wallet.selectWallet!(input.name);
@@ -818,12 +1382,16 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
         throw error;
       }
       this.#resetWalletControllers();
-      const started = await this.#startOnboardingUnlocked();
+      const setup = await this.#continueSelectedWalletSetup(activated.current.onboarding);
+      const current = await this.#store.read();
+      const selected = current.wallet!.profiles[activated.profile.walletId]!;
+      const authorization = walletAuthorizationStatus(selected, current);
       return {
-        wallet: publicWalletProfile(activated.profile, activated.current),
+        wallet: publicWalletProfile(selected, current),
         archive_id: activated.archiveId,
-        setup_phase: started.record.phase,
-        authorization_required: true,
+        ...setup,
+        authorization_required: authorization !== "active",
+        authorization_status: authorization,
       };
     });
   }
@@ -831,7 +1399,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   async adoptWallet(input: {
     name: string;
     userConfirmed: boolean;
-  }): Promise<Record<string, unknown>> {
+  } & ExpectedActiveWalletInput): Promise<Record<string, unknown>> {
     if (!input.userConfirmed) {
       throw new Error("The user must confirm adopting and selecting the wallet");
     }
@@ -839,22 +1407,32 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       throw new Error("WALLET_MANAGEMENT_UNAVAILABLE");
     }
     return this.#withWalletOperation(async () => {
+      const before = await this.#store.read();
+      assertExpectedActiveWallet(
+        before,
+        input,
+        "adopt a wallet",
+      );
       const inventory = await this.#wallet.listWallets!();
       const localWallet = inventory.find((wallet) => wallet.name === input.name);
       if (!localWallet) throw new Error("LOCAL_WALLET_NOT_FOUND");
       if (localWallet.network !== "sepolia") {
         throw new Error("ONLY_SEPOLIA_WALLETS_CAN_BE_ADOPTED");
       }
-
-      const before = await this.#store.read();
       const existing = Object.values(before.wallet?.profiles ?? {}).find(
         (profile) => profile.name === input.name,
       );
       if (existing && before.wallet?.activeWalletId === existing.walletId) {
+        const authorization = walletAuthorizationStatus(existing, before);
+        const setup = before.onboarding ?? existing.onboarding;
         return {
           wallet: publicWalletProfile(existing, before),
           changed: false,
-          authorization_required: existing.authorizationId === undefined,
+          ...(setup
+            ? walletLifecycleSetup(setup)
+            : { setup_phase: "not_started" as const }),
+          authorization_required: authorization !== "active",
+          authorization_status: authorization,
         };
       }
 
@@ -877,15 +1455,17 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       }
 
       this.#resetWalletControllers();
-      let setup = activated.current.onboarding;
-      if (setup) await this.#onboarding.resume();
-      else setup = (await this.#startOnboardingUnlocked()).record;
+      const setup = await this.#continueSelectedWalletSetup(activated.current.onboarding);
+      const current = await this.#store.read();
+      const selected = current.wallet!.profiles[activated.profile.walletId]!;
+      const authorization = walletAuthorizationStatus(selected, current);
       return {
-        wallet: publicWalletProfile(activated.profile, activated.current),
+        wallet: publicWalletProfile(selected, current),
         changed: true,
         archive_id: activated.archiveId,
-        setup_phase: setup.phase,
-        authorization_required: true,
+        ...setup,
+        authorization_required: authorization !== "active",
+        authorization_status: authorization,
       };
     });
   }
@@ -893,6 +1473,8 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
   async selectWallet(input: {
     walletId: string;
     userConfirmed: boolean;
+    expectedActiveWalletName?: string;
+    expectedActiveSelectionEpoch?: number;
   }): Promise<Record<string, unknown>> {
     if (!this.#wallet.selectWallet || !this.#wallet.listWallets) {
       throw new Error("WALLET_MANAGEMENT_UNAVAILABLE");
@@ -901,12 +1483,52 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       const before = await this.#store.read();
       const profile = before.wallet?.profiles[input.walletId];
       if (!profile) throw new Error("WALLET_NOT_FOUND");
+      const hasExpectedActiveName = input.expectedActiveWalletName !== undefined;
+      const hasExpectedActiveEpoch = input.expectedActiveSelectionEpoch !== undefined;
+      if (hasExpectedActiveName !== hasExpectedActiveEpoch) {
+        throw new AgentBoostRequestError(
+          "WALLET_SWITCH_BINDING_REQUIRED",
+          "Both active-wallet binding fields from the switch preview are required together.",
+          {
+            required_fields: [
+              "expected_active_wallet_name",
+              "expected_active_selection_epoch",
+            ],
+          },
+        );
+      }
+      if (hasExpectedActiveName && hasExpectedActiveEpoch) {
+        const active = before.wallet?.profiles[before.wallet.activeWalletId];
+        if (
+          !active ||
+          active.name !== input.expectedActiveWalletName ||
+          active.selectionEpoch !== input.expectedActiveSelectionEpoch
+        ) {
+          throw new AgentBoostRequestError(
+            "WALLET_SWITCH_PREVIEW_STALE",
+            "The active wallet changed after this switch preview. Nothing was changed; review the current saved profiles and create a new switch preview.",
+            {
+              expected_active_wallet_name: input.expectedActiveWalletName,
+              expected_active_selection_epoch: input.expectedActiveSelectionEpoch,
+              ...(active
+                ? {
+                    active_wallet_name: active.name,
+                    active_selection_epoch: active.selectionEpoch,
+                  }
+                : {}),
+            },
+          );
+        }
+      }
       if (before.wallet?.activeName === profile.name) {
         const authorization = walletAuthorizationStatus(profile, before);
+        const setup = before.onboarding ?? profile.onboarding;
         return {
           wallet: publicWalletProfile(profile, before),
           changed: false,
-          setup_phase: profile.onboarding?.phase ?? "not_started",
+          ...(setup
+            ? walletLifecycleSetup(setup)
+            : { setup_phase: "not_started" as const }),
           authorization_required: authorization !== "active",
           authorization_status: authorization,
         };
@@ -929,15 +1551,17 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
       // Durable state and adapter now agree. Later onboarding failures stay on
       // this selected wallet and must never roll the adapter back independently.
       this.#resetWalletControllers();
-      let setup = activated.current.onboarding;
-      if (setup) await this.#onboarding.resume();
-      else setup = (await this.#startOnboardingUnlocked()).record;
+      const setup = await this.#continueSelectedWalletSetup(activated.current.onboarding);
+      const current = await this.#store.read();
+      const selected = current.wallet!.profiles[activated.profile.walletId]!;
+      const authorization = walletAuthorizationStatus(selected, current);
       return {
-        wallet: publicWalletProfile(activated.profile, activated.current),
+        wallet: publicWalletProfile(selected, current),
         changed: true,
         archive_id: activated.archiveId,
-        setup_phase: setup.phase,
-        authorization_required: true,
+        ...setup,
+        authorization_required: authorization !== "active",
+        authorization_status: authorization,
       };
     });
   }
@@ -979,9 +1603,11 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     };
     const paymentsUsed = profile.authorizationId
       ? Object.values(state.requests).filter(
-        (request) => request.authorization.authorizationId === profile.authorizationId,
+        (request) => request.phase !== "failed" &&
+          request.authorization.authorizationId === profile.authorizationId,
       ).length + Object.values(state.regularRequests).filter(
-        (request) => request.authorization.authorizationId === profile.authorizationId,
+        (request) => request.phase !== "failed" &&
+          request.authorization.authorizationId === profile.authorizationId,
       ).length
       : 0;
     const currentPolicy = {
@@ -1058,36 +1684,276 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return this.#withWalletOperation(() => this.#store.cancelReauthorizationPlan(decisionId));
   }
 
-  planRecoveryTransfer(input: {
-    recipient: string;
-    amountWei: string;
-  }): Promise<RecoveryTransferPlan> {
-    return this.#withWalletOperation(() => this.#recovery.plan(input));
+  planRecoveryTransfer(
+    input: TransferPlanningReferenceInput,
+  ): Promise<RecoveryTransferPlan & NamedRecipientResult> {
+    return this.#withWalletOperation(async () => {
+      const resolved = await this.#resolveTransferPlanningInput(input, "recovery");
+      const state = await this.#store.read();
+      const profile = state.wallet?.profiles[state.wallet.activeWalletId];
+      if (!profile) throw new Error("ACTIVE_WALLET_PROFILE_MISSING");
+      const privateBalance = resolvePrivateBalanceRecord(
+        profile,
+        input.sourcePrivateBalanceName,
+      );
+      const plan = await this.#recovery.plan({
+        recipient: resolved.recipient,
+        amountWei: resolved.amountWei,
+        privateBalanceId: privateBalance.privateBalanceId,
+      });
+      return this.#decorateDecisionRecipient(plan, resolved.recipientWalletName);
+    });
   }
 
-  getRecoveryPlan(decisionId: string): Promise<RecoveryTransferPlan> {
-    return this.#recovery.getPlan(decisionId);
+  #decorateDecisionRecipient<T extends { decisionId: string; recipient: string }>(
+    value: T,
+    recipientWalletName: string | undefined,
+  ): T & NamedRecipientResult {
+    if (recipientWalletName === undefined) return value;
+    this.#rememberRecipientWalletName(value.decisionId, recipientWalletName);
+    return { ...value, recipientWalletName };
   }
 
-  cancelRecoveryPlan(decisionId: string): Promise<RecoveryTransferPlan> {
-    return this.#withWalletOperation(() => this.#recovery.cancel(decisionId));
+  #rememberRecipientWalletName(decisionId: string, walletName: string): void {
+    // Refresh insertion order so the bounded map behaves like a tiny LRU.
+    this.#recipientWalletNamesByDecision.delete(decisionId);
+    this.#recipientWalletNamesByDecision.set(decisionId, walletName);
+    while (this.#recipientWalletNamesByDecision.size > TRANSIENT_RECIPIENT_LABEL_LIMIT) {
+      const oldest = this.#recipientWalletNamesByDecision.keys().next().value as
+        | string
+        | undefined;
+      if (oldest === undefined) break;
+      this.#recipientWalletNamesByDecision.delete(oldest);
+    }
+  }
+
+  async #decorateStoredRecipient<
+    T extends { decisionId: string; recipient: string },
+  >(value: T): Promise<T & NamedRecipientResult> {
+    const recipientWalletName = this.#recipientWalletNamesByDecision.get(value.decisionId) ??
+      await this.#uniqueWalletNameForAddress(value.recipient);
+    return this.#decorateDecisionRecipient(value, recipientWalletName);
+  }
+
+  async #decorateRequestRecipient<
+    T extends { requestId: string; decisionId: string; recipient: string },
+  >(value: T): Promise<T & NamedRecipientResult> {
+    let recipientWalletName = this.#recipientWalletNamesByDecision.get(value.decisionId);
+    if (recipientWalletName === undefined) {
+      try {
+        recipientWalletName = await this.#uniqueWalletNameForAddress(value.recipient);
+      } catch {
+        // The request is already durable and may already have been broadcast.
+        // A presentation-only friendly-name lookup must never hide that request
+        // from execute or status callers, since doing so would also hide the
+        // stable request ID needed for safe reconciliation.
+        return value;
+      }
+    }
+    if (recipientWalletName === undefined) return value;
+    this.#rememberRecipientWalletName(value.decisionId, recipientWalletName);
+    return { ...value, recipientWalletName };
+  }
+
+  async #uniqueWalletNameForAddress(address: string): Promise<string | undefined> {
+    const state = await this.#store.read();
+    const matches = Object.values(state.wallet?.profiles ?? {}).filter((profile) => {
+      const onboarding = profile.walletId === state.wallet?.activeWalletId
+        ? state.onboarding
+        : profile.onboarding;
+      return onboarding?.address?.toLowerCase() === address.toLowerCase();
+    });
+    return matches.length === 1 ? matches[0]!.name : undefined;
+  }
+
+  async #resolveTransferPlanningInput(
+    input: TransferPlanningReferenceInput,
+    kind: TransferPlanningKind,
+  ): Promise<{ recipient: string; recipientWalletName?: string; amountWei: string }> {
+    if ((input.recipient === undefined) === (input.recipientWalletName === undefined)) {
+      throw new AgentBoostRequestError(
+        "TRANSFER_RECIPIENT_REFERENCE_CONFLICT",
+        "Provide exactly one recipient address or saved wallet friendly name.",
+      );
+    }
+
+    const state = await this.#store.read();
+    const profiles = Object.values(state.wallet?.profiles ?? {});
+    const active = state.wallet?.profiles[state.wallet.activeWalletId];
+    if (!active) throw new Error("ACTIVE_WALLET_PROFILE_MISSING");
+
+    let source = active;
+    let sourceSwitchRequired = false;
+    if (input.sourceWalletName !== undefined) {
+      source = resolveFriendlyWalletProfile(
+        profiles,
+        input.sourceWalletName,
+        "source",
+      );
+      if (source.status === "archived") {
+        throw new AgentBoostRequestError(
+          "SOURCE_WALLET_ARCHIVED",
+          `Saved wallet ${source.name} is archived and cannot be a transfer source.`,
+          { source_wallet_name: source.name },
+        );
+      }
+      if (source.walletId !== active.walletId) {
+        sourceSwitchRequired = true;
+      }
+    }
+
+    const sourceOnboarding = source.walletId === state.wallet?.activeWalletId
+      ? state.onboarding
+      : source.onboarding;
+    if (
+      sourceOnboarding &&
+      sourceOnboarding.delegation.chainId !== SEPOLIA_CHAIN_ID
+    ) {
+      throw new AgentBoostRequestError(
+        "SOURCE_WALLET_NETWORK_UNSUPPORTED",
+        `Saved wallet ${source.name} is not a Sepolia wallet.`,
+        { source_wallet_name: source.name, required_network: "Sepolia" },
+      );
+    }
+
+    let recipient = input.recipient;
+    let recipientWalletName: string | undefined;
+    let recipientProfile: WalletProfileRecord | undefined;
+    if (input.recipientWalletName !== undefined) {
+      recipientProfile = resolveFriendlyWalletProfile(
+        profiles,
+        input.recipientWalletName,
+        "recipient",
+      );
+      if (recipientProfile.status === "archived") {
+        throw new AgentBoostRequestError(
+          "RECIPIENT_WALLET_ARCHIVED",
+          `Saved wallet ${recipientProfile.name} is archived and cannot be used as a named recipient.`,
+          { recipient_wallet_name: recipientProfile.name },
+        );
+      }
+      const onboarding = recipientProfile.walletId === state.wallet?.activeWalletId
+        ? state.onboarding
+        : recipientProfile.onboarding;
+      if (onboarding?.delegation.chainId !== SEPOLIA_CHAIN_ID) {
+        throw new AgentBoostRequestError(
+          onboarding
+            ? "RECIPIENT_WALLET_NETWORK_UNSUPPORTED"
+            : "RECIPIENT_WALLET_MAIN_ADDRESS_UNAVAILABLE",
+          onboarding
+            ? `Saved wallet ${recipientProfile.name} is not a Sepolia wallet.`
+            : `Saved wallet ${recipientProfile.name} does not have a known Sepolia main receiving address yet.`,
+          {
+            recipient_wallet_name: recipientProfile.name,
+            resolved_account: "main",
+            required_network: "Sepolia",
+          },
+        );
+      }
+      if (!onboarding.address || !/^0x[0-9a-fA-F]{40}$/u.test(onboarding.address)) {
+        throw new AgentBoostRequestError(
+          "RECIPIENT_WALLET_MAIN_ADDRESS_UNAVAILABLE",
+          `Saved wallet ${recipientProfile.name} does not have a known Sepolia main receiving address yet.`,
+          {
+            recipient_wallet_name: recipientProfile.name,
+            resolved_account: "main",
+            required_network: "Sepolia",
+          },
+        );
+      }
+      recipient = onboarding.address;
+      recipientWalletName = recipientProfile.name;
+    }
+
+    if (!recipient) throw new Error("TRANSFER_RECIPIENT_MISSING");
+    const sourceAddress = sourceOnboarding?.address;
+    const sendsToSourceMain = recipientProfile?.walletId === source.walletId ||
+      (sourceAddress !== undefined && recipient.toLowerCase() === sourceAddress.toLowerCase());
+    // A regular same-main send is invalid regardless of which profile happens
+    // to be active, so do not ask the user to approve a pointless switch first.
+    if (
+      kind === "regular" &&
+      input.sourcePrivateBalanceName === undefined &&
+      sendsToSourceMain
+    ) {
+      throw new AgentBoostRequestError(
+        "REGULAR_TRANSFER_SELF_SEND_BLOCKED",
+        `A regular transfer cannot send from ${source.name} main back to the same main account.`,
+        {
+          source_wallet_name: source.name,
+          ...(recipientWalletName === undefined
+            ? {}
+            : { recipient_wallet_name: recipientWalletName }),
+        },
+      );
+    }
+    if (kind === "private" && sendsToSourceMain) {
+      throw new AgentBoostRequestError(
+        "USE_RECOVERY_TRANSFER",
+        `Moving private funds to ${source.name} main is a recovery transfer, not a private payment. Create an exact recovery-transfer preview instead.`,
+        {
+          source_wallet_name: source.name,
+          recipient_wallet_name: recipientWalletName ?? source.name,
+          resolved_account: "main",
+          required_action: "plan_recovery_transfer",
+        },
+      );
+    }
+
+    if (sourceSwitchRequired) {
+      await this.#activateWalletForNamedOperation(source, state);
+    }
+
+    return {
+      recipient,
+      ...(recipientWalletName === undefined ? {} : { recipientWalletName }),
+      amountWei: input.amountWei,
+    };
+  }
+
+  async getRecoveryPlan(
+    decisionId: string,
+  ): Promise<RecoveryTransferPlan & NamedRecipientResult> {
+    return this.#decorateStoredRecipient(await this.#recovery.getPlan(decisionId));
+  }
+
+  cancelRecoveryPlan(
+    decisionId: string,
+  ): Promise<RecoveryTransferPlan & NamedRecipientResult> {
+    return this.#withWalletOperation(async () =>
+      this.#decorateStoredRecipient(await this.#recovery.cancel(decisionId))
+    );
   }
 
   executeRecoveryTransfer(input: {
     decisionId: string;
     clientRequestId: string;
     userConfirmed: boolean;
-  }): Promise<RecoveryTransferRequest> {
-    return this.#withWalletOperation(() =>
-      this.#recovery.execute(input).then(publicRecoveryRequest)
+  }): Promise<RecoveryTransferRequest & NamedRecipientResult> {
+    return this.#withWalletOperation(async () => {
+      const request = publicRecoveryRequest(await this.#recovery.execute(input));
+      return this.#decorateRequestRecipient(request);
+    });
+  }
+
+  async getRecoveryRequest(
+    requestIdOrDecisionId: string,
+  ): Promise<RecoveryTransferRequest & NamedRecipientResult> {
+    const requestId = requestIdOrDecisionId.startsWith("wr_")
+      ? uniqueRequestIdForDecision(
+          (await this.#store.read()).recoveryRequests,
+          requestIdOrDecisionId,
+          "RECOVERY_REQUEST_NOT_FOUND",
+        )
+      : requestIdOrDecisionId;
+    return this.#decorateRequestRecipient(
+      publicRecoveryRequest(await this.#recovery.getRequest(requestId)),
     );
   }
 
-  getRecoveryRequest(requestId: string): Promise<RecoveryTransferRequest> {
-    return this.#recovery.getRequest(requestId).then(publicRecoveryRequest);
-  }
-
-  startNewDemo(input: { userConfirmed: boolean }): Promise<NewDemoResult> {
+  startNewDemo(
+    input: { userConfirmed: boolean } & ExpectedActiveWalletInput,
+  ): Promise<NewDemoResult> {
     if (this.#shuttingDown) {
       return Promise.reject(new Error("AGENT_BOOST_RUNTIME_STOPPING"));
     }
@@ -1099,11 +1965,7 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     if (!this.#wallet.selectWallet) {
       return Promise.reject(new Error("DEMO_RESET_UNAVAILABLE"));
     }
-    if (this.#reset) return this.#reset;
-    this.#reset = this.#withWalletOperation(() => this.#startNewDemo()).finally(() => {
-      this.#reset = undefined;
-    });
-    return this.#reset;
+    return this.#withWalletOperation(() => this.#startNewDemo(input));
   }
 
   async status(): Promise<Record<string, unknown>> {
@@ -1135,7 +1997,13 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     };
   }
 
-  async #startNewDemo(): Promise<NewDemoResult> {
+  async #startNewDemo(input: ExpectedActiveWalletInput): Promise<NewDemoResult> {
+    const before = await this.#store.read();
+    assertExpectedActiveWallet(
+      before,
+      input,
+      "archive this workflow and start a new demo wallet",
+    );
     await this.#onboarding.stop();
     await this.#payments.stop();
     await this.#regularTransfers.stop();
@@ -1179,24 +2047,198 @@ export class LocalAgentBoostRuntime implements AgentBoostRuntime {
     return queued;
   }
 
+  async #activateNamedWalletIfNeeded(
+    walletName: string | undefined,
+  ): Promise<WalletProfileRecord> {
+    const before = await this.#store.read();
+    const active = this.#resolveNamedWalletProfile(before);
+    const profile = this.#resolveNamedWalletProfile(before, walletName);
+    if (profile.walletId === active.walletId) return active;
+    await this.#activateWalletForNamedOperation(profile, before);
+    const after = await this.#store.read();
+    const selected = after.wallet?.profiles[after.wallet.activeWalletId];
+    if (!selected || selected.walletId !== profile.walletId) {
+      throw new Error("WALLET_SELECTION_CHANGED");
+    }
+    return selected;
+  }
+
+  #resolveNamedWalletProfile(
+    state: StateDocument,
+    walletName?: string,
+  ): WalletProfileRecord {
+    const active = state.wallet?.profiles[state.wallet.activeWalletId];
+    if (!active) throw new Error("ACTIVE_WALLET_PROFILE_MISSING");
+    if (walletName === undefined) return active;
+    const profile = resolveFriendlyWalletProfile(
+      Object.values(state.wallet?.profiles ?? {}),
+      walletName,
+      "source",
+    );
+    if (profile.status === "archived") {
+      throw new AgentBoostRequestError(
+        "SOURCE_WALLET_ARCHIVED",
+        `Saved wallet ${profile.name} is archived and cannot be targeted.`,
+        { source_wallet_name: profile.name },
+      );
+    }
+    return profile;
+  }
+
+  async #activateWalletForNamedOperation(
+    profile: WalletProfileRecord,
+    before: StateDocument,
+  ): Promise<void> {
+    if (!this.#wallet.selectWallet) {
+      throw new AgentBoostRequestError(
+        "SOURCE_WALLET_LOAD_UNAVAILABLE",
+        `Saved wallet ${profile.name} cannot be loaded by this wallet adapter.`,
+        { source_wallet_name: profile.name },
+      );
+    }
+    const previousName = before.wallet?.activeName ?? this.#config.kohakuWalletName;
+    await this.#stopWalletWork();
+    this.#wallet.selectWallet(profile.name);
+    let activated: Awaited<ReturnType<StateStore["activateWalletProfile"]>>;
+    try {
+      activated = await this.#store.activateWalletProfile(profile.walletId);
+    } catch (error) {
+      this.#wallet.selectWallet(previousName);
+      this.#resetWalletControllers();
+      await this.#onboarding.resume().catch(() => undefined);
+      throw error;
+    }
+    this.#resetWalletControllers();
+    await this.#continueSelectedWalletSetup(activated.current.onboarding);
+  }
+
+  async #resumeConfirmedRegularTransferRecipient(
+    request?: RegularTransferRequest,
+  ): Promise<void> {
+    const state = await this.#store.read();
+    const wallet = state.wallet;
+    if (!wallet) return;
+    const active = wallet.profiles[wallet.activeWalletId];
+    if (!active) return;
+
+    const requests = request
+      ? [request]
+      : Object.values(state.regularRequests).sort((left, right) =>
+          Date.parse(right.confirmation?.checkedAt ?? right.updatedAt) -
+          Date.parse(left.confirmation?.checkedAt ?? left.updatedAt)
+        );
+    for (const candidate of requests) {
+      if (candidate.phase !== "confirmed" || !candidate.confirmation) continue;
+      const targets = Object.values(wallet.profiles).filter((profile) => {
+        if (profile.walletId === candidate.authorization.walletId ||
+          profile.status !== "available") {
+          return false;
+        }
+        const setup = profile.walletId === wallet.activeWalletId
+          ? state.onboarding
+          : profile.onboarding;
+        if (!isResumableRecipientOnboarding(setup) || !setup.address) return false;
+        return setup.address.toLowerCase() === candidate.recipient.toLowerCase();
+      });
+      // Wallet main addresses are expected to be unique, but fail closed if a
+      // migrated or externally edited registry makes the recipient ambiguous.
+      if (targets.length !== 1) continue;
+      const target = targets[0]!;
+
+      if (target.walletId === active.walletId) {
+        // Covers a crash after the durable selection changed but before the
+        // onboarding workflow was restarted.
+        await this.#onboarding.resume();
+        return;
+      }
+      const authorization = candidate.authorization;
+      if (
+        active.walletId !== authorization.walletId ||
+        active.name !== authorization.walletName ||
+        active.selectionEpoch !== authorization.selectionEpoch ||
+        active.authorizationId !== authorization.authorizationId
+      ) {
+        // A user-selected wallet, including selecting the source away and back,
+        // supersedes the automatic return because selectionEpoch is monotonic.
+        continue;
+      }
+      await this.#activateWalletForNamedOperation(target, state);
+      return;
+    }
+  }
+
+  async #continueSelectedWalletSetup(
+    setup: OnboardingRecord | undefined,
+  ): Promise<WalletLifecycleSetupResult> {
+    try {
+      if (setup) {
+        await this.#onboarding.resume();
+        return walletLifecycleSetup(await this.#onboarding.getRecord());
+      }
+      const started = await this.#startOnboardingUnlocked();
+      return {
+        ...walletLifecycleSetup(started.snapshot),
+        onboarding: {
+          snapshot: started.snapshot,
+          uiOpened: started.uiOpened,
+          ...(started.qrPngBase64 ? { qrPngBase64: started.qrPngBase64 } : {}),
+        },
+      };
+    } catch {
+      // Adapter selection and durable profile activation already committed.
+      // A nonessential startup/resume failure must not turn that success into a
+      // misleading rejected mutation or invite the caller to repeat it.
+      return {
+        setup_phase: setup?.phase ?? "not_started",
+        setup_continuation_status: "unavailable",
+      };
+    }
+  }
+
   async #stopWalletWork(): Promise<void> {
     await this.#onboarding.stop();
     await this.#payments.stop();
     await this.#regularTransfers.stop();
     await this.#recovery.stop();
+    await this.#privateBalances.stop();
   }
 
   #resetWalletControllers(): void {
     this.#payments.resetForNewDemo();
     this.#regularTransfers.resetForWalletSelection();
     this.#recovery.resetForWalletSelection();
+    this.#privateBalances.resetForWalletSelection();
   }
+}
+
+function isResumableRecipientOnboarding(
+  setup: OnboardingRecord | undefined,
+): setup is OnboardingRecord {
+  return setup !== undefined && (
+    UNRESOLVED_ONBOARDING_PHASES.has(setup.phase) ||
+    (setup.phase === "failed" && setup.error?.retryable === true)
+  );
+}
+
+function uniqueRequestIdForDecision<T extends { requestId: string; decisionId: string }>(
+  requests: Record<string, T>,
+  decisionId: string,
+  notFoundCode: string,
+): string {
+  const matches = Object.values(requests).filter(
+    (request) => request.decisionId === decisionId,
+  );
+  if (matches.length === 0) throw new Error(notFoundCode);
+  if (matches.length !== 1) throw new Error("DECISION_REQUEST_BINDING_AMBIGUOUS");
+  return matches[0]!.requestId;
 }
 
 function publicPaymentRequest(request: PaymentRequest): PaymentRequest {
   const publicRequest = { ...request };
+  delete publicRequest.broadcastStartedAt;
   delete publicRequest.recipientBalanceBeforeWei;
   delete publicRequest.reconciliation;
+  delete publicRequest.userOperationReceiptEvidence;
   return publicRequest;
 }
 
@@ -1204,9 +2246,118 @@ function publicRegularTransferRequest(
   request: RegularTransferRequest,
 ): RegularTransferRequest {
   const publicRequest = { ...request };
+  if (request.sourcePrivateBalance) {
+    publicRequest.sourcePrivateBalance = publicPrivateBalanceBinding(
+      request.sourcePrivateBalance,
+    ) as unknown as typeof request.sourcePrivateBalance;
+  }
+  delete publicRequest.sourcePublicAddress;
+  delete publicRequest.broadcastStartedAt;
+  delete publicRequest.policySpendDebitedAt;
+  delete publicRequest.policySpendRestoredAt;
+  delete publicRequest.privatePolicySpendDebitedAt;
+  delete publicRequest.privatePolicySpendRestoredAt;
   delete publicRequest.recipientBalanceBeforeWei;
   delete publicRequest.reconciliation;
   return publicRequest;
+}
+
+function publicRegularTransferPlan(
+  plan: RegularTransferPlan & NamedRecipientResult,
+): RegularTransferPlan & NamedRecipientResult {
+  const publicPlan = { ...plan };
+  if (plan.sourcePrivateBalance) {
+    publicPlan.sourcePrivateBalance = publicPrivateBalanceBinding(
+      plan.sourcePrivateBalance,
+    ) as unknown as typeof plan.sourcePrivateBalance;
+  }
+  delete publicPlan.sourcePublicAddress;
+  return publicPlan;
+}
+
+function publicPrivateBalanceBinding(
+  binding: import("./contracts.js").PrivateBalanceBinding,
+): Record<string, unknown> {
+  const { backendWalletName: _backendWalletName, ...publicBinding } = binding;
+  return publicBinding;
+}
+
+function publicPrivateBalanceCreationPlan(
+  plan: PrivateBalanceCreationPlan,
+): Record<string, unknown> {
+  const { backendWalletName: _backendWalletName, ...publicPlan } = plan;
+  return publicPlan;
+}
+
+function publicPrivateBalanceCreationRequest(
+  request: PrivateBalanceCreationRequest,
+): Record<string, unknown> {
+  return {
+    ...request,
+    privateBalance: publicPrivateBalanceBinding(request.privateBalance),
+  };
+}
+
+function publicPrivateBalanceFundingPlan(
+  plan: PrivateBalanceFundingPlan,
+): Record<string, unknown> {
+  const {
+    sourceExecutorAddress: _sourceExecutorAddress,
+    targetCommitment: _targetCommitment,
+    preparedDepositCall: _preparedDepositCall,
+    ...publicPlan
+  } = plan;
+  return {
+    ...publicPlan,
+    ...(plan.sourcePrivateBalance ? {
+      sourcePrivateBalance: publicPrivateBalanceBinding(
+        plan.sourcePrivateBalance,
+      ),
+    } : {}),
+    targetPrivateBalance: publicPrivateBalanceBinding(
+      plan.targetPrivateBalance,
+    ),
+  };
+}
+
+function publicPrivateBalanceFundingRequest(
+  request: PrivateBalanceFundingRequest,
+): Record<string, unknown> {
+  const {
+    targetCommitment: _targetCommitment,
+    preparedDepositCall: _preparedDepositCall,
+    userOperationReceiptEvidence: _userOperationReceiptEvidence,
+    ...publicRequest
+  } = request;
+  return {
+    ...publicRequest,
+    ...(request.sourcePrivateBalance ? {
+      sourcePrivateBalance: publicPrivateBalanceBinding(
+        request.sourcePrivateBalance,
+      ),
+    } : {}),
+    targetPrivateBalance: publicPrivateBalanceBinding(
+      request.targetPrivateBalance,
+    ),
+  };
+}
+
+function publicPrivateBalancePolicyPlan(
+  plan: PrivateBalancePolicyUpdatePlan,
+): Record<string, unknown> {
+  return {
+    ...plan,
+    privateBalance: publicPrivateBalanceBinding(plan.privateBalance),
+  };
+}
+
+function publicPrivateBalancePolicyRequest(
+  request: PrivateBalancePolicyUpdateRequest,
+): Record<string, unknown> {
+  return {
+    ...request,
+    privateBalance: publicPrivateBalanceBinding(request.privateBalance),
+  };
 }
 
 function walletTreePrivateStatus(
@@ -1220,13 +2371,277 @@ function walletTreePrivateStatus(
   return "preparing";
 }
 
+function walletTreePolicySnapshot(
+  policy: DelegationPolicy,
+  paymentsUsed: number,
+  active: boolean,
+): WalletTreePolicySnapshot {
+  return {
+    ...policy,
+    paymentsUsed,
+    paymentsRemaining: Math.max(0, policy.maxPayments - paymentsUsed),
+    freshness: active ? "current" : "last_known",
+  };
+}
+
+function walletTreeWalletPaymentsUsed(
+  state: StateDocument,
+  authorizationId: string | undefined,
+): number {
+  if (!authorizationId) return 0;
+  return Object.values(state.requests).filter((request) =>
+    request.phase !== "failed" &&
+    request.authorization.authorizationId === authorizationId
+  ).length + Object.values(state.regularRequests).filter((request) =>
+    request.phase !== "failed" &&
+    request.authorization.authorizationId === authorizationId
+  ).length;
+}
+
+function walletTreePrivateBalancePaymentsUsed(
+  state: StateDocument,
+  privateBalanceId: string,
+  authorizationId: string | undefined,
+): number {
+  if (!authorizationId) return 0;
+  return Object.values(state.requests).filter((request) =>
+    request.privateBalanceId === privateBalanceId &&
+    request.phase !== "failed" &&
+    request.authorization.authorizationId === authorizationId
+  ).length + Object.values(state.regularRequests).filter((request) =>
+    request.sourcePrivateBalance?.privateBalanceId === privateBalanceId &&
+    request.phase !== "failed" &&
+    request.authorization.authorizationId === authorizationId
+  ).length;
+}
+
+function sumPrivateBalanceRecordsWei(profile: WalletProfileRecord): bigint {
+  return Object.values(profile.privateBalances).reduce(
+    (sum, privateBalance) => privateBalance.status === "available"
+      ? sum + BigInt(privateBalance.balanceWei)
+      : sum,
+    0n,
+  );
+}
+
+function unresolvedPrivateBalanceIds(state: StateDocument): Set<string> {
+  const unresolved = (phase: string): boolean =>
+    phase === "executing" || phase === "submitted" || phase === "indeterminate";
+  const ids = new Set<string>();
+  for (const request of Object.values(state.requests)) {
+    if (request.privateBalanceId && unresolved(request.phase)) {
+      ids.add(request.privateBalanceId);
+    }
+  }
+  for (const request of Object.values(state.recoveryRequests)) {
+    if (request.privateBalanceId && unresolved(request.phase)) {
+      ids.add(request.privateBalanceId);
+    }
+  }
+  for (const request of Object.values(state.regularRequests)) {
+    if (request.sourcePrivateBalance && unresolved(request.phase)) {
+      ids.add(request.sourcePrivateBalance.privateBalanceId);
+    }
+  }
+  for (const request of Object.values(state.privateBalanceFundingRequests)) {
+    if (!unresolved(request.phase)) continue;
+    ids.add(request.targetPrivateBalance.privateBalanceId);
+    if (request.sourcePrivateBalance) {
+      ids.add(request.sourcePrivateBalance.privateBalanceId);
+    }
+  }
+  return ids;
+}
+
+function resolvePrivateBalanceRecord(
+  profile: WalletProfileRecord,
+  reference: string | undefined,
+): PrivateBalanceRecord {
+  if (reference === undefined) {
+    const defaultPrivateBalance =
+      profile.privateBalances[profile.defaultPrivateBalanceId];
+    if (!defaultPrivateBalance) throw new Error("PRIVATE_BALANCE_NOT_FOUND");
+    return defaultPrivateBalance;
+  }
+  const requested = reference.trim();
+  const balances = Object.values(profile.privateBalances);
+  const exact = balances.filter((balance) => balance.name === requested);
+  const folded = exact.length === 0
+    ? balances.filter(
+        (balance) => balance.name.toLowerCase() === requested.toLowerCase(),
+      )
+    : exact;
+  if (folded.length > 1) throw new Error("PRIVATE_BALANCE_AMBIGUOUS");
+  const privateBalance = folded[0];
+  if (!privateBalance) throw new Error("PRIVATE_BALANCE_NOT_FOUND");
+  if (privateBalance.status !== "available") {
+    throw new Error("PRIVATE_BALANCE_ARCHIVED");
+  }
+  return privateBalance;
+}
+
+function resolveFriendlyWalletProfile(
+  profiles: WalletProfileRecord[],
+  reference: string,
+  role: "source" | "recipient",
+): WalletProfileRecord {
+  const requested = reference.trim();
+  const exact = profiles.filter((profile) => profile.name === requested);
+  if (exact.length === 1) return exact[0]!;
+
+  const caseFolded = requested.toLowerCase();
+  const caseMatches = profiles.filter(
+    (profile) => profile.name.toLowerCase() === caseFolded,
+  );
+  if (caseMatches.length === 1) return caseMatches[0]!;
+  if (caseMatches.length > 1) {
+    throw ambiguousWalletReference(role, requested, caseMatches);
+  }
+
+  const referenceKeys = humanWalletReferenceKeys(requested);
+  const normalized = profiles.filter((profile) => {
+    const profileKeys = humanWalletReferenceKeys(profile.name);
+    return [...referenceKeys].some((key) => profileKeys.has(key));
+  });
+  if (normalized.length === 1) return normalized[0]!;
+  if (normalized.length > 1) {
+    throw ambiguousWalletReference(role, requested, normalized);
+  }
+
+  if (
+    role === "recipient" &&
+    [...referenceKeys].some((key) =>
+      key === "private" || key === "privateaccount" ||
+      key === "main" || key === "mainaccount"
+    )
+  ) {
+    throw new AgentBoostRequestError(
+      "RECIPIENT_PRIVATE_ACCOUNT_UNSUPPORTED",
+      `${requested || "That label"} names a wallet view, not a saved wallet profile. Provide a saved profile friendly name; Agent Boost resolves that profile to its Sepolia main/public receiving address, never its private pocket.`,
+      {
+        requested_wallet_name: requested,
+        required_recipient: "saved_profile_name_or_sepolia_address",
+        resolved_account: "main",
+      },
+    );
+  }
+
+  const code = role === "source"
+    ? "SOURCE_WALLET_NOT_FOUND"
+    : "RECIPIENT_WALLET_NOT_FOUND";
+  throw new AgentBoostRequestError(
+    code,
+    `No saved wallet profile uniquely matches ${requested || "the empty name"}.`,
+    { requested_wallet_name: requested },
+  );
+}
+
+function ambiguousWalletReference(
+  role: "source" | "recipient",
+  requested: string,
+  matches: WalletProfileRecord[],
+): AgentBoostRequestError {
+  return new AgentBoostRequestError(
+    role === "source" ? "SOURCE_WALLET_AMBIGUOUS" : "RECIPIENT_WALLET_AMBIGUOUS",
+    `More than one saved wallet profile matches ${requested}; use an exact friendly name.`,
+    {
+      requested_wallet_name: requested,
+      matching_wallet_names: matches.map((profile) => profile.name).sort(),
+    },
+  );
+}
+
+function humanWalletReferenceKeys(reference: string): Set<string> {
+  const tokens = reference
+    .trim()
+    .toLowerCase()
+    .split(/[\s_-]+/u)
+    .filter(Boolean);
+  const variants: string[][] = [];
+  const queue: string[][] = [tokens];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const variant = queue.shift()!;
+    const key = variant.join("\0");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    variants.push(variant);
+    if (variant[0] === "my" || variant[0] === "the") queue.push(variant.slice(1));
+    if (["wallet", "profile", "account"].includes(variant.at(-1) ?? "")) {
+      queue.push(variant.slice(0, -1));
+    }
+    if (
+      ["wallet", "profile", "account"].includes(variant[0] ?? "") &&
+      (variant[1] === "called" || variant[1] === "named")
+    ) {
+      queue.push(variant.slice(2));
+    }
+    if (variant[0] === "called" || variant[0] === "named") {
+      queue.push(variant.slice(1));
+    }
+  }
+  return new Set(variants.map((variant) => variant.join("")).filter(Boolean));
+}
+
 function publicRecoveryRequest(
   request: RecoveryTransferRequest,
 ): RecoveryTransferRequest {
   const publicRequest = { ...request };
+  delete publicRequest.broadcastStartedAt;
   delete publicRequest.recipientBalanceBeforeWei;
   delete publicRequest.reconciliation;
+  delete publicRequest.userOperationReceiptEvidence;
   return publicRequest;
+}
+
+function assertExpectedActiveWallet(
+  state: StateDocument,
+  input: ExpectedActiveWalletInput,
+  action: string,
+): void {
+  const expectedName = input.expectedActiveWalletName;
+  const expectedEpoch = input.expectedActiveSelectionEpoch;
+  if (
+    typeof expectedName !== "string" ||
+    expectedName.length === 0 ||
+    !Number.isSafeInteger(expectedEpoch) ||
+    expectedEpoch! < 0
+  ) {
+    throw new AgentBoostRequestError(
+      "WALLET_LIFECYCLE_BINDING_REQUIRED",
+      `A confirmed request to ${action} requires the active-wallet binding from its preceding preview.`,
+      {
+        lifecycle_action: action,
+        required_fields: [
+          "expected_active_wallet_name",
+          "expected_active_selection_epoch",
+        ],
+      },
+    );
+  }
+
+  const active = state.wallet?.profiles[state.wallet.activeWalletId];
+  if (
+    !active ||
+    active.name !== expectedName ||
+    active.selectionEpoch !== expectedEpoch
+  ) {
+    throw new AgentBoostRequestError(
+      "WALLET_LIFECYCLE_PREVIEW_STALE",
+      `The active wallet changed after the preview to ${action}. Nothing was changed; review current saved profiles and create a new preview.`,
+      {
+        lifecycle_action: action,
+        expected_active_wallet_name: expectedName,
+        expected_active_selection_epoch: expectedEpoch,
+        ...(active
+          ? {
+              active_wallet_name: active.name,
+              active_selection_epoch: active.selectionEpoch,
+            }
+          : {}),
+      },
+    );
+  }
 }
 
 function publicWalletProfile(
@@ -1268,9 +2683,11 @@ function walletAuthorizationStatus(
     return "expired";
   }
   const requestsUsed = Object.values(state.requests).filter(
-    (request) => request.authorization.authorizationId === profile.authorizationId,
+    (request) => request.phase !== "failed" &&
+      request.authorization.authorizationId === profile.authorizationId,
   ).length + Object.values(state.regularRequests).filter(
-    (request) => request.authorization.authorizationId === profile.authorizationId,
+    (request) => request.phase !== "failed" &&
+      request.authorization.authorizationId === profile.authorizationId,
   ).length;
   if (
     BigInt(onboarding.delegation.spentWei) >=
@@ -1339,6 +2756,21 @@ class RecoveringTorChainClient implements ChainClient {
     }
     return this.#read(() =>
       this.#chain.getTransactionReceiptStatus!(transactionHash)
+    );
+  }
+
+  getUserOperationReceiptStatus(
+    userOperationHash: string,
+    expectedSender?: string,
+  ) {
+    if (!this.#chain.getUserOperationReceiptStatus) {
+      return Promise.reject(new Error("UserOperation receipt lookup is unavailable"));
+    }
+    return this.#read(() =>
+      this.#chain.getUserOperationReceiptStatus!(
+        userOperationHash,
+        expectedSender,
+      )
     );
   }
 

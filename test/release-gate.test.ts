@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import {
+  HERMES_AGENT_BOOST_SYSTEM_PROMPT_BLOCK as INSTALLER_SYSTEM_PROMPT_BLOCK,
+} from "../src/hermes/index.js";
+
 const gate = await import("../scripts/lib/release-gate.mjs") as unknown as {
+  HERMES_AGENT_BOOST_SYSTEM_PROMPT_BLOCK: string;
   assertNoPublicLeaks(value: unknown): void;
   buildIsolatedEnvironment(
     environment: NodeJS.ProcessEnv,
@@ -45,8 +50,20 @@ const gate = await import("../scripts/lib/release-gate.mjs") as unknown as {
   verifyInstalledHermes(options: Record<string, unknown>): Promise<{
     executable: string;
     configPath: string;
+    turnGateArtifact: string;
+    turnGateCommand: string;
     hermesVersion: string;
     kohakuCommit: string;
+  }>;
+  verifyInstalledTurnGate(options: Record<string, unknown>): Promise<{
+    sameTurnBlocked: boolean;
+    exactContinuationAllowed: boolean;
+    continuationConsumed: boolean;
+    directConfirmationBlocked: boolean;
+    unrelatedCallAllowed: boolean;
+    bridgedDirectConfirmationBlocked: boolean;
+    bridgedExactContinuationAllowed: boolean;
+    bridgedContinuationConsumed: boolean;
   }>;
 };
 
@@ -55,6 +72,25 @@ const SETUP_ID = "setup_12345678";
 const FUNDING_URI = `ethereum:${ADDRESS}@11155111?value=200000000000000000`;
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+const HERMES_SKILL_NAMES = [
+  "agent-boost-setup",
+  "agent-boost",
+  "agent-boost-wallet-tree",
+  "agent-boost-wallets",
+  "agent-boost-policy",
+  "agent-boost-transfers",
+  "agent-boost-wallet-actions",
+  "agent-boost-authorize",
+  "agent-boost-confirm",
+  "agent-boost-covered-web",
+] as const;
+
+test("release verification uses the installer's exact managed routing prompt", () => {
+  assert.equal(
+    gate.HERMES_AGENT_BOOST_SYSTEM_PROMPT_BLOCK,
+    INSTALLER_SYSTEM_PROMPT_BLOCK,
+  );
+});
 
 test("release gate reports staged tracked changes", async () => {
   const calls: string[][] = [];
@@ -254,19 +290,42 @@ test("release gate verifies isolated Hermes config and exact packaged skills", a
   const candidateRoot = join(root, "candidate");
   const hermesHome = join(root, "hermes");
   const executable = join(root, "prefix", "lib", "agent-boost", "dist", "cli.js");
+  const installedTurnGate = join(
+    root,
+    "prefix",
+    "lib",
+    "agent-boost",
+    "dist",
+    "hermes",
+    "turn-gate.js",
+  );
+  const candidateTurnGate = join(candidateRoot, "dist", "hermes", "turn-gate.js");
   const configPath = join(hermesHome, "config.yaml");
-  await mkdir(join(candidateRoot, "integrations", "hermes", "agent-boost-setup"), {
+  const allowlistPath = join(hermesHome, "shell-hooks-allowlist.json");
+  const outputGuardPath = join(hermesHome, "plugins", "agent-boost-output-guard");
+  for (const name of HERMES_SKILL_NAMES) {
+    await mkdir(join(candidateRoot, "integrations", "hermes", name), { recursive: true });
+    await mkdir(join(hermesHome, "skills", name), { recursive: true });
+  }
+  await mkdir(join(root, "prefix", "lib", "agent-boost", "dist", "hermes"), {
     recursive: true,
   });
-  await mkdir(join(candidateRoot, "integrations", "hermes", "agent-boost"), {
-    recursive: true,
-  });
-  await mkdir(join(hermesHome, "skills", "agent-boost-setup"), { recursive: true });
-  await mkdir(join(hermesHome, "skills", "agent-boost"), { recursive: true });
-  await mkdir(join(root, "prefix", "lib", "agent-boost", "dist"), { recursive: true });
+  await mkdir(join(candidateRoot, "dist", "hermes"), { recursive: true });
+  await mkdir(join(candidateRoot, "integrations", "hermes", "agent-boost-output-guard"), { recursive: true });
+  await mkdir(outputGuardPath, { recursive: true });
   await writeFile(executable, "#!/usr/bin/env node\n", { mode: 0o755 });
+  await writeFile(installedTurnGate, "export const packagedTurnGate = true;\n");
+  await writeFile(candidateTurnGate, "export const packagedTurnGate = true;\n");
   await chmod(executable, 0o755);
-  for (const name of ["agent-boost-setup", "agent-boost"]) {
+  for (const [name, content] of [
+    ["__init__.py", "def register(ctx):\n    pass\n"],
+    ["plugin.yaml", "name: agent-boost-output-guard\nversion: '1.0.0'\n"],
+  ] as const) {
+    await writeFile(join(candidateRoot, "integrations", "hermes", "agent-boost-output-guard", name), content);
+    await writeFile(join(outputGuardPath, name), content);
+  }
+  const turnGateCommand = `${await realpath(executable)} hermes-turn-gate`;
+  for (const name of HERMES_SKILL_NAMES) {
     const content = `---\nname: ${name}\n---\n`;
     await writeFile(join(candidateRoot, "integrations", "hermes", name, "SKILL.md"), content);
     await writeFile(join(hermesHome, "skills", name, "SKILL.md"), content);
@@ -274,38 +333,77 @@ test("release gate verifies isolated Hermes config and exact packaged skills", a
   await writeFile(
     configPath,
     [
+      "agent:",
+      "  tool_use_enforcement: true",
+      "  execution_guidance: false",
+      "  task_completion_guidance: false",
+      "  parallel_tool_call_guidance: false",
+      "  system_prompt: |-",
+      ...gate.HERMES_AGENT_BOOST_SYSTEM_PROMPT_BLOCK
+        .split("\n")
+        .map((line) => `    ${line}`),
+      "mcp_discovery_timeout: 60",
+      "mcp_single_query_discovery_timeout: 60",
+      "hooks_auto_accept: false",
+      "display:",
+      "  busy_input_mode: queue",
+      "plugins:",
+      "  enabled: [agent-boost-output-guard]",
+      "  entries:",
+      "    agent-boost-output-guard:",
+      "      settings:",
+      `        turn_gate_executable: ${await realpath(executable)}`,
+      "hooks:",
+      "  pre_tool_call:",
+      "    - matcher: .*",
+      `      command: ${turnGateCommand}`,
+      "      timeout: 5",
+      "      fail_closed: true",
+      "  post_tool_call:",
+      "    - matcher: (?:mcp__agent_boost__.*|tool_call)",
+      `      command: ${turnGateCommand}`,
+      "      timeout: 5",
       "mcp_servers:",
       "  agent-boost:",
       `    command: ${executable}`,
       "    args: [mcp, --mode, dark, --contract-major, '1']",
       "    enabled: true",
-      "    timeout: 180",
+      "    timeout: 360",
       "    supports_parallel_tool_calls: false",
       "    tools:",
       "      include:",
       "        - capabilities",
       "        - onboarding_start",
       "        - onboarding_status",
-      "        - wallet_get_context",
-      "        - wallet_manage_profiles",
+      "        - wallet_get_main_balance",
+      "        - wallet_list_saved_profiles",
       "        - wallet_get_tree",
+      "        - wallet_preview_private_balance_create",
+      "        - wallet_apply_private_balance_create",
+      "        - wallet_preview_private_balance_fund",
+      "        - wallet_apply_private_balance_fund",
+      "        - wallet_get_private_balance_operation",
+      "        - wallet_get_private_balance_policy",
+      "        - wallet_preview_private_balance_policy_update",
+      "        - wallet_apply_private_balance_policy_update",
       "        - wallet_create",
       "        - wallet_adopt_existing",
-      "        - wallet_select",
+      "        - wallet_preview_saved_profile_load",
+      "        - wallet_apply_saved_profile_load",
       "        - wallet_archive",
       "        - wallet_plan_reauthorization",
-      "        - wallet_reauthorize",
+      "        - wallet_apply_reauthorization",
       "        - wallet_get_policy",
       "        - wallet_plan_policy_update",
       "        - wallet_apply_policy_update",
       "        - wallet_start_new_demo",
-      "        - wallet_plan_regular_transfer",
+      "        - wallet_preview_regular_transfer",
       "        - wallet_execute_regular_transfer",
       "        - wallet_get_regular_transfer_request",
-      "        - wallet_plan_private_payment",
-      "        - wallet_execute_private_payment",
-      "        - wallet_get_request",
-      "        - wallet_plan_recovery_transfer",
+      "        - wallet_preview_private_transfer",
+      "        - wallet_execute_private_transfer",
+      "        - wallet_get_private_transfer_request",
+      "        - wallet_preview_recovery_transfer",
       "        - wallet_execute_recovery_transfer",
       "        - wallet_get_recovery_request",
       "        - egress_capabilities",
@@ -315,6 +413,16 @@ test("release gate verifies isolated Hermes config and exact packaged skills", a
       "      prompts: false",
       "",
     ].join("\n"),
+    { mode: 0o600 },
+  );
+  await writeFile(
+    allowlistPath,
+    `${JSON.stringify({
+      approvals: [
+        { event: "pre_tool_call", command: turnGateCommand },
+        { event: "post_tool_call", command: turnGateCommand },
+      ],
+    }, null, 2)}\n`,
     { mode: 0o600 },
   );
   const installed = await gate.verifyInstalledHermes({
@@ -334,27 +442,63 @@ test("release gate verifies isolated Hermes config and exact packaged skills", a
         status: "configured",
         hermes_version: "Hermes 0.16.0\nProject: /private/local/hermes-checkout",
         result: {
+          installed: true,
           config_path: configPath,
           config_changed: true,
-          skills: [
-            {
-              name: "agent-boost-setup",
-              changed: true,
-              path: join(hermesHome, "skills", "agent-boost-setup", "SKILL.md"),
-            },
-            {
-              name: "agent-boost",
-              changed: true,
-              path: join(hermesHome, "skills", "agent-boost", "SKILL.md"),
-            },
-          ],
+          turn_gate: {
+            command: turnGateCommand,
+            allowlist_path: allowlistPath,
+            allowlist_changed: true,
+          },
+          output_guard: {
+            plugin_path: outputGuardPath,
+            changed: true,
+            backup_paths: [],
+            validated: true,
+          },
+          skills: HERMES_SKILL_NAMES.map((name) => ({
+            name,
+            changed: true,
+            path: join(hermesHome, "skills", name, "SKILL.md"),
+          })),
         },
       },
     },
   });
   assert.equal(installed.executable, await realpath(executable));
+  assert.equal(installed.turnGateArtifact, await realpath(installedTurnGate));
+  assert.equal(installed.turnGateCommand, turnGateCommand);
   assert.equal(installed.hermesVersion, "Hermes 0.16.0");
   assert.equal(await readFile(configPath, "utf8").then((value) => value.includes(executable)), true);
+});
+
+test("release gate drives the installed turn gate through stdin across safety flows", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "agent-boost-release-turn-gate-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const result = await gate.verifyInstalledTurnGate({
+    executable: process.execPath,
+    commandArgs: [
+      "--import",
+      "tsx",
+      join(process.cwd(), "src", "cli.ts"),
+      "hermes-turn-gate",
+    ],
+    environment: {
+      ...process.env,
+      HERMES_HOME: join(root, "hermes"),
+    },
+    stateDirectory: join(root, "state"),
+  });
+  assert.deepEqual(result, {
+    sameTurnBlocked: true,
+    exactContinuationAllowed: true,
+    continuationConsumed: true,
+    directConfirmationBlocked: true,
+    unrelatedCallAllowed: true,
+    bridgedDirectConfirmationBlocked: true,
+    bridgedExactContinuationAllowed: true,
+    bridgedContinuationConsumed: true,
+  });
 });
 
 test("release gate refuses failed or non-JSON installer output", () => {

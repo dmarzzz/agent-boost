@@ -7,6 +7,34 @@ import {
 } from "../src/rpc/sepolia.js";
 
 const ADDRESS = "0x1111111111111111111111111111111111111111";
+const ENTRY_POINT_V08_ADDRESS =
+  "0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108";
+const USER_OPERATION_EVENT_TOPIC =
+  "0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f";
+const USER_OPERATION_HASH = `0x${"12".repeat(32)}`;
+const TRANSACTION_HASH = `0x${"ab".repeat(32)}`;
+const EVENT_SENDER = `0x${"23".repeat(20)}`;
+const SENDER_TOPIC = `0x${"0".repeat(24)}${"23".repeat(20)}`;
+const PAYMASTER_TOPIC = `0x${"0".repeat(24)}${"34".repeat(20)}`;
+
+function word(value: bigint): string {
+  return value.toString(16).padStart(64, "0");
+}
+
+function userOperationLog(success: boolean): Record<string, unknown> {
+  return {
+    address: ENTRY_POINT_V08_ADDRESS,
+    topics: [
+      USER_OPERATION_EVENT_TOPIC,
+      USER_OPERATION_HASH,
+      SENDER_TOPIC,
+      PAYMASTER_TOPIC,
+    ],
+    data: `0x${word(7n)}${word(success ? 1n : 0n)}${word(8n)}${word(9n)}`,
+    transactionHash: TRANSACTION_HASH,
+    removed: false,
+  };
+}
 
 function rpcFetch(
   responder: (body: Record<string, unknown>) => Record<string, unknown>,
@@ -16,6 +44,78 @@ function rpcFetch(
     calls.push({ url: String(input), ...(init ? { init } : {}) });
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return new Response(JSON.stringify(responder(body)), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+}
+
+function rangeLimitedUserOperationFetch(options: {
+  latestBlock: bigint;
+  eventBlock?: bigint;
+  event?: Record<string, unknown>;
+  rejectBatches?: boolean;
+  batchFailuresRemaining?: { count: number };
+  batchAttempts?: { count: number };
+  singleLogRequests?: { count: number };
+  ranges: Array<{ fromBlock: bigint; toBlock: bigint }>;
+}): RpcFetch {
+  const respond = (body: Record<string, unknown>): Record<string, unknown> => {
+    if (body.method === "eth_blockNumber") {
+      return {
+        jsonrpc: "2.0",
+        id: body.id,
+        result: `0x${options.latestBlock.toString(16)}`,
+      };
+    }
+    assert.equal(body.method, "eth_getLogs");
+    const params = body.params as [Record<string, unknown>];
+    const fromBlock = BigInt(String(params[0].fromBlock));
+    const toBlock = BigInt(String(params[0].toBlock));
+    options.ranges.push({ fromBlock, toBlock });
+    if (toBlock - fromBlock + 1n > 50_000n) {
+      return {
+        jsonrpc: "2.0",
+        id: body.id,
+        error: { code: -32_701, message: "exceed maximum block range: 50000" },
+      };
+    }
+    const includesEvent = options.eventBlock !== undefined &&
+      fromBlock <= options.eventBlock && options.eventBlock <= toBlock;
+    return {
+      jsonrpc: "2.0",
+      id: body.id,
+      result: includesEvent ? [options.event ?? userOperationLog(true)] : [],
+    };
+  };
+  return async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as
+      | Record<string, unknown>
+      | Record<string, unknown>[];
+    if (Array.isArray(body)) {
+      if (options.batchAttempts) options.batchAttempts.count += 1;
+      if (options.batchFailuresRemaining && options.batchFailuresRemaining.count > 0) {
+        options.batchFailuresRemaining.count -= 1;
+        return new Response("temporarily unavailable", { status: 503 });
+      }
+      if (options.rejectBatches) {
+        return new Response(JSON.stringify({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32_600, message: "batch unsupported" },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      // JSON-RPC batch response order is not significant. Reverse it to prove
+      // the client binds every result to its exact request id.
+      return new Response(JSON.stringify(body.map(respond).reverse()), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (body.method === "eth_getLogs" && options.singleLogRequests) {
+      options.singleLogRequests.count += 1;
+    }
+    return new Response(JSON.stringify(respond(body)), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -139,5 +239,299 @@ describe("SepoliaRpcClient", () => {
       mismatch.getTransactionReceiptStatus(transactionHash),
       /mismatched receipt/,
     );
+  });
+
+  it("resolves an exact EntryPoint v0.8 UserOperation event and its transaction", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const results: unknown[] = [[userOperationLog(true)], [userOperationLog(false)]];
+    const client = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid/sepolia",
+      fetch: rpcFetch((body) => ({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: body.method === "eth_blockNumber" ? "0x10" : results.shift(),
+      }), calls),
+    });
+
+    assert.deepEqual(await client.getUserOperationReceiptStatus(
+      USER_OPERATION_HASH,
+      EVENT_SENDER,
+    ), {
+      status: "success",
+      transactionHash: TRANSACTION_HASH,
+    });
+    assert.deepEqual(await client.getUserOperationReceiptStatus(USER_OPERATION_HASH), {
+      status: "reverted",
+      transactionHash: TRANSACTION_HASH,
+    });
+
+    const request = JSON.parse(String(calls[1]!.init?.body)) as {
+      method: string;
+      params: unknown[];
+    };
+    assert.equal(request.method, "eth_getLogs");
+    assert.deepEqual(request.params, [
+      {
+        address: ENTRY_POINT_V08_ADDRESS,
+        fromBlock: "0x0",
+        toBlock: "0x10",
+        topics: [USER_OPERATION_EVENT_TOPIC, USER_OPERATION_HASH],
+      },
+    ]);
+  });
+
+  it("binds a UserOperation receipt to its exact indexed sender", async () => {
+    const client = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid",
+      fetch: rpcFetch((body) => ({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: body.method === "eth_blockNumber" ? "0x10" : [userOperationLog(true)],
+      })),
+    });
+
+    await assert.rejects(
+      client.getUserOperationReceiptStatus(USER_OPERATION_HASH, ADDRESS),
+      /mismatched UserOperation sender/,
+    );
+    await assert.rejects(
+      client.getUserOperationReceiptStatus(USER_OPERATION_HASH, "bad"),
+      /Expected UserOperation sender/,
+    );
+  });
+
+  it("keeps absent and removed UserOperation events pending", async () => {
+    const removed = { ...userOperationLog(true), removed: true };
+    const results: unknown[] = [[], [removed]];
+    const client = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid",
+      fetch: rpcFetch((body) => ({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: body.method === "eth_blockNumber" ? "0x10" : results.shift(),
+      })),
+    });
+
+    assert.deepEqual(await client.getUserOperationReceiptStatus(USER_OPERATION_HASH), {
+      status: "pending",
+    });
+    assert.deepEqual(await client.getUserOperationReceiptStatus(USER_OPERATION_HASH), {
+      status: "pending",
+    });
+  });
+
+  it("rejects invalid hashes and malformed or ambiguous UserOperation logs", async () => {
+    const results: unknown[] = [
+      {},
+      [{ ...userOperationLog(true), address: ADDRESS }],
+      [{ ...userOperationLog(true), topics: [USER_OPERATION_EVENT_TOPIC] }],
+      [{
+        ...userOperationLog(true),
+        data: `0x${word(7n)}${word(2n)}${word(8n)}${word(9n)}`,
+      }],
+      [userOperationLog(true), userOperationLog(true)],
+    ];
+    const client = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid",
+      fetch: rpcFetch((body) => ({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: body.method === "eth_blockNumber" ? "0x10" : results.shift(),
+      })),
+    });
+
+    await assert.rejects(
+      client.getUserOperationReceiptStatus("bad"),
+      /32-byte hex value/,
+    );
+    await assert.rejects(
+      client.getUserOperationReceiptStatus(USER_OPERATION_HASH),
+      /invalid log list/,
+    );
+    await assert.rejects(
+      client.getUserOperationReceiptStatus(USER_OPERATION_HASH),
+      /mismatched EntryPoint/,
+    );
+    await assert.rejects(
+      client.getUserOperationReceiptStatus(USER_OPERATION_HASH),
+      /invalid UserOperation topics/,
+    );
+    await assert.rejects(
+      client.getUserOperationReceiptStatus(USER_OPERATION_HASH),
+      /invalid UserOperation success flag/,
+    );
+    await assert.rejects(
+      client.getUserOperationReceiptStatus(USER_OPERATION_HASH),
+      /ambiguous UserOperation logs/,
+    );
+  });
+
+  it("stays within a provider's 50k log range while resolving a recent operation", async () => {
+    const ranges: Array<{ fromBlock: bigint; toBlock: bigint }> = [];
+    const client = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid",
+      fetch: rangeLimitedUserOperationFetch({
+        latestBlock: 150_000n,
+        eventBlock: 149_999n,
+        ranges,
+      }),
+    });
+
+    assert.deepEqual(await client.getUserOperationReceiptStatus(
+      USER_OPERATION_HASH,
+      EVENT_SENDER,
+    ), {
+      status: "success",
+      transactionHash: TRANSACTION_HASH,
+    });
+    assert.deepEqual(ranges, [{ fromBlock: 100_001n, toBlock: 150_000n }]);
+  });
+
+  it("fails closed before log allocation when an RPC returns a hostile valid height", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const client = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid",
+      fetch: rpcFetch((body) => ({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: "0xffffffffffffffffffffffffffffffff",
+      }), calls),
+    });
+
+    await assert.rejects(
+      client.getUserOperationReceiptStatus(USER_OPERATION_HASH),
+      /block height exceeds the receipt scan safety bound/,
+    );
+    assert.equal(calls.length, 1);
+    const request = JSON.parse(String(calls[0]!.init?.body)) as { method: string };
+    assert.equal(request.method, "eth_blockNumber");
+  });
+
+  it("deterministically paginates bounded ranges to find an older operation", async () => {
+    const ranges: Array<{ fromBlock: bigint; toBlock: bigint }> = [];
+    const client = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid",
+      fetch: rangeLimitedUserOperationFetch({
+        latestBlock: 150_000n,
+        eventBlock: 25_000n,
+        ranges,
+      }),
+    });
+
+    assert.deepEqual(await client.getUserOperationReceiptStatus(
+      USER_OPERATION_HASH,
+      EVENT_SENDER,
+    ), {
+      status: "success",
+      transactionHash: TRANSACTION_HASH,
+    });
+    assert.deepEqual(ranges, [
+      { fromBlock: 100_001n, toBlock: 150_000n },
+      { fromBlock: 50_001n, toBlock: 100_000n },
+      { fromBlock: 1n, toBlock: 50_000n },
+      { fromBlock: 0n, toBlock: 0n },
+    ]);
+  });
+
+  it("falls back to sequential bounded pagination when JSON-RPC batches are rejected", async () => {
+    const ranges: Array<{ fromBlock: bigint; toBlock: bigint }> = [];
+    const batchAttempts = { count: 0 };
+    const client = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid",
+      fetch: rangeLimitedUserOperationFetch({
+        latestBlock: 150_000n,
+        eventBlock: 75_000n,
+        rejectBatches: true,
+        batchAttempts,
+        ranges,
+      }),
+    });
+
+    assert.deepEqual(await client.getUserOperationReceiptStatus(USER_OPERATION_HASH), {
+      status: "success",
+      transactionHash: TRANSACTION_HASH,
+    });
+    assert.equal(batchAttempts.count, 1);
+    assert.deepEqual(ranges, [
+      { fromBlock: 100_001n, toBlock: 150_000n },
+      { fromBlock: 50_001n, toBlock: 100_000n },
+    ]);
+  });
+
+  it("keeps a batch rejection cached only within its current older-range scan", async () => {
+    const ranges: Array<{ fromBlock: bigint; toBlock: bigint }> = [];
+    const batchAttempts = { count: 0 };
+    const client = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid",
+      fetch: rangeLimitedUserOperationFetch({
+        latestBlock: 1_100_000n,
+        eventBlock: 25_000n,
+        rejectBatches: true,
+        batchAttempts,
+        ranges,
+      }),
+    });
+
+    assert.deepEqual(await client.getUserOperationReceiptStatus(USER_OPERATION_HASH), {
+      status: "success",
+      transactionHash: TRANSACTION_HASH,
+    });
+    assert.equal(batchAttempts.count, 1);
+    assert.equal(ranges.length, 22);
+    assert.deepEqual(ranges.at(-1), { fromBlock: 1n, toBlock: 50_000n });
+  });
+
+  it("retries batching on a later lookup after a transient batch failure", async () => {
+    const ranges: Array<{ fromBlock: bigint; toBlock: bigint }> = [];
+    const batchAttempts = { count: 0 };
+    const batchFailuresRemaining = { count: 1 };
+    const client = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid",
+      fetch: rangeLimitedUserOperationFetch({
+        latestBlock: 150_000n,
+        eventBlock: 75_000n,
+        batchFailuresRemaining,
+        batchAttempts,
+        ranges,
+      }),
+    });
+
+    assert.equal(
+      (await client.getUserOperationReceiptStatus(USER_OPERATION_HASH)).status,
+      "success",
+    );
+    assert.equal(
+      (await client.getUserOperationReceiptStatus(USER_OPERATION_HASH)).status,
+      "success",
+    );
+    assert.equal(batchAttempts.count, 2);
+    assert.equal(batchFailuresRemaining.count, 0);
+  });
+
+  it("fails closed on malformed batched log evidence without sequential retry", async () => {
+    const ranges: Array<{ fromBlock: bigint; toBlock: bigint }> = [];
+    const batchAttempts = { count: 0 };
+    const singleLogRequests = { count: 0 };
+    const client = new SepoliaRpcClient({
+      rpcUrl: "https://rpc.example.invalid",
+      fetch: rangeLimitedUserOperationFetch({
+        latestBlock: 150_000n,
+        eventBlock: 75_000n,
+        event: {
+          ...userOperationLog(true),
+          topics: [USER_OPERATION_EVENT_TOPIC],
+        },
+        batchAttempts,
+        singleLogRequests,
+        ranges,
+      }),
+    });
+
+    await assert.rejects(
+      client.getUserOperationReceiptStatus(USER_OPERATION_HASH),
+      /invalid UserOperation topics/,
+    );
+    assert.equal(batchAttempts.count, 1);
+    assert.equal(singleLogRequests.count, 1);
   });
 });
