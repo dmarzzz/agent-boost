@@ -1,0 +1,17 @@
+Use case: text-localization.
+Edit target: the supplied square Agent Boost launch poster.
+Make a precise legibility refinement. Preserve the entire upper composition: AGENT BOOST pixel wordmark, enormous "Dark mode for your agent." headline, split light/dark background in the top area, and oversized ON switch with spiked eye/sun emblem. Do not change those upper elements.
+
+Change ONLY the information section below the switch:
+- From immediately below the bottom edge of the switch through the bottom of the square, use a UNIFORM opaque near-black #010301 background spanning the full image width. It must be a clean full-width information band, with no gradient behind any text.
+- Keep all informational text crisp, solid near-white #F3F8E8, with NO blended colors, glow, or transparency. Maintain left alignment, generous side margins, and comfortable vertical spacing.
+- Enlarge the body text and roadmap labels about 15–20% so they are readily readable when the whole square is displayed at 400px. Fit them without crowding or clipping.
+- Exact lines, in this order:
+"Private payments for Hermes."
+"Keys stay out of model prompts."
+"Private search — Coming soon"
+"Private inference — Coming soon"
+"Research preview · Sepolia testnet"
+- On both roadmap rows, "Coming soon" must be inside a SOLID PALE-LIME filled badge, with solid near-black text. No transparent fill and no color transition within the badges.
+- The footer may be smaller than the other body lines but must stay readable, in near-white.
+Preserve the square crop, brand identity, and everything above the information band. Do not add or omit any words. No new decorations, logos, URLs, UI, or claims.
