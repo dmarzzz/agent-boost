@@ -2,7 +2,7 @@
 
 # Agent Boost
 
-**Private payments for Hermes.**
+**Dark Mode for your agent.**
 
 [![ci][ci-badge]][ci-url]
 [![clean install][install-badge]][install-url]
@@ -11,11 +11,11 @@
 ![research preview][preview-badge]
 [![license][license-badge]][license-url]
 
-Give your agent a wallet. Keep the keys out of its context.
+give ur agent a private crypto address and tool use
 
 Agent Boost gives Hermes fresh wallet addresses and shielded Sepolia payments.
 You set spending limits and review the exact payment before submission.
-Runs locally. Powered by Kohaku.
+Runs locally. Powered by [Kohaku](https://github.com/kassandraoftroy/kohaku-cli).
 
 **Wallet: research preview. Private search and private inference: coming soon.**
 
