@@ -1,4 +1,4 @@
-![Agent Boost: dark mode for your agent. Private payments for Hermes. Private search and private inference coming soon.](assets/agent-boost-readme-banner.webp)
+![Agent Boost: private payment and identity marked on; private inference and private search marked coming soon](assets/agent-boost-readme-banner.webp)
 
 # Agent Boost
 
