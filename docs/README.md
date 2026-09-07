@@ -53,17 +53,6 @@ custody or whole-agent anonymity.
 | [Threat model](THREAT-MODEL.md) | Protected data, security goals, non-goals, attacks and mitigations |
 | [Integration](INTEGRATION.md) | Hermes skills and MCP wiring |
 
-| [Install](INSTALL.md) | Host support, prerequisites, installed paths, dependency pins, or reload commands |
-| [Run the demo](DEMO.md) | The complete wallet, policy, payment, reset, covered-fetch, and eval flow |
-| [Tools](TOOLS.md) | The fourteen MCP tools in call order, with inputs and returns |
-| [Configuration](CONFIGURATION.md) | Environment variables, defaults, and adjustable testnet bounds |
-| [Architecture](ARCHITECTURE.md) | Components, loopback surfaces, state machines, subprocess behavior, and failure handling |
-| [Capability contract](CAPABILITY-CONTRACT.md) | Machine-readable wallet and egress guarantees, identifiers, envelopes, and authority |
-| [Covered egress](COVERED-EGRESS.md) | The Shade Tree request policy, enrollment material, slot lifecycle, and platform limits |
-| [Privacy claims and limits](PRIVACY.md) | What each route protects, what remains visible, and the same-user boundary |
-| [Threat model](THREAT-MODEL.md) | Protected data, non-goals, attacks, mitigations, residual risk, and the release boundary |
-| [Hermes integration](INTEGRATION.md) | MCP configuration, skill split, conversation behavior, session lifetime, and troubleshooting |
-| [Product philosophy](PRODUCT-PHILOSOPHY.md) | Weak-model-safe engineering rules and the project definition of “shipped” |
 
 ## Sources of truth
 
